@@ -158,12 +158,8 @@ This project uses GitHub Actions for continuous integration and deployment.
 
 1. Update the version in `package.json`
 2. Commit and push to `main`
-3. Create a new release on GitHub:
-   - Go to Releases → Draft a new release
-   - Create a new tag (e.g., `v1.0.0`)
-   - Publish the release
 
-The release workflow will automatically build and publish to npm.
+The workflow automatically detects version changes, publishes to npm, creates a git tag, and generates a GitHub release.
 
 ## Shell Integration
 

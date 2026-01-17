@@ -221,8 +221,6 @@ function StatusIcon({ ok, required }: { ok: boolean; required: boolean }) {
 }
 
 function ToolRow({ tool }: { tool: ToolStatus }) {
-	const showHint = !tool.installed || (tool.installed && tool.hint);
-
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box>

@@ -2,13 +2,55 @@ name: Release
 
 on:
   workflow_dispatch:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "package.json"
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if release needed
+        id: check
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Check if tag already exists
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "Tag $VERSION already exists, skipping release"
+            exit 0
+          fi
+
+          # For workflow_dispatch, always release if tag doesn't exist
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if package.json was modified in the triggering commit
+          CHANGED=$(git diff --name-only HEAD~1 HEAD | grep -c "package.json" || true)
+          if [ "$CHANGED" -gt 0 ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "package.json changed, will release $VERSION"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "package.json not changed, skipping release"
+          fi
+
   publish:
+    needs: check
+    if: ${{ needs.check.outputs.should_release == 'true' }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -20,53 +62,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get package version
-        id: version
-        run: echo "version=v$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-
-      - name: Check if tag exists
-        id: tag_exists
-        run: |
-          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Setup Node.js
-        if: steps.tag_exists.outputs.exists == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
 
       - name: Update npm
-        if: steps.tag_exists.outputs.exists == 'false'
         run: npm install -g npm@latest
 
       - name: Install dependencies
-        if: steps.tag_exists.outputs.exists == 'false'
         run: npm ci
 
       - name: Build
-        if: steps.tag_exists.outputs.exists == 'false'
         run: npm run build
 
       - name: Publish to npm
-        if: steps.tag_exists.outputs.exists == 'false'
         run: npm publish --provenance --access public
 
       - name: Create Git tag
-        if: steps.tag_exists.outputs.exists == 'false'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.version.outputs.version }}
-          git push origin ${{ steps.version.outputs.version }}
+          git tag ${{ needs.check.outputs.version }}
+          git push origin ${{ needs.check.outputs.version }}
 
       - name: Create GitHub Release
-        if: steps.tag_exists.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.check.outputs.version }}
           generate_release_notes: true

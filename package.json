@@ -1,6 +1,6 @@
 {
 	"name": "santree",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Git worktree manager with Linear integration",
 	"license": "MIT",
 	"author": "Santiago Toscanini",
@@ -36,7 +36,8 @@
 		"prepublishOnly": "npm run build"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"shell"
 	],
 	"dependencies": {
 		"ink": "^6.0.0",

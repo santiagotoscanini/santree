@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.png" alt="Santree" width="180" />
+  <img src="assets/icon.png" alt="Santree" width="200" />
 </p>
 
 <h1 align="center">Santree</h1>
@@ -165,9 +165,3 @@ claude mcp add --transport http linear https://mcp.linear.app/mcp
 | Git | Worktree operations |
 | GitHub CLI (`gh`) | PR integration |
 | tmux | Optional: new window support |
-
----
-
-## License
-
-MIT

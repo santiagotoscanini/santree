@@ -161,6 +161,16 @@ This project uses GitHub Actions for continuous integration and deployment.
 
 The workflow automatically detects version changes, publishes to npm, creates a git tag, and generates a GitHub release.
 
-## Shell Integration
+## Shell Integration (Required)
 
-The shell wrapper in `alias.zsh` handles directory switching for `create` and `switch` commands, since child processes cannot change the parent shell's directory.
+Add this to your shell config (`.zshrc` or `.bashrc`) to enable directory switching after `create` and `switch` commands:
+
+```bash
+# For zsh
+eval "$(santree shell-init zsh)"
+
+# For bash
+eval "$(santree shell-init bash)"
+```
+
+**Why is this required?** Child processes cannot change the parent shell's directory. The shell wrapper captures the output from `santree create` and `santree switch`, then performs the `cd` in your shell.

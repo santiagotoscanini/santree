@@ -1,0 +1,16 @@
+Fetch Linear ticket {{ ticket_id }} using MCP (including issue comments) to understand the original requirements.
+
+Use `gh` CLI to fetch the latest PR comments and review feedback for the current branch.
+{% if pr_comments %}
+## PR Comments to Address
+
+{{ pr_comments }}
+{% endif %}
+## Task
+
+1. Review each PR comment and understand what changes are requested
+2. Make the necessary code changes to address each comment
+3. Ensure the changes align with the original ticket requirements
+4. Run tests if applicable to verify the fixes
+
+Address all comments systematically, starting from the most critical ones.

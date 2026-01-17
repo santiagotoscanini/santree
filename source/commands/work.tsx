@@ -3,13 +3,16 @@ import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
 import { spawn } from "child_process";
-import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import nunjucks from "nunjucks";
 import { getCurrentBranch, extractTicketId, findRepoRoot } from "../lib/git.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const promptsDir = join(__dirname, "..", "..", "prompts");
+nunjucks.configure(promptsDir, { autoescape: false });
 
 export const description = "Launch Claude to work on current ticket";
 
@@ -27,9 +30,8 @@ type Status = "loading" | "ready" | "launching" | "error";
 
 type Mode = "implement" | "plan" | "review" | "fix-pr";
 
-function getPromptTemplate(mode: Mode): string {
-	const promptsDir = join(__dirname, "..", "..", "prompts");
-	return readFileSync(join(promptsDir, `${mode}.txt`), "utf-8");
+function renderPrompt(mode: Mode, context: Record<string, string>): string {
+	return nunjucks.render(`${mode}.njk`, context);
 }
 
 function getMode(opts: z.infer<typeof options>): Mode {
@@ -115,8 +117,7 @@ export default function Work({ options }: Props) {
 
 		setStatus("launching");
 
-		const template = getPromptTemplate(mode);
-		const prompt = template.replace(/\{\{ticket_id\}\}/g, ticketId);
+		const prompt = renderPrompt(mode, { ticket_id: ticketId });
 
 		const happyCmd = "happy";
 

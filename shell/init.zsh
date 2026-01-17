@@ -85,3 +85,14 @@ function santree() {
     # -------------------------------------------------------------------------
     command santree "$@"
 }
+
+# Alias for convenience
+alias st='santree'
+
+# Quick create worktree with work+plan+tmux (prompts for branch)
+function stw() {
+    local branch
+    vared -p "Branch name: " branch
+    [[ -z "$branch" ]] && echo "Branch name required" && return 1
+    santree create "$branch" --work --plan --tmux
+}

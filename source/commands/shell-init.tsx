@@ -112,7 +112,7 @@ function generateZshCompletions(commands: CommandInfo[]): string {
 		"    _describe -t branches 'git branches' branches",
 		"}",
 		"",
-		"_santree_complete() {",
+		"_santree() {",
 		"    local -a commands",
 		"    commands=(",
 	];
@@ -171,7 +171,11 @@ function generateZshCompletions(commands: CommandInfo[]): string {
 		"    esac",
 		"}",
 		"",
-		"compdef _santree_complete santree",
+		"# Register completions (only if compdef is available)",
+		"if (( $+functions[compdef] )); then",
+		"    compdef _santree santree",
+		"    compdef _santree st",
+		"fi",
 	);
 
 	return lines.join("\n");

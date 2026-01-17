@@ -1,8 +1,25 @@
-# Santree
+<p align="center">
+  <img src="assets/icon.png" alt="Santree" width="180" />
+</p>
 
-A beautiful CLI for managing Git worktrees with Linear and GitHub integration.
+<h1 align="center">Santree</h1>
 
-Built with [React](https://react.dev/), [Ink](https://github.com/vadimdemedes/ink), and [Pastel](https://github.com/vadimdemedes/pastel).
+<p align="center">
+  <strong>A beautiful CLI for managing Git worktrees</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/santree"><img src="https://img.shields.io/npm/v/santree.svg" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/santree"><img src="https://img.shields.io/npm/dm/santree.svg" alt="npm downloads"></a>
+  <a href="https://github.com/stoscanini/santree/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/santree.svg" alt="license"></a>
+</p>
+
+<p align="center">
+  Create, switch, and manage Git worktrees with ease.<br/>
+  Integrates with GitHub PRs and Linear tickets via Claude AI.
+</p>
+
+---
 
 ## Installation
 
@@ -10,105 +27,82 @@ Built with [React](https://react.dev/), [Ink](https://github.com/vadimdemedes/in
 npm install -g santree
 ```
 
-## Requirements
+### Shell Setup (Required)
 
-### Required
-
-| Tool | Version | Purpose | Installation |
-|------|---------|---------|--------------|
-| **Node.js** | >= 20 | Runtime | [nodejs.org](https://nodejs.org/) or `brew install node` |
-| **Git** | Any recent | Worktree operations | [git-scm.com](https://git-scm.com/) or `brew install git` |
-| **GitHub CLI** | Any recent | PR creation, status, cleanup | `brew install gh` then `gh auth login` |
-| **tmux** | Any recent | Create worktrees in new windows | `brew install tmux` |
-| **Claude Code** | Any recent | AI coding assistant | `npm install -g @anthropic-ai/claude-code` |
-| **Happy** | - | Claude CLI wrapper | Your custom wrapper around Claude Code |
-| **Linear MCP** | - | Linear ticket context | See below |
-
-### Setup
-
-#### GitHub CLI
-
-After installing, authenticate with GitHub:
+Add to your `.zshrc` or `.bashrc`:
 
 ```bash
-brew install gh
-gh auth login
+eval "$(santree shell-init zsh)"   # for zsh
+eval "$(santree shell-init bash)"  # for bash
 ```
 
-#### Happy (Claude Integration)
+This enables automatic directory switching after `create` and `switch` commands.
 
-The `santree work` command uses Happy to launch Claude with ticket context. Happy should be configured with the Linear MCP server to fetch ticket details.
+---
 
-#### Linear MCP Server
-
-Add the Linear MCP server to your Claude configuration for ticket integration:
+## Quick Start
 
 ```bash
-claude mcp add --transport http linear https://mcp.linear.app/mcp
+# Create a new worktree and switch to it
+santree create feature/my-new-feature
+
+# List all worktrees with PR status
+santree list
+
+# Switch to another worktree
+santree switch main
+
+# Clean up worktrees with merged PRs
+santree clean
 ```
 
-This enables Claude to fetch Linear ticket details and comments when using `santree work`.
-
-## Features
-
-- **Worktree Management**: Create, switch, list, and remove Git worktrees
-- **Linear Integration**: Extract ticket IDs from branch names for Claude AI workflows
-- **GitHub Integration**: View PR status, create PRs, and clean up merged branches
-- **Claude AI Integration**: Launch Claude with context about your current ticket
-- **Beautiful UI**: Animated spinners, colored output, and box-styled layouts
+---
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `santree list` | List all worktrees with status, PR info, and commits ahead |
+| `santree list` | List all worktrees with PR status and commits ahead |
 | `santree create <branch>` | Create a new worktree from base branch |
 | `santree switch <branch>` | Switch to another worktree |
 | `santree remove <branch>` | Remove a worktree and its branch |
-| `santree sync` | Sync current worktree with base branch (merge by default) |
+| `santree sync` | Sync current worktree with base branch |
 | `santree setup` | Run the init script (`.santree/init.sh`) |
-| `santree work` | Launch Claude to work on the current ticket |
+| `santree work` | Launch Claude AI to work on the current ticket |
 | `santree clean` | Remove worktrees with merged/closed PRs |
 
-## Options
+---
 
-### create
-- `--base <branch>` - Base branch to create from (default: main/master)
-- `--work` - Launch Claude after creating
-- `--plan` - With --work, only create implementation plan
-- `--no-pull` - Skip pulling latest changes
+## Features
 
-### sync
-- `--rebase` - Use rebase instead of merge
+### Worktree Management
+Create isolated worktrees for each feature branch. No more stashing or committing WIP code just to switch tasks.
 
-### work
-- `--plan` - Only create implementation plan
+### GitHub Integration
+See PR status directly in your worktree list. Clean up worktrees automatically when PRs are merged or closed.
+
+### Claude AI Integration
+Launch Claude with full context about your current ticket using `santree work`. Supports different modes:
+- `--plan` - Create an implementation plan only
 - `--review` - Review changes against ticket requirements
-- `--fix-pr` - Fetch PR comments and fix them
+- `--fix-pr` - Address PR review comments
 
-### remove
-- `--force` - Force removal even with uncommitted changes
+### Init Scripts
+Run custom setup scripts when creating worktrees. Perfect for copying `.env` files, installing dependencies, or any project-specific setup.
 
-### clean
-- `--dry-run` - Show what would be removed without removing
-- `--force` - Skip confirmation prompt
+---
 
-## Setup
+## Configuration
 
 ### Init Script
 
-Create `.santree/init.sh` in your repository root to run custom setup when creating worktrees:
+Create `.santree/init.sh` in your repository root:
 
 ```bash
 #!/bin/bash
-# Example: Copy .env, install dependencies, etc.
 cp "$SANTREE_REPO_ROOT/.env" "$SANTREE_WORKTREE_PATH/.env"
 npm install
 ```
-
-Environment variables available:
-- `SANTREE_WORKTREE_PATH` - Path to the new worktree
-- `SANTREE_REPO_ROOT` - Path to the main repository
 
 ### Branch Naming
 
@@ -119,58 +113,61 @@ user/TEAM-123-feature-description
 feature/PROJ-456-add-auth
 ```
 
-## Development
+### Linear MCP (for Claude integration)
 
 ```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Lint
-npm run lint
-
-# Run locally
-node dist/cli.js <command>
+claude mcp add --transport http linear https://mcp.linear.app/mcp
 ```
 
-## CI/CD
+---
 
-This project uses GitHub Actions for continuous integration and deployment.
+## Command Options
 
-### Workflows
+### create
+| Option | Description |
+|--------|-------------|
+| `--base <branch>` | Base branch to create from (default: main/master) |
+| `--work` | Launch Claude after creating |
+| `--plan` | With --work, only create implementation plan |
+| `--no-pull` | Skip pulling latest changes |
+| `--tmux` | Open worktree in new tmux window |
 
-- **CI** (`ci.yml`): Runs on every push and PR to `main`. Builds the project and runs linting.
-- **Release** (`release.yml`): Publishes to npm when a GitHub release is created.
+### sync
+| Option | Description |
+|--------|-------------|
+| `--rebase` | Use rebase instead of merge |
 
-### Setting Up npm Publishing
+### remove
+| Option | Description |
+|--------|-------------|
+| `--force` | Force removal even with uncommitted changes |
 
-1. Generate an npm access token:
-   - Go to [npmjs.com](https://www.npmjs.com/) → Account → Access Tokens
-   - Create a new **Granular Access Token** with publish permissions
+### clean
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Show what would be removed |
+| `--force` | Skip confirmation prompt |
 
-2. Add the token to GitHub:
-   - Go to your repo → Settings → Secrets and variables → Actions
-   - Create a new secret named `NPM_TOKEN` with your token
+### work
+| Option | Description |
+|--------|-------------|
+| `--plan` | Only create implementation plan |
+| `--review` | Review changes against requirements |
+| `--fix-pr` | Fetch and fix PR comments |
 
-### Creating a Release
+---
 
-1. Update the version in `package.json`
-2. Commit and push to `main`
+## Requirements
 
-The workflow automatically detects version changes, publishes to npm, creates a git tag, and generates a GitHub release.
+| Tool | Purpose |
+|------|---------|
+| Node.js >= 20 | Runtime |
+| Git | Worktree operations |
+| GitHub CLI (`gh`) | PR integration |
+| tmux | Optional: new window support |
 
-## Shell Integration (Required)
+---
 
-Add this to your shell config (`.zshrc` or `.bashrc`) to enable directory switching after `create` and `switch` commands:
+## License
 
-```bash
-# For zsh
-eval "$(santree shell-init zsh)"
-
-# For bash
-eval "$(santree shell-init bash)"
-```
-
-**Why is this required?** Child processes cannot change the parent shell's directory. The shell wrapper captures the output from `santree create` and `santree switch`, then performs the `cd` in your shell.
+MIT

@@ -38,6 +38,14 @@ eval "$(santree shell-init bash)"  # for bash
 
 This enables automatic directory switching after `create` and `switch` commands.
 
+### Verify Setup
+
+```bash
+santree doctor
+```
+
+This checks that all required tools are installed and configured correctly.
+
 ---
 
 ## Quick Start
@@ -70,6 +78,7 @@ santree clean
 | `santree setup` | Run the init script (`.santree/init.sh`) |
 | `santree work` | Launch Claude AI to work on the current ticket |
 | `santree clean` | Remove worktrees with merged/closed PRs |
+| `santree doctor` | Check system requirements and integrations |
 
 ---
 

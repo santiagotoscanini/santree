@@ -3,7 +3,13 @@ import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
 import { spawn } from "child_process";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { getCurrentBranch, extractTicketId, findRepoRoot } from "../lib/git.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 export const options = z.object({
 	plan: z.boolean().optional().describe("Only create implementation plan"),
@@ -17,75 +23,21 @@ type Props = {
 
 type Status = "loading" | "ready" | "launching" | "error";
 
-const TEMPLATES = {
-	implement: `Fetch Linear ticket {{ticket_id}} using MCP (including issue comments) and analyze what needs to be done.
+type Mode = "implement" | "plan" | "review" | "fix-pr";
 
-If a PR URL is linked in the ticket, use \`gh\` CLI to fetch PR details, comments, and review feedback.
+function getPromptTemplate(mode: Mode): string {
+	const promptsDir = join(__dirname, "..", "..", "prompts");
+	return readFileSync(join(promptsDir, `${mode}.txt`), "utf-8");
+}
 
-Review the codebase to understand the relevant areas and existing patterns.
-
-Create an implementation plan, then implement the changes.
-
-After implementation:
-- Run tests if applicable
-- Ensure code follows existing patterns`,
-
-	plan: `Fetch Linear ticket {{ticket_id}} using MCP (including issue comments) and analyze what needs to be done.
-
-If a PR URL is linked in the ticket, use \`gh\` CLI to fetch PR details, comments, and review feedback for additional context.
-
-Review the codebase to understand:
-- Relevant files and modules
-- Existing patterns and conventions
-- Dependencies and potential impact areas
-
-Create a detailed implementation plan with:
-- Step-by-step approach
-- Files to modify
-- Potential risks or edge cases
-
-Do NOT implement yet - just plan. Wait for approval before making changes.`,
-
-	review: `Fetch Linear ticket {{ticket_id}} using MCP (including issue comments) to understand the requirements and acceptance criteria.
-
-If a PR URL is linked in the ticket, use \`gh\` CLI to fetch PR details and any existing review comments.
-
-Review the current changes by running \`git diff\` against the base branch.
-
-Analyze:
-- Do the changes fully address the ticket requirements?
-- Are there any missing acceptance criteria?
-- Any potential bugs or edge cases?
-- Code quality and adherence to patterns?
-
-Provide a summary of findings and any recommended changes.`,
-
-	"fix-pr": `Fetch Linear ticket {{ticket_id}} using MCP (including issue comments) to understand the original requirements.
-
-If a PR URL is linked in the ticket, use \`gh\` CLI to fetch the latest PR comments and review feedback.
-
-## PR Comments to Address
-
-{{pr_comments}}
-
-## Task
-
-1. Review each comment and understand what changes are requested
-2. Make the necessary code changes to address each comment
-3. Ensure the changes align with the original ticket requirements
-4. Run tests if applicable to verify the fixes
-
-Address all comments systematically, starting from the most critical ones.`,
-};
-
-function getMode(opts: z.infer<typeof options>): keyof typeof TEMPLATES {
+function getMode(opts: z.infer<typeof options>): Mode {
 	if (opts["fix-pr"]) return "fix-pr";
 	if (opts.review) return "review";
 	if (opts.plan) return "plan";
 	return "implement";
 }
 
-function getModeLabel(mode: keyof typeof TEMPLATES): string {
+function getModeLabel(mode: Mode): string {
 	switch (mode) {
 		case "implement":
 			return "implement";
@@ -98,7 +50,7 @@ function getModeLabel(mode: keyof typeof TEMPLATES): string {
 	}
 }
 
-function getModeColor(mode: keyof typeof TEMPLATES): string {
+function getModeColor(mode: Mode): string {
 	switch (mode) {
 		case "implement":
 			return "green";
@@ -116,7 +68,7 @@ export default function Work({ options }: Props) {
 	const [branch, setBranch] = useState<string | null>(null);
 	const [ticketId, setTicketId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [mode, setMode] = useState<keyof typeof TEMPLATES>("implement");
+	const [mode, setMode] = useState<Mode>("implement");
 
 	useEffect(() => {
 		async function init() {
@@ -161,7 +113,7 @@ export default function Work({ options }: Props) {
 
 		setStatus("launching");
 
-		const template = TEMPLATES[mode];
+		const template = getPromptTemplate(mode);
 		const prompt = template.replace(/\{\{ticket_id\}\}/g, ticketId);
 
 		const happyCmd = "happy";

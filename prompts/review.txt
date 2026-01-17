@@ -1,0 +1,13 @@
+Fetch Linear ticket {{ticket_id}} using MCP (including issue comments) to understand the requirements and acceptance criteria.
+
+If a PR URL is linked in the ticket, use `gh` CLI to fetch PR details and any existing review comments.
+
+Review the current changes by running `git diff` against the base branch.
+
+Analyze:
+- Do the changes fully address the ticket requirements?
+- Are there any missing acceptance criteria?
+- Any potential bugs or edge cases?
+- Code quality and adherence to patterns?
+
+Provide a summary of findings and any recommended changes.

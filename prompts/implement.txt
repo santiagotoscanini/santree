@@ -1,0 +1,11 @@
+Fetch Linear ticket {{ticket_id}} using MCP (including issue comments) and analyze what needs to be done.
+
+If a PR URL is linked in the ticket, use `gh` CLI to fetch PR details, comments, and review feedback.
+
+Review the codebase to understand the relevant areas and existing patterns.
+
+Create an implementation plan, then implement the changes.
+
+After implementation:
+- Run tests if applicable
+- Ensure code follows existing patterns

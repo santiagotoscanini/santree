@@ -38,6 +38,10 @@ eval "$(santree shell-init bash)"  # for bash
 
 This enables automatic directory switching after `create` and `switch` commands.
 
+The shell integration also provides:
+- `st` - Alias for `santree`
+- `stw` - Quick create worktree with `--work --plan --tmux` (prompts for branch name)
+
 ### Verify Setup
 
 ```bash

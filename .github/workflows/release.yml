@@ -2,15 +2,18 @@ name: Release
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
     branches: [main]
+    paths:
+      - "package.json"
 
 jobs:
-  check:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  check-release:
+    needs: checks
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
@@ -32,31 +35,16 @@ jobs:
             exit 0
           fi
 
-          # For workflow_dispatch, always release if tag doesn't exist
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          echo "Will release $VERSION"
 
-          # Check if package.json was modified in the triggering commit
-          CHANGED=$(git diff --name-only HEAD~1 HEAD | grep -c "package.json" || true)
-          if [ "$CHANGED" -gt 0 ]; then
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "package.json changed, will release $VERSION"
-          else
-            echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "package.json not changed, skipping release"
-          fi
-
-  publish:
-    needs: check
-    if: ${{ needs.check.outputs.should_release == 'true' }}
+  release:
+    needs: check-release
+    if: needs.check-release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
       id-token: write
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,11 +72,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ needs.check.outputs.version }}
-          git push origin ${{ needs.check.outputs.version }}
+          git tag ${{ needs.check-release.outputs.version }}
+          git push origin ${{ needs.check-release.outputs.version }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.check.outputs.version }}
+          tag_name: ${{ needs.check-release.outputs.version }}
           generate_release_notes: true

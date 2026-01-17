@@ -4,6 +4,51 @@ A beautiful CLI for managing Git worktrees with Linear and GitHub integration.
 
 Built with [React](https://react.dev/), [Ink](https://github.com/vadimdemedes/ink), and [Pastel](https://github.com/vadimdemedes/pastel).
 
+## Installation
+
+```bash
+npm install -g santree
+```
+
+## Requirements
+
+### Required
+
+| Tool | Version | Purpose | Installation |
+|------|---------|---------|--------------|
+| **Node.js** | >= 20 | Runtime | [nodejs.org](https://nodejs.org/) or `brew install node` |
+| **Git** | Any recent | Worktree operations | [git-scm.com](https://git-scm.com/) or `brew install git` |
+| **GitHub CLI** | Any recent | PR creation, status, cleanup | `brew install gh` then `gh auth login` |
+| **tmux** | Any recent | Create worktrees in new windows | `brew install tmux` |
+| **Claude Code** | Any recent | AI coding assistant | `npm install -g @anthropic-ai/claude-code` |
+| **Happy** | - | Claude CLI wrapper | Your custom wrapper around Claude Code |
+| **Linear MCP** | - | Linear ticket context | See below |
+
+### Setup
+
+#### GitHub CLI
+
+After installing, authenticate with GitHub:
+
+```bash
+brew install gh
+gh auth login
+```
+
+#### Happy (Claude Integration)
+
+The `santree work` command uses Happy to launch Claude with ticket context. Happy should be configured with the Linear MCP server to fetch ticket details.
+
+#### Linear MCP Server
+
+Add the Linear MCP server to your Claude configuration for ticket integration:
+
+```bash
+claude mcp add --transport http linear https://mcp.linear.app/mcp
+```
+
+This enables Claude to fetch Linear ticket details and comments when using `santree work`.
+
 ## Features
 
 - **Worktree Management**: Create, switch, list, and remove Git worktrees
@@ -83,9 +128,42 @@ npm install
 # Build
 npm run build
 
+# Lint
+npm run lint
+
 # Run locally
 node dist/cli.js <command>
 ```
+
+## CI/CD
+
+This project uses GitHub Actions for continuous integration and deployment.
+
+### Workflows
+
+- **CI** (`ci.yml`): Runs on every push and PR to `main`. Builds the project and runs linting.
+- **Release** (`release.yml`): Publishes to npm when a GitHub release is created.
+
+### Setting Up npm Publishing
+
+1. Generate an npm access token:
+   - Go to [npmjs.com](https://www.npmjs.com/) → Account → Access Tokens
+   - Create a new **Granular Access Token** with publish permissions
+
+2. Add the token to GitHub:
+   - Go to your repo → Settings → Secrets and variables → Actions
+   - Create a new secret named `NPM_TOKEN` with your token
+
+### Creating a Release
+
+1. Update the version in `package.json`
+2. Commit and push to `main`
+3. Create a new release on GitHub:
+   - Go to Releases → Draft a new release
+   - Create a new tag (e.g., `v1.0.0`)
+   - Publish the release
+
+The release workflow will automatically build and publish to npm.
 
 ## Shell Integration
 

@@ -37,9 +37,12 @@ jobs:
         if: steps.tag_exists.outputs.exists == 'false'
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
-          registry-url: "https://registry.npmjs.org"
+
+      - name: Update npm
+        if: steps.tag_exists.outputs.exists == 'false'
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         if: steps.tag_exists.outputs.exists == 'false'
@@ -51,7 +54,7 @@ jobs:
 
       - name: Publish to npm
         if: steps.tag_exists.outputs.exists == 'false'
-        run: npm publish --access public
+        run: npm publish --provenance --access public
 
       - name: Create Git tag
         if: steps.tag_exists.outputs.exists == 'false'

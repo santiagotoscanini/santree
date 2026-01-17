@@ -1,12 +1,12 @@
-# Santree Shell Integration for Bash
-# ===================================
+# Santree Shell Integration for Zsh
+# ==================================
 #
 # This script provides a shell wrapper around the santree CLI to enable:
 # 1. Automatic directory switching after `create` and `switch` commands
 # 2. Automatic recovery when the current worktree directory is deleted
 #
 # Installation:
-#   Add to your .bashrc: eval "$(santree shell-init bash)"
+#   Add to your .zshrc: eval "$(santree shell-init zsh)"
 #
 # How it works:
 # -------------
@@ -25,14 +25,10 @@ function santree() {
     # -------------------------------------------------------------------------
     # STEP 1: Handle deleted directory recovery
     # -------------------------------------------------------------------------
-    # If the current directory no longer exists (e.g., worktree was deleted),
-    # navigate back to a safe location before running any command.
     if [[ ! -d "$(pwd 2>/dev/null)" ]]; then
         local current_path="$(pwd 2>/dev/null)"
 
-        # Check if we were in a santree worktree directory
         if [[ "$current_path" == */.santree/worktrees/* ]]; then
-            # Extract the main repo path (everything before /.santree/worktrees/)
             local main_repo="${current_path%%/.santree/worktrees/*}"
             if [[ -d "$main_repo" ]]; then
                 echo "⚠ Worktree directory deleted. Returning to main repo."
@@ -49,27 +45,20 @@ function santree() {
     # -------------------------------------------------------------------------
     # STEP 2: Handle commands that need directory switching
     # -------------------------------------------------------------------------
-    # The `create` and `switch` commands output SANTREE_CD:path markers
-    # that we need to intercept to change the shell's directory.
     if [[ "$1" == "create" || "$1" == "switch" || "$1" == "sw" ]]; then
         local output
         output=$(command santree "$@" 2>&1)
         local exit_code=$?
 
-        # Check if the output contains a directory change marker
         if [[ "$output" == *SANTREE_CD:* ]]; then
-            # Print output without the marker lines
             echo "$output" | grep -v "SANTREE_CD:" | grep -v "SANTREE_WORK:"
 
-            # Extract the target directory (strip ANSI color codes first)
             local target_dir=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "SANTREE_CD:" | sed 's/.*SANTREE_CD://')
 
-            # Change to the target directory if it exists
             if [[ -n "$target_dir" && -d "$target_dir" ]]; then
                 cd "$target_dir" && echo "Switched to: $target_dir"
             fi
 
-            # Check if we should also launch Claude (--work flag on create)
             if [[ "$output" == *SANTREE_WORK:* ]]; then
                 local work_mode=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "SANTREE_WORK:" | sed 's/.*SANTREE_WORK://')
                 [[ "$work_mode" == "plan" ]] && command santree work --plan || command santree work
@@ -92,7 +81,83 @@ alias st='santree'
 # Quick create worktree with work+plan+tmux (prompts for branch)
 function stw() {
     local branch
-    read -p "Branch name: " branch
+    vared -p "Branch name: " branch
     [[ -z "$branch" ]] && echo "Branch name required" && return 1
     santree create "$branch" --work --plan --tmux
 }
+
+# =============================================================================
+# Zsh Completions (auto-generated)
+# =============================================================================
+
+__santree_get_worktree_branches() {
+    local -a branches
+    branches=(${(f)"$(git worktree list --porcelain 2>/dev/null | grep '^branch ' | sed 's/branch refs\/heads\///')"})
+    _describe -t branches 'worktree branches' branches
+}
+
+__santree_get_all_branches() {
+    local -a branches
+    branches=(${(f)"$(git branch -a 2>/dev/null | sed 's/^[* ] //' | sed 's/remotes\/origin\///' | sort -u)"})
+    _describe -t branches 'git branches' branches
+}
+
+__santree_commands() {
+    local -a commands
+    commands=(
+{%- for cmd in commands %}
+        '{{ cmd.name }}:{{ cmd.description }}'
+{%- endfor %}
+    )
+    _describe -t commands 'santree commands' commands
+}
+
+{% for cmd in commands %}
+__santree_{{ cmd.funcName }}() {
+{%- if cmd.options.length == 0 and not cmd.hasArgs %}
+    return 0
+{%- else %}
+    _arguments \
+{%- if cmd.argCompletion == 'worktree_branches' %}
+        '1:branch:__santree_get_worktree_branches'{% if cmd.options.length > 0 %} \{% endif %}
+{%- elif cmd.argCompletion == 'shells' %}
+        '1:shell:(zsh bash)'{% if cmd.options.length > 0 %} \{% endif %}
+{%- elif cmd.hasArgs %}
+        '1:branch name:'{% if cmd.options.length > 0 %} \{% endif %}
+{%- endif %}
+{%- for opt in cmd.options %}
+        '--{{ opt.name }}[{{ opt.description }}]{% if opt.completion == 'all_branches' %}:base branch:__santree_get_all_branches{% endif %}'{% if not loop.last %} \{% endif %}
+{%- endfor %}
+{%- endif %}
+}
+
+{% endfor %}
+_santree() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->command' \
+        '*:: :->args'
+
+    case $state in
+        command)
+            __santree_commands
+            ;;
+        args)
+            case $line[1] in
+{%- for cmd in commands %}
+                {{ cmd.name }})
+                    __santree_{{ cmd.funcName }}
+                    ;;
+{%- endfor %}
+            esac
+            ;;
+    esac
+}
+
+# Register completions (only if compdef is available)
+if (( $+functions[compdef] )); then
+    compdef _santree santree
+    compdef _santree st
+fi

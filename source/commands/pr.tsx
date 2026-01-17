@@ -28,6 +28,8 @@ import {
 
 const execAsync = promisify(exec);
 
+export const description = "Create a GitHub pull request";
+
 export const options = z.object({
 	draft: z.boolean().optional().describe("Create as draft PR"),
 });

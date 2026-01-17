@@ -14,6 +14,8 @@ import {
 	hasUnstagedChanges,
 } from "../lib/git.js";
 
+export const description = "Stage and commit changes";
+
 const execAsync = promisify(exec);
 
 type Status =

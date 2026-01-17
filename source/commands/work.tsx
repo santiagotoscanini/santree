@@ -11,6 +11,8 @@ import { getCurrentBranch, extractTicketId, findRepoRoot } from "../lib/git.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+export const description = "Launch Claude to work on current ticket";
+
 export const options = z.object({
 	plan: z.boolean().optional().describe("Only create implementation plan"),
 	review: z.boolean().optional().describe("Review changes against ticket"),

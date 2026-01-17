@@ -4,6 +4,8 @@ import Spinner from "ink-spinner";
 import { z } from "zod";
 import { removeWorktree, findMainRepoRoot } from "../lib/git.js";
 
+export const description = "Remove a worktree and its branch";
+
 export const options = z.object({
 	force: z.boolean().optional().describe("Force removal"),
 });

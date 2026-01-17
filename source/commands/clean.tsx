@@ -10,6 +10,8 @@ import {
 } from "../lib/git.js";
 import { getPRInfoAsync } from "../lib/github.js";
 
+export const description = "Remove worktrees with merged/closed PRs";
+
 export const options = z.object({
 	"dry-run": z.boolean().optional().describe("Show what would be removed"),
 	force: z.boolean().optional().describe("Skip confirmation"),

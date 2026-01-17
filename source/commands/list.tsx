@@ -10,6 +10,8 @@ import {
 } from "../lib/git.js";
 import { getPRInfoAsync } from "../lib/github.js";
 
+export const description = "List all worktrees with status information";
+
 const execAsync = promisify(exec);
 
 interface WorktreeInfo {

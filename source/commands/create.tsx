@@ -15,6 +15,8 @@ import {
 } from "../lib/git.js";
 import { execSync } from "child_process";
 
+export const description = "Create a new worktree from a branch";
+
 export const options = z.object({
 	base: z.string().optional().describe("Base branch to create from"),
 	work: z.boolean().optional().describe("Launch Claude after creating"),

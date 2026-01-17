@@ -1,6 +1,6 @@
 {
 	"name": "santree",
-	"version": "0.0.8",
+	"version": "0.0.9",
 	"description": "Git worktree manager with Linear integration",
 	"license": "MIT",
 	"author": "Santiago Toscanini",
@@ -44,12 +44,14 @@
 		"ink": "^6.0.0",
 		"ink-spinner": "^5.0.0",
 		"ink-text-input": "^6.0.0",
+		"nunjucks": "^3.2.4",
 		"pastel": "^4.0.0",
 		"react": "^19.0.0",
 		"zod": "^4.0.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
+		"@types/nunjucks": "^3.2.6",
 		"@types/react": "^19.0.0",
 		"@typescript-eslint/eslint-plugin": "^8.52.0",
 		"@typescript-eslint/parser": "^8.52.0",

@@ -6,6 +6,8 @@ import * as path from "path";
 import * as fs from "fs";
 import { findMainRepoRoot, getSantreeDir, isInWorktree } from "../lib/git.js";
 
+export const description = "Run init script in current worktree";
+
 type Status = "checking" | "running" | "done" | "error";
 
 export default function Setup() {

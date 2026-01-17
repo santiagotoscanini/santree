@@ -6,6 +6,8 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
+export const description = "Check system requirements and integrations";
+
 type ToolStatus = {
 	name: string;
 	description: string;

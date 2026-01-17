@@ -14,6 +14,8 @@ import {
 	isInWorktree,
 } from "../lib/git.js";
 
+export const description = "Sync worktree with base branch";
+
 export const options = z.object({
 	rebase: z.boolean().optional().describe("Use rebase instead of merge"),
 });

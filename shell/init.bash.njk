@@ -1,12 +1,12 @@
-# Santree Shell Integration for Zsh
-# ==================================
+# Santree Shell Integration for Bash
+# ===================================
 #
 # This script provides a shell wrapper around the santree CLI to enable:
 # 1. Automatic directory switching after `create` and `switch` commands
 # 2. Automatic recovery when the current worktree directory is deleted
 #
 # Installation:
-#   Add to your .zshrc: eval "$(santree shell-init zsh)"
+#   Add to your .bashrc: eval "$(santree shell-init bash)"
 #
 # How it works:
 # -------------
@@ -25,14 +25,10 @@ function santree() {
     # -------------------------------------------------------------------------
     # STEP 1: Handle deleted directory recovery
     # -------------------------------------------------------------------------
-    # If the current directory no longer exists (e.g., worktree was deleted),
-    # navigate back to a safe location before running any command.
     if [[ ! -d "$(pwd 2>/dev/null)" ]]; then
         local current_path="$(pwd 2>/dev/null)"
 
-        # Check if we were in a santree worktree directory
         if [[ "$current_path" == */.santree/worktrees/* ]]; then
-            # Extract the main repo path (everything before /.santree/worktrees/)
             local main_repo="${current_path%%/.santree/worktrees/*}"
             if [[ -d "$main_repo" ]]; then
                 echo "⚠ Worktree directory deleted. Returning to main repo."
@@ -49,27 +45,20 @@ function santree() {
     # -------------------------------------------------------------------------
     # STEP 2: Handle commands that need directory switching
     # -------------------------------------------------------------------------
-    # The `create` and `switch` commands output SANTREE_CD:path markers
-    # that we need to intercept to change the shell's directory.
     if [[ "$1" == "create" || "$1" == "switch" || "$1" == "sw" ]]; then
         local output
         output=$(command santree "$@" 2>&1)
         local exit_code=$?
 
-        # Check if the output contains a directory change marker
         if [[ "$output" == *SANTREE_CD:* ]]; then
-            # Print output without the marker lines
             echo "$output" | grep -v "SANTREE_CD:" | grep -v "SANTREE_WORK:"
 
-            # Extract the target directory (strip ANSI color codes first)
             local target_dir=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "SANTREE_CD:" | sed 's/.*SANTREE_CD://')
 
-            # Change to the target directory if it exists
             if [[ -n "$target_dir" && -d "$target_dir" ]]; then
                 cd "$target_dir" && echo "Switched to: $target_dir"
             fi
 
-            # Check if we should also launch Claude (--work flag on create)
             if [[ "$output" == *SANTREE_WORK:* ]]; then
                 local work_mode=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "SANTREE_WORK:" | sed 's/.*SANTREE_WORK://')
                 [[ "$work_mode" == "plan" ]] && command santree work --plan || command santree work
@@ -92,7 +81,38 @@ alias st='santree'
 # Quick create worktree with work+plan+tmux (prompts for branch)
 function stw() {
     local branch
-    vared -p "Branch name: " branch
+    read -p "Branch name: " branch
     [[ -z "$branch" ]] && echo "Branch name required" && return 1
     santree create "$branch" --work --plan --tmux
 }
+
+# =============================================================================
+# Bash Completions (auto-generated)
+# =============================================================================
+
+_santree_complete() {
+    local cur prev commands
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    commands="{% for cmd in commands %}{{ cmd.name }}{% if not loop.last %} {% endif %}{% endfor %}"
+
+    if [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
+        return 0
+    fi
+
+    case "${COMP_WORDS[1]}" in
+{%- for cmd in commands %}
+        {{ cmd.name }})
+{%- if cmd.options.length > 0 %}
+            COMPREPLY=($(compgen -W "{% for opt in cmd.options %}--{{ opt.name }}{% if not loop.last %} {% endif %}{% endfor %}" -- "${cur}"))
+{%- endif %}
+            ;;
+{%- endfor %}
+    esac
+}
+
+complete -F _santree_complete santree
+complete -F _santree_complete st

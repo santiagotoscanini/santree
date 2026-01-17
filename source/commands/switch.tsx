@@ -3,6 +3,8 @@ import { Text, Box } from "ink";
 import { z } from "zod";
 import { getWorktreePath } from "../lib/git.js";
 
+export const description = "Switch to another worktree";
+
 export const args = z.tuple([z.string().describe("Branch name to switch to")]);
 
 type Props = {

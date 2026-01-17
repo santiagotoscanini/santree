@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import Pastel from "pastel";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json");
 
 const app = new Pastel({
 	importMeta: import.meta,
 	name: "santree",
-	version: "1.0.0",
+	version,
 	description: "Beautiful CLI for managing Git worktrees",
 });
 

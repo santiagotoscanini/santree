@@ -345,7 +345,7 @@ export default function Doctor() {
 					"Claude CLI wrapper",
 					true,
 					"happy --version 2>/dev/null || echo 'installed'",
-					"Install your Claude CLI wrapper",
+					"Install: npm install -g happy-coder",
 				),
 			]);
 

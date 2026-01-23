@@ -3,6 +3,8 @@ import Spinner from "ink-spinner";
 import { useEffect, useState } from "react";
 import { exec } from "child_process";
 import { promisify } from "util";
+import * as fs from "fs";
+import * as path from "path";
 
 const execAsync = promisify(exec);
 
@@ -24,6 +26,12 @@ type McpStatus = {
 	configured: boolean;
 	url?: string;
 	status?: string;
+	hint?: string;
+};
+
+type StatuslineStatus = {
+	claudeSettingsConfigured: boolean;
+	currentCommand?: string;
 	hint?: string;
 };
 
@@ -215,6 +223,44 @@ function checkShellIntegration(): {
 	return { configured, shell: shellName };
 }
 
+/**
+ * Checks statusline configuration:
+ * If ~/.claude/settings.json has statusLine pointing to santree
+ */
+async function checkStatusline(): Promise<StatuslineStatus> {
+	const home = process.env.HOME || "";
+	const claudeSettingsPath = path.join(home, ".claude", "settings.json");
+
+	let claudeSettingsConfigured = false;
+	let currentCommand: string | undefined;
+
+	try {
+		if (fs.existsSync(claudeSettingsPath)) {
+			const content = fs.readFileSync(claudeSettingsPath, "utf-8");
+			const settings = JSON.parse(content);
+
+			if (settings.statusLine?.command) {
+				currentCommand = String(settings.statusLine.command);
+				// Check if it points to santree statusline
+				claudeSettingsConfigured = currentCommand.includes("santree statusline");
+			}
+		}
+	} catch {
+		// JSON parse error or file read error
+	}
+
+	let hint: string | undefined;
+	if (!claudeSettingsConfigured) {
+		hint = 'Add to ~/.claude/settings.json: "statusLine": { "type": "command", "command": "santree statusline" }';
+	}
+
+	return {
+		claudeSettingsConfigured,
+		currentCommand,
+		hint,
+	};
+}
+
 function StatusIcon({ ok, required }: { ok: boolean; required: boolean }) {
 	if (ok) {
 		return <Text color="green">✓</Text>;
@@ -306,6 +352,28 @@ function ShellRow({
 	);
 }
 
+function StatuslineRow({ status }: { status: StatuslineStatus }) {
+	return (
+		<Box flexDirection="column" marginBottom={1}>
+			<Box>
+				<StatusIcon ok={status.claudeSettingsConfigured} required={false} />
+				<Text> </Text>
+				<Text bold>Claude Statusline</Text>
+				<Text dimColor> - Custom statusline in Claude Code</Text>
+				<Text dimColor> (optional)</Text>
+			</Box>
+			<Box marginLeft={2} flexDirection="column">
+				{status.currentCommand ? (
+					<Text dimColor>Command: {status.currentCommand}</Text>
+				) : (
+					<Text dimColor>Command: not configured</Text>
+				)}
+				{status.hint && <Text color="yellow">↳ {status.hint}</Text>}
+			</Box>
+		</Box>
+	);
+}
+
 export default function Doctor() {
 	const [tools, setTools] = useState<ToolStatus[]>([]);
 	const [mcp, setMcp] = useState<McpStatus | null>(null);
@@ -313,6 +381,7 @@ export default function Doctor() {
 		configured: boolean;
 		shell: string | null;
 	} | null>(null);
+	const [statusline, setStatusline] = useState<StatuslineStatus | null>(null);
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
@@ -350,10 +419,12 @@ export default function Doctor() {
 			]);
 
 			const mcpResult = await checkLinearMcp();
+			const statuslineResult = await checkStatusline();
 
 			setTools(results);
 			setMcp(mcpResult);
 			setShellStatus(checkShellIntegration());
+			setStatusline(statuslineResult);
 			setLoading(false);
 		}
 
@@ -408,6 +479,14 @@ export default function Doctor() {
 					shell={shellStatus.shell}
 				/>
 			)}
+
+			<Box marginBottom={1} marginTop={1} flexDirection="column">
+				<Text bold underline>
+					Aesthetics
+				</Text>
+			</Box>
+
+			{statusline && <StatuslineRow status={statusline} />}
 
 			<Box
 				marginTop={1}

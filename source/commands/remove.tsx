@@ -6,9 +6,7 @@ import { removeWorktree, findMainRepoRoot } from "../lib/git.js";
 
 export const description = "Remove a worktree and its branch";
 
-export const options = z.object({
-	force: z.boolean().optional().describe("Force removal"),
-});
+export const options = z.object({});
 
 export const args = z.tuple([z.string().describe("Branch name to remove")]);
 
@@ -17,7 +15,7 @@ type Props = {
 	args: z.infer<typeof args>;
 };
 
-export default function Remove({ options, args }: Props) {
+export default function Remove({ args }: Props) {
 	const [branchName] = args;
 	const [status, setStatus] = useState<"idle" | "removing" | "done" | "error">(
 		"idle",
@@ -39,11 +37,7 @@ export default function Remove({ options, args }: Props) {
 			setStatus("removing");
 			setMessage(`Removing worktree ${branchName}...`);
 
-			const result = await removeWorktree(
-				branchName,
-				repoRoot,
-				options.force ?? false,
-			);
+			const result = await removeWorktree(branchName, repoRoot, true);
 
 			if (result.success) {
 				setStatus("done");
@@ -55,7 +49,7 @@ export default function Remove({ options, args }: Props) {
 		}
 
 		run();
-	}, [branchName, options.force]);
+	}, [branchName]);
 
 	const isLoading = status === "idle" || status === "removing";
 
@@ -82,16 +76,6 @@ export default function Remove({ options, args }: Props) {
 						{branchName}
 					</Text>
 				</Box>
-
-				{options.force && (
-					<Box gap={1}>
-						<Text dimColor>force:</Text>
-						<Text backgroundColor="red" color="white">
-							{" "}
-							yes{" "}
-						</Text>
-					</Box>
-				)}
 			</Box>
 
 			<Box marginTop={1}>

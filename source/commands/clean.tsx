@@ -12,10 +12,7 @@ import { getPRInfoAsync } from "../lib/github.js";
 
 export const description = "Remove worktrees with merged/closed PRs";
 
-export const options = z.object({
-	"dry-run": z.boolean().optional().describe("Show what would be removed"),
-	force: z.boolean().optional().describe("Skip confirmation"),
-});
+export const options = z.object({});
 
 type Props = {
 	options: z.infer<typeof options>;
@@ -37,7 +34,7 @@ type Status =
 	| "cancelled"
 	| "error";
 
-export default function Clean({ options }: Props) {
+export default function Clean({}: Props) {
 	const { exit } = useApp();
 	const [status, setStatus] = useState<Status>("checking");
 	const [message, setMessage] = useState(
@@ -141,25 +138,11 @@ export default function Clean({ options }: Props) {
 				return;
 			}
 
-			// Dry run - just show what would be removed
-			if (options["dry-run"]) {
-				setStatus("done");
-				setMessage("Dry run - no changes made");
-				setTimeout(() => exit(), 100);
-				return;
-			}
-
-			// Skip confirmation if force flag
-			if (options.force) {
-				await removeStaleWorktrees();
-				return;
-			}
-
 			setStatus("confirming");
 		}
 
 		run();
-	}, [options["dry-run"], options.force]);
+	}, []);
 
 	const isLoading = status === "checking" || status === "removing";
 
@@ -169,7 +152,6 @@ export default function Clean({ options }: Props) {
 				<Text bold color="cyan">
 					🧹 Clean
 				</Text>
-				{options["dry-run"] && <Text color="yellow"> (dry run)</Text>}
 			</Box>
 
 			{isLoading && (

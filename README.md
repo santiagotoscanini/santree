@@ -83,6 +83,7 @@ santree clean
 | `santree work` | Launch Claude AI to work on the current ticket |
 | `santree clean` | Remove worktrees with merged/closed PRs |
 | `santree doctor` | Check system requirements and integrations |
+| `santree statusline` | Statusline wrapper for Claude Code |
 
 ---
 
@@ -132,6 +133,22 @@ feature/PROJ-456-add-auth
 claude mcp add --transport http linear https://mcp.linear.app/mcp
 ```
 
+### Claude Code Statusline (Optional)
+
+Santree provides a custom statusline for Claude Code showing git info, model, context usage, and cost.
+
+Add to `~/.claude/settings.json`:
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "santree statusline"
+  }
+}
+```
+
+The statusline displays: `repo | branch | S: staged | U: unstaged | A: untracked | Model | Context% | $Cost`
+
 ---
 
 ## Command Options
@@ -151,15 +168,10 @@ claude mcp add --transport http linear https://mcp.linear.app/mcp
 | `--rebase` | Use rebase instead of merge |
 
 ### remove
-| Option | Description |
-|--------|-------------|
-| `--force` | Force removal even with uncommitted changes |
+Removes the worktree and deletes the branch. Uses force mode by default (removes even with uncommitted changes).
 
 ### clean
-| Option | Description |
-|--------|-------------|
-| `--dry-run` | Show what would be removed |
-| `--force` | Skip confirmation prompt |
+Shows worktrees with merged/closed PRs and prompts for confirmation before removing.
 
 ### work
 | Option | Description |

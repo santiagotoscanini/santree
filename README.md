@@ -38,30 +38,6 @@ eval "$(santree shell-init bash)"  # for bash
 
 This enables automatic directory switching after `create` and `switch` commands.
 
-#### Lazy Loading (Recommended)
-
-The shell init takes ~900ms due to Node.js startup. For faster shell startup, use lazy loading instead:
-
-```bash
-# zsh - only initializes on first santree call
-function santree() {
-  unfunction santree
-  eval "$(command santree shell-init zsh)"
-  santree "$@"
-}
-```
-
-```bash
-# bash - only initializes on first santree call
-santree() {
-  unset -f santree
-  eval "$(command santree shell-init bash)"
-  santree "$@"
-}
-```
-
-This defers the 900ms initialization until you first use `santree` in a session.
-
 The shell integration also provides:
 - `st` - Alias for `santree`
 - `stw` - Quick create worktree with `--work --plan --tmux` (prompts for branch name)

@@ -83,6 +83,7 @@ santree clean
 | `santree work` | Launch Claude AI to work on the current ticket |
 | `santree clean` | Remove worktrees with merged/closed PRs |
 | `santree doctor` | Check system requirements and integrations |
+| `santree editor` | Open workspace file in VSCode or Cursor |
 | `santree statusline` | Statusline wrapper for Claude Code |
 
 ---
@@ -173,6 +174,11 @@ Removes the worktree and deletes the branch. Uses force mode by default (removes
 ### clean
 Shows worktrees with merged/closed PRs and prompts for confirmation before removing.
 
+### editor
+| Option | Description |
+|--------|-------------|
+| `--editor <cmd>` | Editor command to use (default: `code`). Also configurable via `SANTREE_EDITOR` env var |
+
 ### work
 | Option | Description |
 |--------|-------------|
@@ -190,3 +196,4 @@ Shows worktrees with merged/closed PRs and prompts for confirmation before remov
 | Git | Worktree operations |
 | GitHub CLI (`gh`) | PR integration |
 | tmux | Optional: new window support |
+| VSCode (`code`) or Cursor (`cursor`) | Optional: workspace editor |

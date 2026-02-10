@@ -418,6 +418,25 @@ export default function Doctor() {
 				),
 			]);
 
+			// Check for either code or cursor (only need one)
+			const [codeCheck, cursorCheck] = await Promise.all([
+				checkTool("code", "VSCode editor", false, "code --version | head -1", ""),
+				checkTool("cursor", "Cursor editor", false, "cursor --version | head -1", ""),
+			]);
+			if (codeCheck.installed) {
+				results.push({ ...codeCheck, description: "Editor (VSCode)" });
+			} else if (cursorCheck.installed) {
+				results.push({ ...cursorCheck, description: "Editor (Cursor)" });
+			} else {
+				results.push({
+					name: "code/cursor",
+					description: "Editor (VSCode or Cursor)",
+					required: false,
+					installed: false,
+					hint: "Install VSCode (https://code.visualstudio.com) or Cursor (https://cursor.sh)",
+				});
+			}
+
 			const mcpResult = await checkLinearMcp();
 			const statuslineResult = await checkStatusline();
 

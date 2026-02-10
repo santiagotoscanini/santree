@@ -84,7 +84,6 @@ function isWorktree(cwd: string): boolean {
 
 // Get santree metadata if exists
 function getSantreeMetadata(cwd: string): {
-	branch_name?: string;
 	base_branch?: string;
 } | null {
 	const metadataPath = path.join(cwd, ".santree_metadata.json");
@@ -138,12 +137,12 @@ function formatChanges(changes: { staged: number; unstaged: number; untracked: n
 // Build statusline for santree worktree
 function buildSantreeStatusline(
 	cwd: string,
-	metadata: { branch_name?: string; base_branch?: string },
+	metadata: { base_branch?: string },
 	model: string | null,
 	usedPercentage: number | null,
 ): string {
 	const parts: string[] = [];
-	const branch = metadata.branch_name || git(cwd, "rev-parse --abbrev-ref HEAD") || "unknown";
+	const branch = git(cwd, "rev-parse --abbrev-ref HEAD") || "unknown";
 
 	// Ticket ID (prominent)
 	const ticketId = extractTicketId(branch);

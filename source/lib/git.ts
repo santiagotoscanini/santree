@@ -144,7 +144,11 @@ export async function createWorktree(
 	baseBranch: string,
 	repoRoot: string,
 ): Promise<{ success: boolean; path?: string; error?: string }> {
-	const dirName = branchName.replace(/\//g, "__");
+	const ticketId = extractTicketId(branchName);
+	if (!ticketId) {
+		return { success: false, error: "No ticket ID found in branch name (expected pattern like TEAM-123)" };
+	}
+	const dirName = ticketId;
 	const worktreesDir = getWorktreesDir(repoRoot);
 	const worktreePath = path.join(worktreesDir, dirName);
 
@@ -184,9 +188,7 @@ export async function createWorktree(
 
 		// Save metadata
 		const metadata = {
-			branch_name: branchName,
 			base_branch: baseBranch,
-			created_at: new Date().toISOString(),
 		};
 		fs.writeFileSync(
 			path.join(worktreePath, ".santree_metadata.json"),
@@ -267,7 +269,7 @@ export function getWorktreePath(branchName: string): string | null {
 
 export function getWorktreeMetadata(
 	worktreePath: string,
-): { branch_name?: string; base_branch?: string; created_at?: string } | null {
+): { base_branch?: string } | null {
 	const metadataPath = path.join(worktreePath, ".santree_metadata.json");
 	if (!fs.existsSync(metadataPath)) {
 		return null;

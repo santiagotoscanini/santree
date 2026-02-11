@@ -1,10 +1,15 @@
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import { useEffect, useState } from "react";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
+import {
+	findMainRepoRoot,
+	getSantreeDir,
+	getInitScriptPath,
+} from "../lib/git.js";
 
 const execAsync = promisify(exec);
 
@@ -33,6 +38,17 @@ type StatuslineStatus = {
 	claudeSettingsConfigured: boolean;
 	currentCommand?: string;
 	hint?: string;
+};
+
+type SantreeSetupStatus = {
+	isGitRepo: boolean;
+	mainRepoRoot?: string;
+	santreeFolderExists: boolean;
+	initShExists: boolean;
+	initShExecutable: boolean;
+	worktreesIgnored: boolean;
+	metadataIgnored: boolean;
+	hints: string[];
 };
 
 /**
@@ -192,7 +208,9 @@ async function checkLinearMcp(): Promise<McpStatus> {
 			configured: true,
 			url: urlMatch?.[1],
 			status,
-			hint: isConnected ? undefined : "Open Linear MCP URL in browser to authenticate",
+			hint: isConnected
+				? undefined
+				: "Open Linear MCP URL in browser to authenticate",
 		};
 	}
 
@@ -242,7 +260,8 @@ async function checkStatusline(): Promise<StatuslineStatus> {
 			if (settings.statusLine?.command) {
 				currentCommand = String(settings.statusLine.command);
 				// Check if it points to santree statusline
-				claudeSettingsConfigured = currentCommand.includes("santree statusline");
+				claudeSettingsConfigured =
+					currentCommand.includes("santree statusline");
 			}
 		}
 	} catch {
@@ -251,13 +270,92 @@ async function checkStatusline(): Promise<StatuslineStatus> {
 
 	let hint: string | undefined;
 	if (!claudeSettingsConfigured) {
-		hint = 'Add to ~/.claude/settings.json: "statusLine": { "type": "command", "command": "santree statusline" }';
+		hint =
+			'Add to ~/.claude/settings.json: "statusLine": { "type": "command", "command": "santree statusline" }';
 	}
 
 	return {
 		claudeSettingsConfigured,
 		currentCommand,
 		hint,
+	};
+}
+
+/**
+ * Checks if a path is gitignored (via .gitignore or .git/info/exclude).
+ */
+function isGitIgnored(filePath: string, cwd: string): boolean {
+	try {
+		execSync(`git check-ignore -q "${filePath}"`, { cwd, stdio: "ignore" });
+		return true; // exit 0 = ignored
+	} catch {
+		return false; // exit 1 = not ignored
+	}
+}
+
+/**
+ * Checks if the current directory is a git repo and if .santree/init.sh exists and is executable.
+ */
+function checkSantreeSetup(): SantreeSetupStatus {
+	const mainRepoRoot = findMainRepoRoot();
+
+	if (!mainRepoRoot) {
+		return {
+			isGitRepo: false,
+			santreeFolderExists: false,
+			initShExists: false,
+			initShExecutable: false,
+			worktreesIgnored: false,
+			metadataIgnored: false,
+			hints: ["Not in a git repository"],
+		};
+	}
+
+	const santreeDir = getSantreeDir(mainRepoRoot);
+	const initShPath = getInitScriptPath(mainRepoRoot);
+
+	const santreeFolderExists = fs.existsSync(santreeDir);
+	const initShExists = fs.existsSync(initShPath);
+
+	let initShExecutable = false;
+	if (initShExists) {
+		try {
+			fs.accessSync(initShPath, fs.constants.X_OK);
+			initShExecutable = true;
+		} catch {
+			initShExecutable = false;
+		}
+	}
+
+	// Check gitignore status (use relative paths for git check-ignore)
+	const worktreesIgnored = isGitIgnored(".santree/worktrees", mainRepoRoot);
+	const metadataIgnored = isGitIgnored(".santree/metadata.json", mainRepoRoot);
+
+	const hints: string[] = [];
+	if (!santreeFolderExists) {
+		hints.push(`Create .santree folder: mkdir ${santreeDir}`);
+	} else if (!initShExists) {
+		hints.push(`Create init.sh: touch ${initShPath} && chmod +x ${initShPath}`);
+	} else if (!initShExecutable) {
+		hints.push(`Make init.sh executable: chmod +x ${initShPath}`);
+	}
+
+	if (!worktreesIgnored) {
+		hints.push("Add .santree/worktrees to .gitignore");
+	}
+	if (!metadataIgnored) {
+		hints.push("Add .santree/metadata.json to .gitignore");
+	}
+
+	return {
+		isGitRepo: true,
+		mainRepoRoot,
+		santreeFolderExists,
+		initShExists,
+		initShExecutable,
+		worktreesIgnored,
+		metadataIgnored,
+		hints,
 	};
 }
 
@@ -272,7 +370,10 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box>
-				<StatusIcon ok={tool.installed && !tool.hint} required={tool.required} />
+				<StatusIcon
+					ok={tool.installed && !tool.hint}
+					required={tool.required}
+				/>
 				<Text> </Text>
 				<Text bold>{tool.name}</Text>
 				<Text dimColor> - {tool.description}</Text>
@@ -295,7 +396,9 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
 }
 
 function McpRow({ mcp }: { mcp: McpStatus }) {
-	const isOk = mcp.configured && Boolean(mcp.status?.includes("✓") || mcp.status?.includes("Connected"));
+	const isOk =
+		mcp.configured &&
+		Boolean(mcp.status?.includes("✓") || mcp.status?.includes("Connected"));
 
 	return (
 		<Box flexDirection="column" marginBottom={1}>
@@ -374,6 +477,72 @@ function StatuslineRow({ status }: { status: StatuslineStatus }) {
 	);
 }
 
+function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
+	const isOk =
+		status.santreeFolderExists &&
+		status.initShExists &&
+		status.initShExecutable &&
+		status.worktreesIgnored &&
+		status.metadataIgnored;
+
+	if (!status.isGitRepo) {
+		return (
+			<Box flexDirection="column" marginBottom={1}>
+				<Box>
+					<StatusIcon ok={false} required={false} />
+					<Text> </Text>
+					<Text bold>Repository Setup</Text>
+					<Text dimColor> - .santree configuration</Text>
+					<Text dimColor> (optional)</Text>
+				</Box>
+				<Box marginLeft={2}>
+					<Text dimColor>Not in a git repository</Text>
+				</Box>
+			</Box>
+		);
+	}
+
+	return (
+		<Box flexDirection="column" marginBottom={1}>
+			<Box>
+				<StatusIcon ok={isOk} required={false} />
+				<Text> </Text>
+				<Text bold>Repository Setup</Text>
+				<Text dimColor> - .santree configuration</Text>
+				<Text dimColor> (optional)</Text>
+			</Box>
+			<Box marginLeft={2} flexDirection="column">
+				<Text dimColor>Main repo: {status.mainRepoRoot}</Text>
+				<Text dimColor>
+					.santree folder: {status.santreeFolderExists ? "exists" : "missing"}
+				</Text>
+				{status.santreeFolderExists && (
+					<Text dimColor>
+						init.sh:{" "}
+						{status.initShExists
+							? status.initShExecutable
+								? "executable"
+								: "not executable"
+							: "missing"}
+					</Text>
+				)}
+				<Text dimColor>
+					.santree/worktrees ignored: {status.worktreesIgnored ? "yes" : "no"}
+				</Text>
+				<Text dimColor>
+					.santree/metadata.json ignored:{" "}
+					{status.metadataIgnored ? "yes" : "no"}
+				</Text>
+				{status.hints.map((hint, i) => (
+					<Text key={i} color="yellow">
+						↳ {hint}
+					</Text>
+				))}
+			</Box>
+		</Box>
+	);
+}
+
 export default function Doctor() {
 	const [tools, setTools] = useState<ToolStatus[]>([]);
 	const [mcp, setMcp] = useState<McpStatus | null>(null);
@@ -382,6 +551,9 @@ export default function Doctor() {
 		shell: string | null;
 	} | null>(null);
 	const [statusline, setStatusline] = useState<StatuslineStatus | null>(null);
+	const [santreeSetup, setSantreeSetup] = useState<SantreeSetupStatus | null>(
+		null,
+	);
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
@@ -420,8 +592,20 @@ export default function Doctor() {
 
 			// Check for either code or cursor (only need one)
 			const [codeCheck, cursorCheck] = await Promise.all([
-				checkTool("code", "VSCode editor", false, "code --version | head -1", ""),
-				checkTool("cursor", "Cursor editor", false, "cursor --version | head -1", ""),
+				checkTool(
+					"code",
+					"VSCode editor",
+					false,
+					"code --version | head -1",
+					"",
+				),
+				checkTool(
+					"cursor",
+					"Cursor editor",
+					false,
+					"cursor --version | head -1",
+					"",
+				),
 			]);
 			if (codeCheck.installed) {
 				results.push({ ...codeCheck, description: "Editor (VSCode)" });
@@ -444,6 +628,7 @@ export default function Doctor() {
 			setMcp(mcpResult);
 			setShellStatus(checkShellIntegration());
 			setStatusline(statuslineResult);
+			setSantreeSetup(checkSantreeSetup());
 			setLoading(false);
 		}
 
@@ -461,9 +646,13 @@ export default function Doctor() {
 		);
 	}
 
-	const requiredMissing = tools.filter((t) => t.required && (!t.installed || t.hint));
+	const requiredMissing = tools.filter(
+		(t) => t.required && (!t.installed || t.hint),
+	);
 	const optionalMissing = tools.filter((t) => !t.required && !t.installed);
-	const mcpOk = mcp?.configured && (mcp?.status?.includes("✓") || mcp?.status?.includes("Connected"));
+	const mcpOk =
+		mcp?.configured &&
+		(mcp?.status?.includes("✓") || mcp?.status?.includes("Connected"));
 	const allRequired =
 		requiredMissing.length === 0 && mcpOk && shellStatus?.configured;
 
@@ -498,6 +687,7 @@ export default function Doctor() {
 					shell={shellStatus.shell}
 				/>
 			)}
+			{santreeSetup && <SantreeSetupRow status={santreeSetup} />}
 
 			<Box marginBottom={1} marginTop={1} flexDirection="column">
 				<Text bold underline>

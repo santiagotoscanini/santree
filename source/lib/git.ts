@@ -191,14 +191,12 @@ export async function createWorktree(
 			);
 		}
 
-		// Save metadata
-		const metadata = {
-			base_branch: baseBranch,
-		};
-		fs.writeFileSync(
-			path.join(worktreePath, ".santree_metadata.json"),
-			JSON.stringify(metadata, null, 2),
-		);
+		// Save metadata (only when base branch differs from default)
+		if (baseBranch !== getDefaultBranch() && ticketId) {
+			const all = readAllMetadata(repoRoot);
+			all[ticketId] = { base_branch: baseBranch };
+			writeAllMetadata(repoRoot, all);
+		}
 
 		return { success: true, path: worktreePath };
 	} catch (e) {
@@ -242,6 +240,16 @@ export async function removeWorktree(
 				// Ignore chmod errors
 			}
 			fs.rmSync(worktreePath, { recursive: true, force: true });
+		}
+
+		// Clean up centralized metadata entry
+		const ticketId = extractTicketId(branchName);
+		if (ticketId) {
+			const all = readAllMetadata(repoRoot);
+			if (all[ticketId]) {
+				delete all[ticketId];
+				writeAllMetadata(repoRoot, all);
+			}
 		}
 
 		// Also delete the branch
@@ -288,21 +296,62 @@ export function getWorktreePath(branchName: string): string | null {
 }
 
 /**
- * Read the .santree_metadata.json file from a worktree directory.
- * Returns null if the file doesn't exist or can't be parsed.
+ * Get path to centralized metadata file: .santree/metadata.json in the repo root.
+ */
+function getMetadataFilePath(repoRoot: string): string {
+	return path.join(getSantreeDir(repoRoot), "metadata.json");
+}
+
+/**
+ * Read all entries from .santree/metadata.json.
+ * Returns an empty object if the file doesn't exist or can't be parsed.
+ */
+function readAllMetadata(repoRoot: string): Record<string, { base_branch: string }> {
+	const filePath = getMetadataFilePath(repoRoot);
+	if (!fs.existsSync(filePath)) return {};
+	try {
+		return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * Write all entries to .santree/metadata.json.
+ */
+function writeAllMetadata(repoRoot: string, data: Record<string, { base_branch: string }>): void {
+	const filePath = getMetadataFilePath(repoRoot);
+	const dir = path.dirname(filePath);
+	if (!fs.existsSync(dir)) {
+		fs.mkdirSync(dir, { recursive: true });
+	}
+	fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
+}
+
+/**
+ * Get the base branch for a given branch name.
+ * Looks up metadata first, falls back to the default branch.
+ */
+export function getBaseBranch(branchName: string): string {
+	const metadata = getWorktreeMetadata(branchName);
+	return metadata?.base_branch ?? getDefaultBranch();
+}
+
+/**
+ * Look up worktree metadata by branch name from centralized .santree/metadata.json.
+ * Returns null if no metadata found (caller should fall back to default branch).
  */
 export function getWorktreeMetadata(
-	worktreePath: string,
-): { base_branch?: string } | null {
-	const metadataPath = path.join(worktreePath, ".santree_metadata.json");
-	if (!fs.existsSync(metadataPath)) {
-		return null;
-	}
-	try {
-		return JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
-	} catch {
-		return null;
-	}
+	branchName: string,
+): { base_branch: string } | null {
+	const repoRoot = findMainRepoRoot();
+	if (!repoRoot) return null;
+
+	const ticketId = extractTicketId(branchName);
+	if (!ticketId) return null;
+
+	const all = readAllMetadata(repoRoot);
+	return all[ticketId] ?? null;
 }
 
 /**

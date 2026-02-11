@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
-import { spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import { findMainRepoRoot, getSantreeDir, isInWorktree } from "../lib/git.js";
+import { spawnAsync } from "../lib/exec.js";
 
 export const description = "Run init script in current worktree";
 
@@ -58,45 +58,23 @@ export default function Setup() {
 			setStatus("running");
 
 			// Run script and capture output
-			const exitCode = await new Promise<number>((resolve) => {
-				const child = spawn(initScript, [], {
-					cwd,
-					stdio: "pipe",
-					env: {
-						...process.env,
-						SANTREE_WORKTREE_PATH: cwd,
-						SANTREE_REPO_ROOT: mainRepo,
-					},
-				});
-
-				let scriptOutput = "";
-
-				child.stdout?.on("data", (data) => {
-					scriptOutput += data.toString();
-					setOutput(scriptOutput);
-				});
-
-				child.stderr?.on("data", (data) => {
-					scriptOutput += data.toString();
-					setOutput(scriptOutput);
-				});
-
-				child.on("close", (code) => {
-					resolve(code ?? 1);
-				});
-
-				child.on("error", (err) => {
-					setOutput(err.message);
-					resolve(1);
-				});
+			const result = await spawnAsync(initScript, [], {
+				cwd,
+				env: {
+					...process.env,
+					SANTREE_WORKTREE_PATH: cwd,
+					SANTREE_REPO_ROOT: mainRepo,
+				},
+				onOutput: setOutput,
 			});
+			setOutput(result.output);
 
-			if (exitCode === 0) {
+			if (result.code === 0) {
 				setStatus("done");
 				setMessage("Init script completed successfully");
 			} else {
 				setStatus("error");
-				setMessage(`Init script failed (exit code ${exitCode})`);
+				setMessage(`Init script failed (exit code ${result.code})`);
 			}
 		}
 

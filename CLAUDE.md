@@ -1,10 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
-Santree is a CLI application for managing Git worktrees with integrated AI assistance. It streamlines creating isolated development environments for feature branches, integrating with GitHub PRs and Linear tickets via Claude AI.
+Santree is a CLI for managing Git worktrees with integrated AI assistance. It creates isolated development environments for feature branches, integrating with GitHub PRs and Linear tickets.
 
 ## Build Commands
 
@@ -17,36 +15,80 @@ npm run lint           # Run ESLint
 
 ## Architecture
 
-**CLI Framework**: Pastel + Ink (React-based terminal UI)
-
 ```
 source/
-├── cli.tsx              # Entry point, command routing via Pastel
+├── cli.tsx              # Entry point — Pastel app runner
 ├── lib/
-│   ├── git.ts           # Git operations (worktrees, branches, commits)
-│   └── github.ts        # GitHub CLI wrapper (PR info, auth)
-└── commands/            # React components, one per command
-prompts/                 # Nunjucks templates for Claude prompts
-shell/                   # Zsh/Bash integration scripts (init.zsh.njk, init.bash.njk)
+│   ├── git.ts           # Sync/async git helpers (worktrees, branches, metadata)
+│   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push)
+│   ├── exec.ts          # run() — execSync wrapper returning string | null
+│   └── prompts.ts       # Nunjucks template renderer for AI prompts
+└── commands/            # One React component per CLI command
+prompts/                 # Nunjucks templates: implement, plan, review, fix-pr, fill-pr
+shell/                   # Shell integration templates: init.zsh.njk, init.bash.njk
 ```
 
-**Command Structure**: Each command exports:
-- `description` - Help text
-- `options` - Zod schema for CLI flags
-- `args` - Zod schema for positional arguments
-- Default export - React component using hooks (useState, useEffect, useInput)
+### Command anatomy
 
-**Shell Integration Pattern**: Commands output special markers (`SANTREE_CD:path`, `SANTREE_WORK:mode`) that the parent shell wrapper captures to enable directory switching and chained commands.
+Every file in `commands/` exports:
+- `description` — help text string
+- `options` — Zod schema for CLI flags (optional)
+- `args` — Zod schema for positional arguments (optional)
+- Default export — React (Ink) component
 
-**Metadata Storage**: Worktrees stored in `.santree/worktrees/{branch}/` with metadata in `__santree_metadata.json` (branch_name, base_branch, created_at).
+### Command UI pattern
+
+Commands follow a state-machine pattern with a `Status` union type driving the UI:
+
+```tsx
+type Status = "checking" | "pushing" | "done" | "error";
+const [status, setStatus] = useState<Status>("checking");
+```
+
+The render uses `status` to pick between `<Spinner>`, success `<Text>`, and error `<Text>`. Interactive commands (commit, clean, pr) use `useInput` to handle y/n confirmation at specific statuses.
+
+### Async and spinner rendering
+
+Ink renders React, so the spinner freezes if the main thread blocks. Commands handle this with:
+
+1. **Initial yield** — `await new Promise(r => setTimeout(r, 100))` at the top of the `useEffect` async function, so Ink renders the first frame with the spinner before any work starts.
+2. **Sync git calls in lib/git.ts** — most git helpers use `execSync` (via `run()`) which blocks briefly. This is acceptable for fast git commands. Between batches of sync calls, commands yield with `await new Promise(r => setTimeout(r, 10))` to let the spinner animate.
+3. **Truly async operations** — `createWorktree`, `removeWorktree`, PR info fetches, and push operations use `execAsync`/`spawn` so the spinner stays alive during slow network operations.
+4. **Parallel fetching** — `Promise.all()` for independent async calls (e.g., PR info + dirty check + commits ahead in `list.tsx`).
+
+### Shell integration
+
+Commands can't `cd` the parent shell. Instead they write markers to stdout:
+- `SANTREE_CD:<path>` — shell wrapper reads this and `cd`s
+- `SANTREE_WORK:<mode>` — shell wrapper launches `st work` after `cd`
+
+The shell wrapper is generated from `shell/init.{zsh,bash}.njk` via `santree shell-init`.
+
+### Metadata storage
+
+- Worktree directories live in `.santree/worktrees/{ticketId}/`
+- Base branch metadata is centralized in `.santree/metadata.json`, keyed by ticket ID
+- Entries are only written when `baseBranch !== getDefaultBranch()` — if missing, assume default branch
+- `createWorktree()` writes entries, `removeWorktree()` cleans them up
+
+### Git helpers (`lib/git.ts`)
+
+Two layers:
+- **`run(cmd)`** (`lib/exec.ts`) — `execSync` wrapper, returns trimmed stdout or `null` on failure. Used for quick git queries.
+- **`execAsync(cmd)`** — `promisify(exec)`, used for operations that may take time (worktree add/remove, push, branch delete).
+
+Key functions: `findMainRepoRoot()` (resolves through worktrees to main repo), `findRepoRoot()` (current checkout), `isInWorktree()` (compares `--git-dir` vs `--git-common-dir`), `extractTicketId(branch)` (regex `[A-Z]+-\d+`).
+
+### Statusline (`commands/statusline.tsx`)
+
+Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hook), writes ANSI-colored text to stdout, then `process.exit(0)`. Detects santree worktrees via path (`/.santree/worktrees/`).
 
 ## Key Patterns
 
 - **Branch naming**: `{prefix}/{TICKET-ID}-description` (e.g., `feature/TEAM-123-auth`)
-- **Worktree detection**: Compare `git rev-parse --git-dir` vs `--git-common-dir`
-- **Async operations**: Heavy use of Promise.all() for parallel GitHub/Linear queries
-- **Error resilience**: Commands degrade gracefully when integrations unavailable
-- **Template-driven prompts**: Nunjucks templates in `prompts/` for Claude context
+- **Ticket ID extraction**: first `[A-Z]+-\d+` match in branch name, uppercased
+- **Error resilience**: commands degrade gracefully when integrations (gh, Linear MCP) are unavailable
+- **Prompt-driven AI**: Nunjucks templates in `prompts/` generate context-rich prompts passed to `happy` CLI
 
 ## External Dependencies
 

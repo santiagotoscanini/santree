@@ -3,11 +3,7 @@ import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { exec } from "child_process";
 import { promisify } from "util";
-import {
-	listWorktrees,
-	getWorktreeMetadata,
-	isWorktreePath,
-} from "../lib/git.js";
+import { listWorktrees, getBaseBranch, isWorktreePath } from "../lib/git.js";
 import { getPRInfoAsync } from "../lib/github.js";
 
 export const description = "List all worktrees with status information";
@@ -78,14 +74,11 @@ export default function List() {
 					let status = "-";
 
 					if (!isMain) {
-						const metadata = getWorktreeMetadata(wt.path);
-						if (metadata?.base_branch) {
-							base = metadata.base_branch;
-						}
+						base = wt.branch ? getBaseBranch(wt.branch) : base;
 
 						// Run async operations in parallel
 						const [aheadResult, dirtyResult, prInfo] = await Promise.all([
-							base !== "-" ? getCommitsAhead(wt.path, base) : Promise.resolve(-1),
+							getCommitsAhead(wt.path, base),
 							isDirty(wt.path),
 							wt.branch ? getPRInfoAsync(wt.branch) : Promise.resolve(null),
 						]);
@@ -215,17 +208,11 @@ export default function List() {
 								{w.pr === "-" ? (
 									<Text dimColor>none</Text>
 								) : w.prState === "MERGED" ? (
-									<Text color="magenta">
-										{w.pr} merged
-									</Text>
+									<Text color="magenta">{w.pr} merged</Text>
 								) : w.prState === "CLOSED" ? (
-									<Text color="red">
-										{w.pr} closed
-									</Text>
+									<Text color="red">{w.pr} closed</Text>
 								) : (
-									<Text color="blue">
-										{w.pr} open
-									</Text>
+									<Text color="blue">{w.pr} open</Text>
 								)}
 							</Box>
 						</>

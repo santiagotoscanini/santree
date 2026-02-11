@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
-import { spawn } from "child_process";
+import { execSync } from "child_process";
 import * as fs from "fs";
 import {
 	createWorktree,
@@ -13,7 +13,7 @@ import {
 	getInitScriptPath,
 	extractTicketId,
 } from "../lib/git.js";
-import { execSync } from "child_process";
+import { spawnAsync } from "../lib/exec.js";
 
 export const description = "Create a new worktree from a branch";
 
@@ -184,9 +184,8 @@ export default function Create({ options, args }: Props) {
 						return;
 					}
 
-					const child = spawn(initScript, [], {
+					const initResult = await spawnAsync(initScript, [], {
 						cwd: result.path,
-						stdio: "pipe",
 						env: {
 							...process.env,
 							SANTREE_WORKTREE_PATH: result.path,
@@ -194,20 +193,10 @@ export default function Create({ options, args }: Props) {
 						},
 					});
 
-					// Capture output but don't display (to avoid conflicting with Ink)
-					child.stdout?.on("data", () => {});
-					child.stderr?.on("data", () => {});
-
-					child.on("error", (err) => {
-						setMessage(`Warning: Init script failed: ${err.message}`);
-					});
-
-					child.on("close", (code) => {
-						if (code !== 0) {
-							setMessage(`Warning: Init script exited with code ${code}`);
-						}
-						finalize(result.path!, branch);
-					});
+					if (initResult.code !== 0) {
+						setMessage(`Warning: Init script exited with code ${initResult.code}`);
+					}
+					finalize(result.path!, branch);
 				} else {
 					finalize(result.path!, branch);
 				}

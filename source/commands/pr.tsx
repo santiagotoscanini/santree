@@ -11,8 +11,7 @@ import {
 	findMainRepoRoot,
 	findRepoRoot,
 	getCurrentBranch,
-	getDefaultBranch,
-	getWorktreeMetadata,
+	getBaseBranch,
 	hasUncommittedChanges,
 	getCommitsAhead,
 	remoteBranchExists,
@@ -204,8 +203,7 @@ export default function PR({ options }: Props) {
 			await new Promise((r) => setTimeout(r, 10));
 
 			// Get base branch from metadata
-			const metadata = getWorktreeMetadata(currentRepo);
-			const base = metadata?.base_branch ?? getDefaultBranch();
+			const base = getBaseBranch(branchName);
 			setBaseBranch(base);
 
 			// Check commits ahead

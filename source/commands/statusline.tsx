@@ -72,27 +72,22 @@ function isWorktree(cwd: string): boolean {
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "ignore"],
 		}).trim();
-		const gitCommonDir = execSync(`git -C "${cwd}" rev-parse --git-common-dir`, {
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "ignore"],
-		}).trim();
+		const gitCommonDir = execSync(
+			`git -C "${cwd}" rev-parse --git-common-dir`,
+			{
+				encoding: "utf-8",
+				stdio: ["pipe", "pipe", "ignore"],
+			},
+		).trim();
 		return path.resolve(cwd, gitDir) !== path.resolve(cwd, gitCommonDir);
 	} catch {
 		return false;
 	}
 }
 
-// Get santree metadata if exists
-function getSantreeMetadata(cwd: string): {
-	base_branch?: string;
-} | null {
-	const metadataPath = path.join(cwd, ".santree_metadata.json");
-	if (!fs.existsSync(metadataPath)) return null;
-	try {
-		return JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
-	} catch {
-		return null;
-	}
+// Check if directory is a santree-managed worktree
+function isSantreeWorktree(cwd: string): boolean {
+	return cwd.includes("/.santree/worktrees/");
 }
 
 // Extract ticket ID from branch name (e.g., feature/TEAM-123-desc -> TEAM-123)
@@ -117,7 +112,11 @@ function countLines(output: string | null): number {
 }
 
 // Get git changes summary
-function getGitChanges(cwd: string): { staged: number; unstaged: number; untracked: number } {
+function getGitChanges(cwd: string): {
+	staged: number;
+	unstaged: number;
+	untracked: number;
+} {
 	return {
 		staged: countLines(git(cwd, "diff --cached --name-only")),
 		unstaged: countLines(git(cwd, "diff --name-only")),
@@ -126,18 +125,23 @@ function getGitChanges(cwd: string): { staged: number; unstaged: number; untrack
 }
 
 // Format changes compactly
-function formatChanges(changes: { staged: number; unstaged: number; untracked: number }): string {
+function formatChanges(changes: {
+	staged: number;
+	unstaged: number;
+	untracked: number;
+}): string {
 	const parts: string[] = [];
 	if (changes.staged > 0) parts.push(`${c.green}+${changes.staged}${c.reset}`);
-	if (changes.unstaged > 0) parts.push(`${c.yellow}~${changes.unstaged}${c.reset}`);
-	if (changes.untracked > 0) parts.push(`${c.red}?${changes.untracked}${c.reset}`);
+	if (changes.unstaged > 0)
+		parts.push(`${c.yellow}~${changes.unstaged}${c.reset}`);
+	if (changes.untracked > 0)
+		parts.push(`${c.red}?${changes.untracked}${c.reset}`);
 	return parts.length > 0 ? parts.join(" ") : `${c.dim}clean${c.reset}`;
 }
 
 // Build statusline for santree worktree
 function buildSantreeStatusline(
 	cwd: string,
-	metadata: { base_branch?: string },
 	model: string | null,
 	usedPercentage: number | null,
 ): string {
@@ -255,14 +259,8 @@ export default function Statusline() {
 		if (!isGitRepo(cwd)) {
 			// Not a git repo
 			output = buildPlainStatusline(cwd, model, usedPercentage);
-		} else if (isWorktree(cwd)) {
-			// Check for santree metadata
-			const metadata = getSantreeMetadata(cwd);
-			if (metadata) {
-				output = buildSantreeStatusline(cwd, metadata, model, usedPercentage);
-			} else {
-				output = buildGitStatusline(cwd, model, usedPercentage);
-			}
+		} else if (isWorktree(cwd) && isSantreeWorktree(cwd)) {
+			output = buildSantreeStatusline(cwd, model, usedPercentage);
 		} else {
 			// Regular git repo
 			output = buildGitStatusline(cwd, model, usedPercentage);

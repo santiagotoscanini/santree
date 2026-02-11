@@ -1,18 +1,17 @@
 import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
-import { spawn } from "child_process";
 import { z } from "zod";
 import {
 	findMainRepoRoot,
 	findRepoRoot,
 	getCurrentBranch,
-	getDefaultBranch,
-	getWorktreeMetadata,
+	getBaseBranch,
 	hasUncommittedChanges,
 	getCommitsBehind,
 	isInWorktree,
 } from "../lib/git.js";
+import { spawnAsync } from "../lib/exec.js";
 
 export const description = "Sync worktree with base branch";
 
@@ -23,32 +22,6 @@ export const options = z.object({
 type Props = {
 	options: z.infer<typeof options>;
 };
-
-function runCommand(
-	cmd: string,
-	args: string[],
-): Promise<{ code: number; output: string }> {
-	return new Promise((resolve) => {
-		const child = spawn(cmd, args, { stdio: "pipe" });
-		let output = "";
-
-		child.stdout?.on("data", (data) => {
-			output += data.toString();
-		});
-
-		child.stderr?.on("data", (data) => {
-			output += data.toString();
-		});
-
-		child.on("close", (code) => {
-			resolve({ code: code ?? 1, output });
-		});
-
-		child.on("error", (err) => {
-			resolve({ code: 1, output: err.message });
-		});
-	});
-}
 
 type Status = "init" | "fetching" | "syncing" | "done" | "up-to-date" | "error";
 
@@ -90,8 +63,7 @@ export default function Sync({ options }: Props) {
 			}
 			setBranch(branchName);
 
-			const metadata = getWorktreeMetadata(currentRepo);
-			const base = metadata?.base_branch ?? getDefaultBranch();
+			const base = getBaseBranch(branchName);
 			setBaseBranch(base);
 
 			if (hasUncommittedChanges()) {
@@ -104,7 +76,7 @@ export default function Sync({ options }: Props) {
 
 			// Fetch
 			setStatus("fetching");
-			const fetchResult = await runCommand("git", ["fetch", "origin"]);
+			const fetchResult = await spawnAsync("git", ["fetch", "origin"]);
 			if (fetchResult.code !== 0) {
 				setStatus("error");
 				setMessage("Failed to fetch from remote");
@@ -124,7 +96,7 @@ export default function Sync({ options }: Props) {
 			// Sync
 			setStatus("syncing");
 			const cmd = usesRebase ? "rebase" : "merge";
-			const syncResult = await runCommand("git", [cmd, `origin/${base}`]);
+			const syncResult = await spawnAsync("git", [cmd, `origin/${base}`]);
 
 			if (syncResult.code === 0) {
 				setStatus("done");

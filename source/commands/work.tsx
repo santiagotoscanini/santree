@@ -3,19 +3,8 @@ import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
 import { spawn } from "child_process";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import nunjucks from "nunjucks";
 import { getCurrentBranch, extractTicketId, findRepoRoot } from "../lib/git.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const promptsDir = join(__dirname, "..", "..", "prompts");
-const promptsEnv = new nunjucks.Environment(
-	new nunjucks.FileSystemLoader(promptsDir),
-	{ autoescape: false }
-);
+import { renderPrompt } from "../lib/prompts.js";
 
 export const description = "Launch Claude to work on current ticket";
 
@@ -32,10 +21,6 @@ type Props = {
 type Status = "loading" | "ready" | "launching" | "error";
 
 type Mode = "implement" | "plan" | "review" | "fix-pr";
-
-function renderPrompt(mode: Mode, context: Record<string, string>): string {
-	return promptsEnv.render(`${mode}.njk`, context);
-}
 
 function getMode(opts: z.infer<typeof options>): Mode {
 	if (opts["fix-pr"]) return "fix-pr";

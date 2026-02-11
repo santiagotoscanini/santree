@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { Text, Box, useApp } from "ink";
-import TextInput from "ink-text-input";
+import { Text, Box, useInput, useApp } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
-import { exec } from "child_process";
+import { exec, spawnSync } from "child_process";
 import { promisify } from "util";
+import { join } from "path";
+import { writeFileSync } from "fs";
+import { tmpdir } from "os";
 import {
 	findMainRepoRoot,
 	findRepoRoot,
@@ -17,21 +19,27 @@ import {
 	getUnpushedCommits,
 	extractTicketId,
 	isInWorktree,
-	getLatestCommitMessage,
+	getFirstCommitMessage,
+	getCommitLog,
+	getDiffStat,
+	getDiffContent,
 } from "../lib/git.js";
 import {
 	ghCliAvailable,
 	getPRInfoAsync,
 	pushBranch,
 	createPR,
+	getPRTemplate,
+	type PRInfo,
 } from "../lib/github.js";
+import { renderPrompt } from "../lib/prompts.js";
 
 const execAsync = promisify(exec);
 
 export const description = "Create a GitHub pull request";
 
 export const options = z.object({
-	draft: z.boolean().optional().describe("Create as draft PR"),
+	fill: z.boolean().optional().describe("Use AI to fill the PR template"),
 });
 
 type Props = {
@@ -41,7 +49,8 @@ type Props = {
 type Status =
 	| "checking"
 	| "pushing"
-	| "awaiting-title"
+	| "confirm-reopen"
+	| "filling"
 	| "creating"
 	| "done"
 	| "existing"
@@ -54,30 +63,88 @@ export default function PR({ options }: Props) {
 	const [branch, setBranch] = useState<string | null>(null);
 	const [baseBranch, setBaseBranch] = useState<string | null>(null);
 	const [issueId, setIssueId] = useState<string | null>(null);
-	const [titleInput, setTitleInput] = useState("");
+	const [closedPrInfo, setClosedPrInfo] = useState<PRInfo | null>(null);
+	const [pendingCreate, setPendingCreate] = useState(false);
 
-	async function handleTitleSubmit(value: string) {
-		const finalTitle = value.trim();
-		if (!finalTitle) {
+	useInput((input, key) => {
+		if (status !== "confirm-reopen") return;
+
+		if (input === "y" || input === "Y") {
+			setClosedPrInfo(null);
+			setPendingCreate(true);
+		} else if (input === "n" || input === "N" || key.escape) {
 			setStatus("error");
-			setMessage("PR title is required");
+			setMessage("Cancelled");
 			setTimeout(() => exit(), 100);
-			return;
 		}
+	});
 
+	useEffect(() => {
+		if (!pendingCreate || !branch || !baseBranch) return;
+		setPendingCreate(false);
+		openPR();
+	}, [pendingCreate]);
+
+	function openPR() {
 		if (!branch || !baseBranch) return;
 
-		setStatus("creating");
-		setMessage("Creating PR...");
+		const title = getFirstCommitMessage(baseBranch) ?? branch;
+		let bodyFile: string | undefined;
 
-		const result = createPR(finalTitle, baseBranch, branch, options.draft ?? false);
+		if (options.fill) {
+			setStatus("filling");
+			setMessage("Filling PR template with AI...");
+
+			const prTemplate = getPRTemplate();
+			if (!prTemplate) {
+				setStatus("error");
+				setMessage("No PR template found at .github/pull_request_template.md");
+				setTimeout(() => exit(), 100);
+				return;
+			}
+
+			const commitLog = getCommitLog(baseBranch) ?? "";
+			const diffStat = getDiffStat(baseBranch) ?? "";
+			const diff = getDiffContent(baseBranch) ?? "";
+			const ticketId = extractTicketId(branch);
+
+			const prompt = renderPrompt("fill-pr", {
+				pr_template: prTemplate,
+				commit_log: commitLog,
+				diff_stat: diffStat,
+				diff,
+				ticket_id: ticketId ?? "",
+				branch_name: branch,
+			});
+
+			const result = spawnSync("happy", ["-p", prompt, "--output-format", "text"], {
+				encoding: "utf-8",
+				maxBuffer: 10 * 1024 * 1024,
+			});
+
+			if (result.status !== 0) {
+				setStatus("error");
+				setMessage("Failed to generate PR body with Claude");
+				setTimeout(() => exit(), 100);
+				return;
+			}
+
+			const body = result.stdout.trim();
+			bodyFile = join(tmpdir(), `santree-pr-${Date.now()}.md`);
+			writeFileSync(bodyFile, body);
+		}
+
+		setStatus("creating");
+		setMessage("Opening PR in browser...");
+
+		const result = createPR(title, baseBranch, branch, bodyFile);
 
 		if (result === 0) {
 			setStatus("done");
 			setMessage("Opened PR creation page in browser");
 		} else {
 			setStatus("error");
-			setMessage("Failed to create PR");
+			setMessage("Failed to open PR page");
 		}
 		setTimeout(() => exit(), 100);
 	}
@@ -90,9 +157,7 @@ export default function PR({ options }: Props) {
 			// Check gh CLI is available
 			if (!ghCliAvailable()) {
 				setStatus("error");
-				setMessage(
-					"GitHub CLI (gh) is not installed. Install with: brew install gh",
-				);
+				setMessage("GitHub CLI (gh) is not installed. Install with: brew install gh");
 				return;
 			}
 
@@ -131,9 +196,7 @@ export default function PR({ options }: Props) {
 			// Check for uncommitted changes
 			if (hasUncommittedChanges()) {
 				setStatus("error");
-				setMessage(
-					"You have uncommitted changes. Please commit your changes before creating a PR.",
-				);
+				setMessage("You have uncommitted changes. Please commit before creating a PR.");
 				return;
 			}
 
@@ -149,9 +212,7 @@ export default function PR({ options }: Props) {
 			const commitsAhead = getCommitsAhead(base);
 			if (commitsAhead === 0) {
 				setStatus("error");
-				setMessage(
-					`No commits ahead of ${base}. You need to make commits before creating a PR.`,
-				);
+				setMessage(`No commits ahead of ${base}. Make commits before creating a PR.`);
 				return;
 			}
 
@@ -179,10 +240,14 @@ export default function PR({ options }: Props) {
 			// Check if PR already exists
 			const existingPr = await getPRInfoAsync(branchName);
 			if (existingPr) {
+				if (existingPr.state === "CLOSED") {
+					// Closed PR — let user decide to create a new one
+					setClosedPrInfo(existingPr);
+					setStatus("confirm-reopen");
+					return;
+				}
 				setStatus("existing");
-				setMessage(
-					`PR already exists (#${existingPr.number}) - ${existingPr.state}`,
-				);
+				setMessage(`PR already exists (#${existingPr.number}) - ${existingPr.state}`);
 				if (existingPr.url) {
 					try {
 						await execAsync(`open "${existingPr.url}"`);
@@ -194,25 +259,25 @@ export default function PR({ options }: Props) {
 				return;
 			}
 
-			// Get the latest commit message for the PR title
-			const latestCommit = getLatestCommitMessage();
-			let suggestedTitle = latestCommit ?? "";
-
 			// Extract ticket ID from branch name to display in UI
 			const ticket = extractTicketId(branchName);
 			if (ticket) {
 				setIssueId(ticket);
 			}
-
-			setTitleInput(suggestedTitle);
-			setStatus("awaiting-title");
 		}
 
 		run();
-	}, [options.draft]);
+	}, [options.fill]);
+
+	// Once branch and baseBranch are set and we're still checking, go straight to PR
+	useEffect(() => {
+		if (status === "checking" && branch && baseBranch && !closedPrInfo) {
+			openPR();
+		}
+	}, [status, branch, baseBranch]);
 
 	const isLoading =
-		status === "checking" || status === "pushing" || status === "creating";
+		status === "checking" || status === "pushing" || status === "filling" || status === "creating";
 
 	return (
 		<Box flexDirection="column" padding={1} width="100%">
@@ -261,19 +326,9 @@ export default function PR({ options }: Props) {
 						</Text>
 					</Box>
 				)}
-
-				<Box gap={1}>
-					<Text dimColor>type:</Text>
-					<Text
-						backgroundColor={options.draft ? "yellow" : "green"}
-						color="black"
-					>
-						{options.draft ? " draft " : " ready "}
-					</Text>
-				</Box>
 			</Box>
 
-			<Box marginTop={1}>
+			<Box marginTop={1} flexDirection="column">
 				{isLoading && (
 					<Box>
 						<Text color="cyan">
@@ -282,14 +337,13 @@ export default function PR({ options }: Props) {
 						<Text> {message || "Checking..."}</Text>
 					</Box>
 				)}
-				{status === "awaiting-title" && (
+				{status === "confirm-reopen" && closedPrInfo && (
 					<Box>
-						<Text color="cyan" bold>PR Title: </Text>
-						<TextInput
-							value={titleInput}
-							onChange={setTitleInput}
-							onSubmit={handleTitleSubmit}
-						/>
+						<Text color="yellow">
+							PR #{closedPrInfo.number} was closed. Create a new one? </Text>
+						<Text color="green" bold>[y]</Text>
+						<Text> / </Text>
+						<Text color="red" bold>[n]</Text>
 					</Box>
 				)}
 				{status === "done" && (

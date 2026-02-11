@@ -81,6 +81,7 @@ santree clean
 | `santree sync` | Sync current worktree with base branch |
 | `santree setup` | Run the init script (`.santree/init.sh`) |
 | `santree work` | Launch Claude AI to work on the current ticket |
+| `santree pr` | Create a GitHub pull request (opens in browser) |
 | `santree clean` | Remove worktrees with merged/closed PRs |
 | `santree doctor` | Check system requirements and integrations |
 | `santree editor` | Open workspace file in VSCode or Cursor |
@@ -178,6 +179,13 @@ Shows worktrees with merged/closed PRs and prompts for confirmation before remov
 | Option | Description |
 |--------|-------------|
 | `--editor <cmd>` | Editor command to use (default: `code`). Also configurable via `SANTREE_EDITOR` env var |
+
+### pr
+| Option | Description |
+|--------|-------------|
+| `--fill` | Use AI to fill the PR template before opening |
+
+Automatically pushes, detects existing PRs, and uses the first commit message as the title. If a closed PR exists for the branch, prompts before creating a new one.
 
 ### work
 | Option | Description |

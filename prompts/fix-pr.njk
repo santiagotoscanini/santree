@@ -1,4 +1,8 @@
-Fetch Linear ticket {{ ticket_id }} using MCP (including issue comments) to understand the original requirements.
+{% if ticket_content %}
+{{ ticket_content }}
+{% else %}
+Note: Could not fetch Linear ticket {{ ticket_id }}. Proceed based on branch name context.
+{% endif %}
 
 Use `gh` CLI to fetch the latest PR comments and review feedback for the current branch.
 {% if pr_comments %}

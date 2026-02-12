@@ -1,0 +1,24 @@
+## Linear Ticket: {{ identifier }}
+**{{ title }}**
+{% if url %}[View in Linear]({{ url }}){% endif %}
+{% if status %}Status: {{ status }}{% endif %}{% if priority %} | Priority: {{ priority }}{% endif %}{% if labels | length %} | Labels: {{ labels | join(", ") }}{% endif %}
+
+{% if description %}
+### Description
+{{ description }}
+{% endif %}
+{% if comments | length %}
+### Comments
+{% for comment in comments %}
+**{{ comment.author }}** — {{ comment.createdAt | date }}
+{{ comment.body }}
+{% for reply in comment.children %}
+
+> **{{ reply.author }}** — {{ reply.createdAt | date }}
+> {{ reply.body | indent(2) }}
+{% endfor %}
+{% if not loop.last %}
+---
+{% endif %}
+{% endfor %}
+{% endif %}

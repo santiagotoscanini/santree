@@ -1,6 +1,6 @@
 {
 	"name": "santree",
-	"version": "0.0.16",
+	"version": "0.1.0",
 	"description": "Git worktree manager",
 	"license": "MIT",
 	"author": "Santiago Toscanini",
@@ -33,7 +33,10 @@
 		"dev": "tsc --watch",
 		"start": "node dist/cli.js",
 		"lint": "eslint source",
-		"prepublishOnly": "npm run build"
+		"format": "prettier --write source",
+		"lint:fix": "eslint source --fix",
+		"prepublishOnly": "npm run build",
+		"prepare": "husky"
 	},
 	"files": [
 		"dist",
@@ -56,7 +59,17 @@
 		"@typescript-eslint/eslint-plugin": "^8.52.0",
 		"@typescript-eslint/parser": "^8.52.0",
 		"eslint": "^9.39.2",
+		"eslint-config-prettier": "^10.1.8",
+		"eslint-plugin-prettier": "^5.5.5",
+		"husky": "^9.1.7",
+		"lint-staged": "^16.2.7",
 		"prettier": "^3.7.4",
 		"typescript": "^5.7.0"
+	},
+	"lint-staged": {
+		"source/**/*.{ts,tsx}": [
+			"eslint --fix",
+			"prettier --write"
+		]
 	}
 }

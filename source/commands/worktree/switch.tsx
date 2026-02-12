@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Text, Box } from "ink";
 import { z } from "zod";
-import { getWorktreePath } from "../lib/git.js";
+import { getWorktreePath } from "../../lib/git.js";
 
 export const description = "Switch to another worktree";
 

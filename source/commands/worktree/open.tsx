@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import { z } from "zod";
-import { findMainRepoRoot } from "../lib/git.js";
+import { findMainRepoRoot } from "../../lib/git.js";
 import { execSync, spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -9,10 +9,7 @@ import * as path from "path";
 export const description = "Open workspace file in VSCode or Cursor";
 
 export const options = z.object({
-	editor: z
-		.string()
-		.optional()
-		.describe("Editor command (code, cursor)"),
+	editor: z.string().optional().describe("Editor command (code, cursor)"),
 });
 
 type Props = {
@@ -24,7 +21,7 @@ type Status =
 	| { state: "done"; repo: string; file: string; editor: string }
 	| { state: "error"; message: string };
 
-export default function Editor({ options: opts }: Props) {
+export default function Open({ options: opts }: Props) {
 	const [status, setStatus] = useState<Status>({ state: "loading" });
 
 	useEffect(() => {
@@ -38,9 +35,7 @@ export default function Editor({ options: opts }: Props) {
 		let workspaceFile: string | null = null;
 		try {
 			const entries = fs.readdirSync(repoRoot);
-			const wsFiles = entries
-				.filter((f) => f.endsWith(".code-workspace"))
-				.sort();
+			const wsFiles = entries.filter((f) => f.endsWith(".code-workspace")).sort();
 			if (wsFiles.length > 0) {
 				workspaceFile = wsFiles[0]!;
 			}
@@ -58,8 +53,7 @@ export default function Editor({ options: opts }: Props) {
 		}
 
 		// Resolve editor: --editor flag > SANTREE_EDITOR env > "code" default
-		const editor =
-			opts.editor || process.env.SANTREE_EDITOR || "code";
+		const editor = opts.editor || process.env.SANTREE_EDITOR || "code";
 
 		// Validate editor exists in PATH
 		try {

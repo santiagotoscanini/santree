@@ -3,8 +3,8 @@ import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import * as path from "path";
 import * as fs from "fs";
-import { findMainRepoRoot, getSantreeDir, isInWorktree } from "../lib/git.js";
-import { spawnAsync } from "../lib/exec.js";
+import { findMainRepoRoot, getSantreeDir, isInWorktree } from "../../lib/git.js";
+import { spawnAsync } from "../../lib/exec.js";
 
 export const description = "Run init script in current worktree";
 
@@ -86,7 +86,9 @@ export default function Setup() {
 	return (
 		<Box flexDirection="column" padding={1} width="100%">
 			<Box marginBottom={1}>
-				<Text bold color="cyan">⚙️ Setup</Text>
+				<Text bold color="cyan">
+					⚙️ Setup
+				</Text>
 			</Box>
 
 			<Box
@@ -120,15 +122,21 @@ export default function Setup() {
 			<Box marginTop={1}>
 				{isLoading && (
 					<Box gap={1}>
-						<Text color="cyan"><Spinner type="dots" /></Text>
+						<Text color="cyan">
+							<Spinner type="dots" />
+						</Text>
 						<Text>{status === "checking" ? "Checking..." : "Running init script..."}</Text>
 					</Box>
 				)}
 				{status === "done" && (
-					<Text color="green" bold>✓ {message}</Text>
+					<Text color="green" bold>
+						✓ {message}
+					</Text>
 				)}
 				{status === "error" && (
-					<Text color="red" bold>✗ {message}</Text>
+					<Text color="red" bold>
+						✗ {message}
+					</Text>
 				)}
 			</Box>
 		</Box>

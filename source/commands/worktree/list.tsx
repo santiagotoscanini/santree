@@ -3,8 +3,8 @@ import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { listWorktrees, getBaseBranch, isWorktreePath } from "../lib/git.js";
-import { getPRInfoAsync } from "../lib/github.js";
+import { listWorktrees, getBaseBranch, isWorktreePath } from "../../lib/git.js";
+import { getPRInfoAsync } from "../../lib/github.js";
 
 export const description = "List all worktrees with status information";
 
@@ -21,10 +21,7 @@ interface WorktreeInfo {
 	isMain: boolean;
 }
 
-async function getCommitsAhead(
-	worktreePath: string,
-	baseBranch: string,
-): Promise<number> {
+async function getCommitsAhead(worktreePath: string, baseBranch: string): Promise<number> {
 	try {
 		const { stdout } = await execAsync(
 			`git -C "${worktreePath}" rev-list --count ${baseBranch}..HEAD`,
@@ -37,9 +34,7 @@ async function getCommitsAhead(
 
 async function isDirty(worktreePath: string): Promise<boolean> {
 	try {
-		const { stdout } = await execAsync(
-			`git -C "${worktreePath}" status --porcelain`,
-		);
+		const { stdout } = await execAsync(`git -C "${worktreePath}" status --porcelain`);
 		return Boolean(stdout.trim());
 	} catch {
 		return false;

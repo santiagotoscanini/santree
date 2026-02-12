@@ -1,4 +1,8 @@
-Fetch Linear ticket {{ ticket_id }} using MCP (including issue comments) and analyze what needs to be done.
+{% if ticket_content %}
+{{ ticket_content }}
+{% else %}
+Note: Could not fetch Linear ticket {{ ticket_id }}. Proceed based on branch name context.
+{% endif %}
 
 If a PR URL is linked in the ticket, use `gh` CLI to fetch PR details, comments, and review feedback.
 

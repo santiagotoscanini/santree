@@ -35,13 +35,9 @@ export function getPRInfo(branchName: string): PRInfo | null {
  * Runs: `gh pr view "<branchName>" --json number,state,url`
  * Returns null if no PR exists for the branch or gh CLI fails.
  */
-export async function getPRInfoAsync(
-	branchName: string,
-): Promise<PRInfo | null> {
+export async function getPRInfoAsync(branchName: string): Promise<PRInfo | null> {
 	try {
-		const { stdout } = await execAsync(
-			`gh pr view "${branchName}" --json number,state,url`,
-		);
+		const { stdout } = await execAsync(`gh pr view "${branchName}" --json number,state,url`);
 		const data = JSON.parse(stdout);
 		return {
 			number: String(data.number ?? ""),
@@ -128,7 +124,9 @@ export function getPRTemplate(): string | null {
  * Returns empty string if the PR has no comments or on failure.
  */
 export function getPRComments(prNumber: string): string {
-	return run(
-		`gh pr view ${prNumber} --json comments --jq '.comments[] | "- \\(.author.login): \\(.body)"'`,
-	) ?? "";
+	return (
+		run(
+			`gh pr view ${prNumber} --json comments --jq '.comments[] | "- \\(.author.login): \\(.body)"'`,
+		) ?? ""
+	);
 }

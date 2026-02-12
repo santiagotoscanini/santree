@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
-import { removeWorktree, findMainRepoRoot } from "../lib/git.js";
+import { removeWorktree, findMainRepoRoot } from "../../lib/git.js";
 
 export const description = "Remove a worktree and its branch";
 
@@ -17,9 +17,7 @@ type Props = {
 
 export default function Remove({ args }: Props) {
 	const [branchName] = args;
-	const [status, setStatus] = useState<"idle" | "removing" | "done" | "error">(
-		"idle",
-	);
+	const [status, setStatus] = useState<"idle" | "removing" | "done" | "error">("idle");
 	const [message, setMessage] = useState("");
 
 	useEffect(() => {
@@ -64,9 +62,7 @@ export default function Remove({ args }: Props) {
 			<Box
 				flexDirection="column"
 				borderStyle="round"
-				borderColor={
-					status === "error" ? "red" : status === "done" ? "green" : "yellow"
-				}
+				borderColor={status === "error" ? "red" : status === "done" ? "green" : "yellow"}
 				paddingX={1}
 				width="100%"
 			>

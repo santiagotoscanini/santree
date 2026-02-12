@@ -151,7 +151,10 @@ export async function createWorktree(
 ): Promise<{ success: boolean; path?: string; error?: string }> {
 	const ticketId = extractTicketId(branchName);
 	if (!ticketId) {
-		return { success: false, error: "No ticket ID found in branch name (expected pattern like TEAM-123)" };
+		return {
+			success: false,
+			error: "No ticket ID found in branch name (expected pattern like TEAM-123)",
+		};
 	}
 	const dirName = ticketId;
 	const worktreesDir = getWorktreesDir(repoRoot);
@@ -185,10 +188,9 @@ export async function createWorktree(
 				cwd: repoRoot,
 			});
 		} else {
-			await execAsync(
-				`git worktree add -b "${branchName}" "${worktreePath}" "${baseBranch}"`,
-				{ cwd: repoRoot },
-			);
+			await execAsync(`git worktree add -b "${branchName}" "${worktreePath}" "${baseBranch}"`, {
+				cwd: repoRoot,
+			});
 		}
 
 		// Save metadata (only when base branch differs from default)
@@ -306,7 +308,7 @@ function getMetadataFilePath(repoRoot: string): string {
  * Read all entries from .santree/metadata.json.
  * Returns an empty object if the file doesn't exist or can't be parsed.
  */
-function readAllMetadata(repoRoot: string): Record<string, { base_branch: string }> {
+export function readAllMetadata(repoRoot: string): Record<string, any> {
 	const filePath = getMetadataFilePath(repoRoot);
 	if (!fs.existsSync(filePath)) return {};
 	try {
@@ -319,13 +321,32 @@ function readAllMetadata(repoRoot: string): Record<string, { base_branch: string
 /**
  * Write all entries to .santree/metadata.json.
  */
-function writeAllMetadata(repoRoot: string, data: Record<string, { base_branch: string }>): void {
+export function writeAllMetadata(repoRoot: string, data: Record<string, any>): void {
 	const filePath = getMetadataFilePath(repoRoot);
 	const dir = path.dirname(filePath);
 	if (!fs.existsSync(dir)) {
 		fs.mkdirSync(dir, { recursive: true });
 	}
 	fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
+}
+
+/**
+ * Get the Linear org slug associated with this repo.
+ * Stored as `_linear.org` in .santree/metadata.json.
+ */
+export function getRepoLinearOrg(repoRoot: string): string | null {
+	const all = readAllMetadata(repoRoot);
+	return all._linear?.org ?? null;
+}
+
+/**
+ * Associate a Linear org slug with this repo.
+ * Stored as `_linear.org` in .santree/metadata.json.
+ */
+export function setRepoLinearOrg(repoRoot: string, orgSlug: string): void {
+	const all = readAllMetadata(repoRoot);
+	all._linear = { org: orgSlug };
+	writeAllMetadata(repoRoot, all);
 }
 
 /**
@@ -341,9 +362,7 @@ export function getBaseBranch(branchName: string): string {
  * Look up worktree metadata by branch name from centralized .santree/metadata.json.
  * Returns null if no metadata found (caller should fall back to default branch).
  */
-export function getWorktreeMetadata(
-	branchName: string,
-): { base_branch: string } | null {
+export function getWorktreeMetadata(branchName: string): { base_branch: string } | null {
 	const repoRoot = findMainRepoRoot();
 	if (!repoRoot) return null;
 

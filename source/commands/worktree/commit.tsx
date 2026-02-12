@@ -12,7 +12,7 @@ import {
 	getStagedDiffStat,
 	hasStagedChanges,
 	hasUnstagedChanges,
-} from "../lib/git.js";
+} from "../../lib/git.js";
 
 export const description = "Stage and commit changes";
 
@@ -83,9 +83,7 @@ export default function Commit() {
 
 		// Prepend ticket ID if not already present
 		const commitMessage =
-			ticketId && !trimmed.includes(`[${ticketId}]`)
-				? `[${ticketId}] ${trimmed}`
-				: trimmed;
+			ticketId && !trimmed.includes(`[${ticketId}]`) ? `[${ticketId}] ${trimmed}` : trimmed;
 
 		setStatus("committing");
 		setMessage("Creating commit...");
@@ -174,8 +172,7 @@ export default function Commit() {
 		init();
 	}, []);
 
-	const isLoading =
-		status === "loading" || status === "committing" || status === "pushing";
+	const isLoading = status === "loading" || status === "committing" || status === "pushing";
 
 	return (
 		<Box flexDirection="column" padding={1} width="100%">
@@ -188,9 +185,7 @@ export default function Commit() {
 			<Box
 				flexDirection="column"
 				borderStyle="round"
-				borderColor={
-					status === "error" ? "red" : status === "done" ? "green" : "blue"
-				}
+				borderColor={status === "error" ? "red" : status === "done" ? "green" : "blue"}
 				paddingX={1}
 				width="100%"
 			>
@@ -230,11 +225,7 @@ export default function Commit() {
 							.slice(0, 10)
 							.map((line, i) => {
 								let color: string | undefined;
-								if (
-									line.startsWith("A ") ||
-									line.startsWith("M ") ||
-									line.startsWith("D ")
-								) {
+								if (line.startsWith("A ") || line.startsWith("M ") || line.startsWith("D ")) {
 									color = "green";
 								} else if (line.startsWith("??")) {
 									color = "gray";
@@ -248,9 +239,7 @@ export default function Commit() {
 								);
 							})}
 						{gitStatus.split("\n").length > 10 && (
-							<Text dimColor>
-								... and {gitStatus.split("\n").length - 10} more
-							</Text>
+							<Text dimColor>... and {gitStatus.split("\n").length - 10} more</Text>
 						)}
 					</Box>
 				</Box>
@@ -293,7 +282,9 @@ export default function Commit() {
 				)}
 				{status === "awaiting-message" && (
 					<Box>
-						<Text color="cyan" bold>Commit message: </Text>
+						<Text color="cyan" bold>
+							Commit message:{" "}
+						</Text>
 						<TextInput
 							value={commitInput}
 							onChange={setCommitInput}

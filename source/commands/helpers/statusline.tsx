@@ -72,13 +72,10 @@ function isWorktree(cwd: string): boolean {
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "ignore"],
 		}).trim();
-		const gitCommonDir = execSync(
-			`git -C "${cwd}" rev-parse --git-common-dir`,
-			{
-				encoding: "utf-8",
-				stdio: ["pipe", "pipe", "ignore"],
-			},
-		).trim();
+		const gitCommonDir = execSync(`git -C "${cwd}" rev-parse --git-common-dir`, {
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "ignore"],
+		}).trim();
 		return path.resolve(cwd, gitDir) !== path.resolve(cwd, gitCommonDir);
 	} catch {
 		return false;
@@ -125,17 +122,11 @@ function getGitChanges(cwd: string): {
 }
 
 // Format changes compactly
-function formatChanges(changes: {
-	staged: number;
-	unstaged: number;
-	untracked: number;
-}): string {
+function formatChanges(changes: { staged: number; unstaged: number; untracked: number }): string {
 	const parts: string[] = [];
 	if (changes.staged > 0) parts.push(`${c.green}+${changes.staged}${c.reset}`);
-	if (changes.unstaged > 0)
-		parts.push(`${c.yellow}~${changes.unstaged}${c.reset}`);
-	if (changes.untracked > 0)
-		parts.push(`${c.red}?${changes.untracked}${c.reset}`);
+	if (changes.unstaged > 0) parts.push(`${c.yellow}~${changes.unstaged}${c.reset}`);
+	if (changes.untracked > 0) parts.push(`${c.red}?${changes.untracked}${c.reset}`);
 	return parts.length > 0 ? parts.join(" ") : `${c.dim}clean${c.reset}`;
 }
 

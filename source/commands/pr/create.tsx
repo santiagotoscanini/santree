@@ -22,7 +22,7 @@ import {
 	getCommitLog,
 	getDiffStat,
 	getDiffContent,
-} from "../lib/git.js";
+} from "../../lib/git.js";
 import {
 	ghCliAvailable,
 	getPRInfoAsync,
@@ -30,8 +30,8 @@ import {
 	createPR,
 	getPRTemplate,
 	type PRInfo,
-} from "../lib/github.js";
-import { renderPrompt } from "../lib/prompts.js";
+} from "../../lib/github.js";
+import { renderPrompt } from "../../lib/prompts.js";
 
 const execAsync = promisify(exec);
 
@@ -337,11 +337,14 @@ export default function PR({ options }: Props) {
 				)}
 				{status === "confirm-reopen" && closedPrInfo && (
 					<Box>
-						<Text color="yellow">
-							PR #{closedPrInfo.number} was closed. Create a new one? </Text>
-						<Text color="green" bold>[y]</Text>
+						<Text color="yellow">PR #{closedPrInfo.number} was closed. Create a new one? </Text>
+						<Text color="green" bold>
+							[y]
+						</Text>
 						<Text> / </Text>
-						<Text color="red" bold>[n]</Text>
+						<Text color="red" bold>
+							[n]
+						</Text>
 					</Box>
 				)}
 				{status === "done" && (

@@ -19,12 +19,19 @@ npm run lint           # Run ESLint
 source/
 ├── cli.tsx              # Entry point — Pastel app runner
 ├── lib/
+│   ├── ai.ts            # Shared AI logic (context resolution, prompt rendering, happy launch)
 │   ├── git.ts           # Sync/async git helpers (worktrees, branches, metadata)
 │   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push)
 │   ├── exec.ts          # run() — execSync wrapper returning string | null
+│   ├── linear.ts        # Linear GraphQL API client (OAuth, tickets, images)
 │   └── prompts.ts       # Nunjucks template renderer for AI prompts
 └── commands/            # One React component per CLI command
-prompts/                 # Nunjucks templates: implement, plan, review, fix-pr, fill-pr
+    ├── doctor.tsx        # Top-level: system requirements check
+    ├── worktree/         # santree worktree {create,list,switch,remove,clean,sync,work,open,setup,commit}
+    ├── pr/               # santree pr {create,open,fix,review}
+    ├── linear/           # santree linear {auth,open}
+    └── helpers/          # santree helpers {shell-init,statusline}
+prompts/                 # Nunjucks templates: implement, plan, review, fix-pr, fill-pr, ticket
 shell/                   # Shell integration templates: init.zsh.njk, init.bash.njk
 ```
 
@@ -60,9 +67,18 @@ Ink renders React, so the spinner freezes if the main thread blocks. Commands ha
 
 Commands can't `cd` the parent shell. Instead they write markers to stdout:
 - `SANTREE_CD:<path>` — shell wrapper reads this and `cd`s
-- `SANTREE_WORK:<mode>` — shell wrapper launches `st work` after `cd`
+- `SANTREE_WORK:<mode>` — shell wrapper launches `st worktree work` after `cd`
 
-The shell wrapper is generated from `shell/init.{zsh,bash}.njk` via `santree shell-init`.
+The shell wrapper is generated from `shell/init.{zsh,bash}.njk` via `santree helpers shell-init`.
+
+### AI shared logic (`lib/ai.ts`)
+
+Three AI-powered commands share context resolution and prompt rendering:
+- `worktree/work.tsx` → implement/plan mode
+- `pr/fix.tsx` → fix PR review comments
+- `pr/review.tsx` → review changes against ticket
+
+`resolveAIContext()` finds repo, branch, ticket ID, and fetches Linear ticket data. `renderAIPrompt()` renders a named Nunjucks template with context. `launchHappy()` spawns the `happy` CLI.
 
 ### Metadata storage
 
@@ -79,7 +95,7 @@ Two layers:
 
 Key functions: `findMainRepoRoot()` (resolves through worktrees to main repo), `findRepoRoot()` (current checkout), `isInWorktree()` (compares `--git-dir` vs `--git-common-dir`), `extractTicketId(branch)` (regex `[A-Z]+-\d+`).
 
-### Statusline (`commands/statusline.tsx`)
+### Statusline (`commands/helpers/statusline.tsx`)
 
 Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hook), writes ANSI-colored text to stdout, then `process.exit(0)`. Detects santree worktrees via path (`/.santree/worktrees/`).
 
@@ -87,10 +103,13 @@ Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hoo
 
 - **Branch naming**: `{prefix}/{TICKET-ID}-description` (e.g., `feature/TEAM-123-auth`)
 - **Ticket ID extraction**: first `[A-Z]+-\d+` match in branch name, uppercased
-- **Error resilience**: commands degrade gracefully when integrations (gh, Linear MCP) are unavailable
+- **Error resilience**: commands degrade gracefully when integrations (gh, Linear API) are unavailable
 - **Prompt-driven AI**: Nunjucks templates in `prompts/` generate context-rich prompts passed to `happy` CLI
 
 ## External Dependencies
 
 Required: Node.js >= 20, Git, GitHub CLI (`gh`), tmux, Claude CLI (`claude`), happy-coder CLI (`happy`)
-Optional: Linear MCP for ticket integration
+
+### Linear Integration
+
+Santree fetches Linear ticket data via the GraphQL API (OAuth PKCE). Run `santree linear auth` to authenticate — opens browser, stores tokens in `~/.santree/auth.json`, and links the org to the current repo. Ticket data (title, description, comments, images) is injected into prompts before launching Claude. Auth tokens auto-refresh; images are downloaded to `/tmp/santree-images-{ticketId}/` and cleaned up on exit.

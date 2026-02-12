@@ -10,8 +10,8 @@ import {
 	hasUncommittedChanges,
 	getCommitsBehind,
 	isInWorktree,
-} from "../lib/git.js";
-import { spawnAsync } from "../lib/exec.js";
+} from "../../lib/git.js";
+import { spawnAsync } from "../../lib/exec.js";
 
 export const description = "Sync worktree with base branch";
 
@@ -68,9 +68,7 @@ export default function Sync({ options }: Props) {
 
 			if (hasUncommittedChanges()) {
 				setStatus("error");
-				setMessage(
-					"You have uncommitted changes. Please commit or stash them before syncing.",
-				);
+				setMessage("You have uncommitted changes. Please commit or stash them before syncing.");
 				return;
 			}
 
@@ -114,8 +112,7 @@ export default function Sync({ options }: Props) {
 		run();
 	}, [usesRebase]);
 
-	const isLoading =
-		status === "init" || status === "fetching" || status === "syncing";
+	const isLoading = status === "init" || status === "fetching" || status === "syncing";
 
 	return (
 		<Box flexDirection="column" padding={1} width="100%">
@@ -177,8 +174,7 @@ export default function Sync({ options }: Props) {
 						<Text>
 							{status === "init" && "Starting..."}
 							{status === "fetching" && "Fetching from remote..."}
-							{status === "syncing" &&
-								(usesRebase ? "Rebasing..." : "Merging...")}
+							{status === "syncing" && (usesRebase ? "Rebasing..." : "Merging...")}
 						</Text>
 					</Box>
 				)}

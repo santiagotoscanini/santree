@@ -5,11 +5,8 @@ import { exec, execSync } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
-import {
-	findMainRepoRoot,
-	getSantreeDir,
-	getInitScriptPath,
-} from "../lib/git.js";
+import { findMainRepoRoot, getSantreeDir, getInitScriptPath } from "../lib/git.js";
+import { getAuthStatus, getValidTokens } from "../lib/linear.js";
 
 const execAsync = promisify(exec);
 
@@ -26,11 +23,12 @@ type ToolStatus = {
 	hint?: string;
 };
 
-type McpStatus = {
-	name: string;
-	configured: boolean;
-	url?: string;
-	status?: string;
+type LinearAuthCheckStatus = {
+	authenticated: boolean;
+	orgSlug?: string;
+	orgName?: string;
+	tokenValid?: boolean;
+	repoLinked?: boolean;
 	hint?: string;
 };
 
@@ -129,9 +127,7 @@ async function checkGhAuth(): Promise<ToolStatus> {
 		try {
 			const auth = JSON.parse(authJson);
 			const githubHosts = auth.hosts?.["github.com"];
-			const activeAccount = githubHosts?.find(
-				(h: { active: boolean }) => h.active,
-			);
+			const activeAccount = githubHosts?.find((h: { active: boolean }) => h.active);
 
 			if (activeAccount?.login) {
 				authStatus = `Authenticated as ${activeAccount.login}`;
@@ -165,59 +161,33 @@ async function checkGhAuth(): Promise<ToolStatus> {
 }
 
 /**
- * Checks if Linear MCP is configured using `claude mcp list`.
- * Output formats:
- *   linear: https://mcp.linear.app/mcp (HTTP) - ✓ Connected
- *   linear: https://mcp.linear.app/mcp (HTTP) - ⚠ Needs authentication
+ * Checks Linear API authentication status.
  */
-async function checkLinearMcp(): Promise<McpStatus> {
-	const output = await tryExec("claude mcp list 2>&1");
+async function checkLinearAuth(): Promise<LinearAuthCheckStatus> {
+	const repoRoot = findMainRepoRoot();
+	const status = getAuthStatus(repoRoot);
 
-	if (!output) {
+	if (!status.authenticated || !status.orgSlug) {
 		return {
-			name: "Linear MCP",
-			configured: false,
-			hint: "Claude CLI not available to check MCP servers",
+			authenticated: false,
+			hint: "Run: santree linear auth",
 		};
 	}
 
-	// Check if "No MCP servers configured"
-	if (output.includes("No MCP servers configured")) {
-		return {
-			name: "Linear MCP",
-			configured: false,
-			hint: "Run: claude mcp add --transport http linear https://mcp.linear.app/mcp",
-		};
-	}
-
-	// Look for a line containing "linear"
-	const lines = output.split("\n");
-	const linearLine = lines.find((line) =>
-		line.toLowerCase().includes("linear"),
-	);
-
-	if (linearLine) {
-		const urlMatch = linearLine.match(/:\s*(https?:\/\/[^\s]+)/);
-		// Extract status after " - " (e.g., "✓ Connected" or "⚠ Needs authentication")
-		const statusMatch = linearLine.match(/ - (.+)$/);
-		const status = statusMatch?.[1]?.trim();
-		const isConnected = status?.includes("✓") || status?.includes("Connected");
-
-		return {
-			name: "Linear MCP",
-			configured: true,
-			url: urlMatch?.[1],
-			status,
-			hint: isConnected
-				? undefined
-				: "Open Linear MCP URL in browser to authenticate",
-		};
-	}
+	// Try to validate/refresh tokens
+	const valid = await getValidTokens(status.orgSlug);
 
 	return {
-		name: "Linear MCP",
-		configured: false,
-		hint: "Run: claude mcp add --transport http linear https://mcp.linear.app/mcp",
+		authenticated: true,
+		orgSlug: status.orgSlug,
+		orgName: status.orgName,
+		tokenValid: valid !== null,
+		repoLinked: status.repoLinked,
+		hint: !valid
+			? "Token expired. Run: santree linear auth"
+			: !status.repoLinked
+				? "Repo not linked. Run: santree linear auth"
+				: undefined,
 	};
 }
 
@@ -230,11 +200,7 @@ function checkShellIntegration(): {
 	shell: string | null;
 } {
 	const shell = process.env.SHELL || "";
-	const shellName = shell.includes("zsh")
-		? "zsh"
-		: shell.includes("bash")
-			? "bash"
-			: null;
+	const shellName = shell.includes("zsh") ? "zsh" : shell.includes("bash") ? "bash" : null;
 
 	const configured = process.env.SANTREE_SHELL_INTEGRATION === "1";
 
@@ -261,7 +227,8 @@ async function checkStatusline(): Promise<StatuslineStatus> {
 				currentCommand = String(settings.statusLine.command);
 				// Check if it points to santree statusline
 				claudeSettingsConfigured =
-					currentCommand.includes("santree statusline");
+					currentCommand.includes("santree statusline") ||
+					currentCommand.includes("santree helpers statusline");
 			}
 		}
 	} catch {
@@ -271,7 +238,7 @@ async function checkStatusline(): Promise<StatuslineStatus> {
 	let hint: string | undefined;
 	if (!claudeSettingsConfigured) {
 		hint =
-			'Add to ~/.claude/settings.json: "statusLine": { "type": "command", "command": "santree statusline" }';
+			'Add to ~/.claude/settings.json: "statusLine": { "type": "command", "command": "santree helpers statusline" }';
 	}
 
 	return {
@@ -370,10 +337,7 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box>
-				<StatusIcon
-					ok={tool.installed && !tool.hint}
-					required={tool.required}
-				/>
+				<StatusIcon ok={tool.installed && !tool.hint} required={tool.required} />
 				<Text> </Text>
 				<Text bold>{tool.name}</Text>
 				<Text dimColor> - {tool.description}</Text>
@@ -395,43 +359,36 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
 	);
 }
 
-function McpRow({ mcp }: { mcp: McpStatus }) {
-	const isOk =
-		mcp.configured &&
-		Boolean(mcp.status?.includes("✓") || mcp.status?.includes("Connected"));
+function LinearRow({ linear }: { linear: LinearAuthCheckStatus }) {
+	const isOk = linear.authenticated && linear.tokenValid && linear.repoLinked;
 
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box>
-				<StatusIcon ok={isOk} required={true} />
+				<StatusIcon ok={!!isOk} required={true} />
 				<Text> </Text>
-				<Text bold>{mcp.name}</Text>
-				<Text dimColor> - Linear ticket integration for Claude</Text>
+				<Text bold>Linear API</Text>
+				<Text dimColor> - Linear ticket integration</Text>
 			</Box>
-			{mcp.configured ? (
+			{linear.authenticated ? (
 				<Box marginLeft={2} flexDirection="column">
-					{mcp.url && <Text dimColor>URL: {mcp.url}</Text>}
-					{mcp.status && <Text dimColor>Status: {mcp.status}</Text>}
-					{mcp.hint && <Text color="yellow">↳ {mcp.hint}</Text>}
+					<Text dimColor>
+						Organization: {linear.orgName} ({linear.orgSlug})
+					</Text>
+					<Text dimColor>Token: {linear.tokenValid ? "valid" : "expired"}</Text>
+					<Text dimColor>Repo linked: {linear.repoLinked ? "yes" : "no"}</Text>
+					{linear.hint && <Text color="yellow">↳ {linear.hint}</Text>}
 				</Box>
 			) : (
-				mcp.hint && (
-					<Box marginLeft={2}>
-						<Text color="yellow">↳ {mcp.hint}</Text>
-					</Box>
-				)
+				<Box marginLeft={2}>
+					<Text color="yellow">↳ {linear.hint}</Text>
+				</Box>
 			)}
 		</Box>
 	);
 }
 
-function ShellRow({
-	configured,
-	shell,
-}: {
-	configured: boolean;
-	shell: string | null;
-}) {
+function ShellRow({ configured, shell }: { configured: boolean; shell: string | null }) {
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box>
@@ -447,7 +404,7 @@ function ShellRow({
 			) : (
 				<Box marginLeft={2}>
 					<Text color="yellow">
-						↳ Add to .{shell}rc: eval "$(santree shell-init {shell})"
+						↳ Add to .{shell}rc: eval "$(santree helpers shell-init {shell})"
 					</Text>
 				</Box>
 			)}
@@ -513,9 +470,7 @@ function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 			</Box>
 			<Box marginLeft={2} flexDirection="column">
 				<Text dimColor>Main repo: {status.mainRepoRoot}</Text>
-				<Text dimColor>
-					.santree folder: {status.santreeFolderExists ? "exists" : "missing"}
-				</Text>
+				<Text dimColor>.santree folder: {status.santreeFolderExists ? "exists" : "missing"}</Text>
 				{status.santreeFolderExists && (
 					<Text dimColor>
 						init.sh:{" "}
@@ -526,12 +481,9 @@ function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 							: "missing"}
 					</Text>
 				)}
+				<Text dimColor>.santree/worktrees ignored: {status.worktreesIgnored ? "yes" : "no"}</Text>
 				<Text dimColor>
-					.santree/worktrees ignored: {status.worktreesIgnored ? "yes" : "no"}
-				</Text>
-				<Text dimColor>
-					.santree/metadata.json ignored:{" "}
-					{status.metadataIgnored ? "yes" : "no"}
+					.santree/metadata.json ignored: {status.metadataIgnored ? "yes" : "no"}
 				</Text>
 				{status.hints.map((hint, i) => (
 					<Text key={i} color="yellow">
@@ -545,15 +497,13 @@ function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 
 export default function Doctor() {
 	const [tools, setTools] = useState<ToolStatus[]>([]);
-	const [mcp, setMcp] = useState<McpStatus | null>(null);
+	const [linear, setLinear] = useState<LinearAuthCheckStatus | null>(null);
 	const [shellStatus, setShellStatus] = useState<{
 		configured: boolean;
 		shell: string | null;
 	} | null>(null);
 	const [statusline, setStatusline] = useState<StatuslineStatus | null>(null);
-	const [santreeSetup, setSantreeSetup] = useState<SantreeSetupStatus | null>(
-		null,
-	);
+	const [santreeSetup, setSantreeSetup] = useState<SantreeSetupStatus | null>(null);
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
@@ -567,13 +517,7 @@ export default function Doctor() {
 					"Install: brew install git",
 				),
 				checkGhAuth(),
-				checkTool(
-					"tmux",
-					"Terminal multiplexer",
-					true,
-					"tmux -V",
-					"Install: brew install tmux",
-				),
+				checkTool("tmux", "Terminal multiplexer", true, "tmux -V", "Install: brew install tmux"),
 				checkTool(
 					"claude",
 					"Claude Code CLI",
@@ -592,20 +536,8 @@ export default function Doctor() {
 
 			// Check for either code or cursor (only need one)
 			const [codeCheck, cursorCheck] = await Promise.all([
-				checkTool(
-					"code",
-					"VSCode editor",
-					false,
-					"code --version | head -1",
-					"",
-				),
-				checkTool(
-					"cursor",
-					"Cursor editor",
-					false,
-					"cursor --version | head -1",
-					"",
-				),
+				checkTool("code", "VSCode editor", false, "code --version | head -1", ""),
+				checkTool("cursor", "Cursor editor", false, "cursor --version | head -1", ""),
 			]);
 			if (codeCheck.installed) {
 				results.push({ ...codeCheck, description: "Editor (VSCode)" });
@@ -621,11 +553,11 @@ export default function Doctor() {
 				});
 			}
 
-			const mcpResult = await checkLinearMcp();
+			const linearResult = await checkLinearAuth();
 			const statuslineResult = await checkStatusline();
 
 			setTools(results);
-			setMcp(mcpResult);
+			setLinear(linearResult);
 			setShellStatus(checkShellIntegration());
 			setStatusline(statuslineResult);
 			setSantreeSetup(checkSantreeSetup());
@@ -646,15 +578,10 @@ export default function Doctor() {
 		);
 	}
 
-	const requiredMissing = tools.filter(
-		(t) => t.required && (!t.installed || t.hint),
-	);
+	const requiredMissing = tools.filter((t) => t.required && (!t.installed || t.hint));
 	const optionalMissing = tools.filter((t) => !t.required && !t.installed);
-	const mcpOk =
-		mcp?.configured &&
-		(mcp?.status?.includes("✓") || mcp?.status?.includes("Connected"));
-	const allRequired =
-		requiredMissing.length === 0 && mcpOk && shellStatus?.configured;
+	const linearOk = linear?.authenticated && linear?.tokenValid && linear?.repoLinked;
+	const allRequired = requiredMissing.length === 0 && linearOk && shellStatus?.configured;
 
 	return (
 		<Box flexDirection="column" padding={1}>
@@ -680,13 +607,8 @@ export default function Doctor() {
 				</Text>
 			</Box>
 
-			{mcp && <McpRow mcp={mcp} />}
-			{shellStatus && (
-				<ShellRow
-					configured={shellStatus.configured}
-					shell={shellStatus.shell}
-				/>
-			)}
+			{linear && <LinearRow linear={linear} />}
+			{shellStatus && <ShellRow configured={shellStatus.configured} shell={shellStatus.shell} />}
 			{santreeSetup && <SantreeSetupRow status={santreeSetup} />}
 
 			<Box marginBottom={1} marginTop={1} flexDirection="column">
@@ -704,21 +626,15 @@ export default function Doctor() {
 				paddingX={2}
 			>
 				{allRequired ? (
-					<Text color="green">
-						All requirements satisfied! Santree is ready to use.
-					</Text>
+					<Text color="green">All requirements satisfied! Santree is ready to use.</Text>
 				) : (
 					<Box flexDirection="column">
 						<Text color="yellow">
-							{requiredMissing.length +
-								(mcpOk ? 0 : 1) +
-								(shellStatus?.configured ? 0 : 1)}{" "}
+							{requiredMissing.length + (linearOk ? 0 : 1) + (shellStatus?.configured ? 0 : 1)}{" "}
 							required item(s) need attention
 						</Text>
 						{optionalMissing.length > 0 && (
-							<Text dimColor>
-								{optionalMissing.length} optional item(s) not installed
-							</Text>
+							<Text dimColor>{optionalMissing.length} optional item(s) not installed</Text>
 						)}
 					</Box>
 				)}

@@ -8,6 +8,9 @@ You are filling out a pull request template. Output ONLY the filled template mar
 
 Branch: {{ branch_name }}
 {% if ticket_id %}Ticket: {{ ticket_id }}{% endif %}
+{% if ticket_content %}
+{{ ticket_content }}
+{% endif %}
 
 ### Commits
 {{ commit_log }}

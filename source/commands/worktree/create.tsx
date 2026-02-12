@@ -12,8 +12,8 @@ import {
 	hasInitScript,
 	getInitScriptPath,
 	extractTicketId,
-} from "../lib/git.js";
-import { spawnAsync } from "../lib/exec.js";
+} from "../../lib/git.js";
+import { spawnAsync } from "../../lib/exec.js";
 
 export const description = "Create a new worktree from a branch";
 
@@ -33,14 +33,7 @@ type Props = {
 	args: z.infer<typeof args>;
 };
 
-type Status =
-	| "idle"
-	| "pulling"
-	| "creating"
-	| "init-script"
-	| "tmux"
-	| "done"
-	| "error";
+type Status = "idle" | "pulling" | "creating" | "init-script" | "tmux" | "done" | "error";
 
 function isInTmux(): boolean {
 	return !!process.env.TMUX;
@@ -98,7 +91,7 @@ export default function Create({ options, args }: Props) {
 			// Build command to run in new window (if --work is set)
 			let runCommand: string | undefined;
 			if (options.work) {
-				runCommand = options.plan ? "st work --plan" : "st work";
+				runCommand = options.plan ? "st worktree work --plan" : "st worktree work";
 			}
 
 			if (!createTmuxWindow(windowName, path, runCommand)) {
@@ -228,13 +221,11 @@ export default function Create({ options, args }: Props) {
 				</Text>
 			</Box>
 
-		{branchName && (
+			{branchName && (
 				<Box
 					flexDirection="column"
 					borderStyle="round"
-					borderColor={
-						status === "error" ? "red" : status === "done" ? "green" : "blue"
-					}
+					borderColor={status === "error" ? "red" : status === "done" ? "green" : "blue"}
 					paddingX={1}
 					width="100%"
 				>
@@ -294,9 +285,7 @@ export default function Create({ options, args }: Props) {
 							✓ {message}
 						</Text>
 						<Text dimColor> {worktreePath}</Text>
-						{tmuxWindowName && (
-							<Text dimColor> tmux window: {tmuxWindowName}</Text>
-						)}
+						{tmuxWindowName && <Text dimColor> tmux window: {tmuxWindowName}</Text>}
 					</Box>
 				)}
 				{status === "error" && (

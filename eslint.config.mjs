@@ -1,5 +1,7 @@
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
+import prettier from "eslint-plugin-prettier";
+import prettierConfig from "eslint-config-prettier";
 
 export default [
 	{
@@ -13,12 +15,12 @@ export default [
 		},
 		plugins: {
 			"@typescript-eslint": tseslint,
+			prettier,
 		},
 		rules: {
-			"@typescript-eslint/no-unused-vars": [
-				"error",
-				{ argsIgnorePattern: "^_" },
-			],
+			...prettierConfig.rules,
+			"prettier/prettier": "error",
+			"@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
 			"no-unused-vars": "off",
 		},
 	},

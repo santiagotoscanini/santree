@@ -2,13 +2,8 @@ import { useEffect, useState } from "react";
 import { Text, Box, useInput, useApp } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
-import {
-	findMainRepoRoot,
-	listWorktrees,
-	removeWorktree,
-	isWorktreePath,
-} from "../lib/git.js";
-import { getPRInfoAsync } from "../lib/github.js";
+import { findMainRepoRoot, listWorktrees, removeWorktree, isWorktreePath } from "../../lib/git.js";
+import { getPRInfoAsync } from "../../lib/github.js";
 
 export const description = "Remove worktrees with merged/closed PRs";
 
@@ -37,9 +32,7 @@ type Status =
 export default function Clean({}: Props) {
 	const { exit } = useApp();
 	const [status, setStatus] = useState<Status>("checking");
-	const [message, setMessage] = useState(
-		"Checking worktrees for merged/closed PRs...",
-	);
+	const [message, setMessage] = useState("Checking worktrees for merged/closed PRs...");
 	const [staleWorktrees, setStaleWorktrees] = useState<StaleWorktree[]>([]);
 	const [failed, setFailed] = useState(0);
 	const [repoRoot, setRepoRoot] = useState<string | null>(null);
@@ -100,24 +93,17 @@ export default function Clean({}: Props) {
 			const worktrees = listWorktrees();
 
 			// Filter to only worktrees (not main repo) with branches
-			const candidates = worktrees.filter(
-				(wt) => isWorktreePath(wt.path) && wt.branch,
-			);
+			const candidates = worktrees.filter((wt) => isWorktreePath(wt.path) && wt.branch);
 
 			// Fetch PR info for all worktrees in parallel
-			const prInfoResults = await Promise.all(
-				candidates.map((wt) => getPRInfoAsync(wt.branch!)),
-			);
+			const prInfoResults = await Promise.all(candidates.map((wt) => getPRInfoAsync(wt.branch!)));
 
 			// Find worktrees with merged/closed PRs
 			const stale: StaleWorktree[] = [];
 			for (let i = 0; i < candidates.length; i++) {
 				const wt = candidates[i]!;
 				const prInfo = prInfoResults[i];
-				if (
-					prInfo &&
-					(prInfo.state === "MERGED" || prInfo.state === "CLOSED")
-				) {
+				if (prInfo && (prInfo.state === "MERGED" || prInfo.state === "CLOSED")) {
 					stale.push({
 						branch: wt.branch!,
 						path: wt.path,
@@ -131,9 +117,7 @@ export default function Clean({}: Props) {
 
 			if (stale.length === 0) {
 				setStatus("none-found");
-				setMessage(
-					"No stale worktrees found. All worktrees have open PRs or no PRs.",
-				);
+				setMessage("No stale worktrees found. All worktrees have open PRs or no PRs.");
 				setTimeout(() => exit(), 100);
 				return;
 			}
@@ -192,10 +176,7 @@ export default function Clean({}: Props) {
 							<Box gap={1}>
 								<Text dimColor>PR:</Text>
 								<Text>#{wt.prNum}</Text>
-								<Text
-									backgroundColor={wt.prState === "MERGED" ? "magenta" : "red"}
-									color="white"
-								>
+								<Text backgroundColor={wt.prState === "MERGED" ? "magenta" : "red"} color="white">
 									{` ${wt.prState.toLowerCase()} `}
 								</Text>
 							</Box>

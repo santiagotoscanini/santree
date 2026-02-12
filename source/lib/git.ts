@@ -350,6 +350,16 @@ export function setRepoLinearOrg(repoRoot: string, orgSlug: string): void {
 }
 
 /**
+ * Remove the Linear org association from this repo.
+ * Deletes the `_linear` key from .santree/metadata.json.
+ */
+export function removeRepoLinearOrg(repoRoot: string): void {
+	const all = readAllMetadata(repoRoot);
+	delete all._linear;
+	writeAllMetadata(repoRoot, all);
+}
+
+/**
  * Get the base branch for a given branch name.
  * Looks up metadata first, falls back to the default branch.
  */

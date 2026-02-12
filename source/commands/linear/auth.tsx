@@ -2,10 +2,14 @@ import { useEffect, useState } from "react";
 import { Text, Box, useInput } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
-import { findMainRepoRoot, setRepoLinearOrg, getRepoLinearOrg } from "../../lib/git.js";
+import {
+	findMainRepoRoot,
+	setRepoLinearOrg,
+	getRepoLinearOrg,
+	removeRepoLinearOrg,
+} from "../../lib/git.js";
 import {
 	startOAuthFlow,
-	revokeTokens,
 	getAuthStatus,
 	getValidTokens,
 	getTicketContent,
@@ -16,7 +20,7 @@ import { renderTicket } from "../../lib/prompts.js";
 export const description = "Authenticate with Linear";
 
 export const options = z.object({
-	logout: z.boolean().optional().describe("Revoke tokens and log out"),
+	logout: z.boolean().optional().describe("Unlink Linear workspace from this repo"),
 	status: z.boolean().optional().describe("Show current auth status"),
 	test: z
 		.string()
@@ -135,16 +139,21 @@ export default function LinearAuth({ options }: Props) {
 
 			if (options.logout) {
 				const repoRoot = findMainRepoRoot();
-				const authStatus = getAuthStatus(repoRoot);
+				if (!repoRoot) {
+					setError("Not inside a git repository");
+					setStatus("error");
+					return;
+				}
 
-				if (!authStatus.authenticated || !authStatus.orgSlug) {
-					setMessage("Not authenticated with Linear");
+				const orgSlug = getRepoLinearOrg(repoRoot);
+				if (!orgSlug) {
+					setMessage("No Linear workspace linked to this repo");
 					setStatus("done");
 					return;
 				}
 
-				await revokeTokens(authStatus.orgSlug);
-				setMessage(`Logged out from ${authStatus.orgName} (${authStatus.orgSlug})`);
+				removeRepoLinearOrg(repoRoot);
+				setMessage(`Unlinked Linear workspace (${orgSlug}) from this repo`);
 				setStatus("done");
 				return;
 			}
@@ -190,16 +199,7 @@ export default function LinearAuth({ options }: Props) {
 				return;
 			}
 
-			if (orgs.length === 1) {
-				// Only one org, link it directly
-				const org = orgs[0]!;
-				setRepoLinearOrg(repoRoot, org.slug);
-				setMessage(`Linked repo to ${org.name} (${org.slug})`);
-				setStatus("done");
-				return;
-			}
-
-			// Multiple orgs — let user choose
+			// Let user choose from existing orgs or authenticate a new one
 			setChoices(orgs);
 			setStatus("choosing");
 		}

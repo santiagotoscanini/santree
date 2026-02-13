@@ -1,0 +1,18 @@
+## Changes ({{ base_branch }}..HEAD)
+{%- if commit_log %}
+
+### Commits
+{{ commit_log }}
+{%- endif %}
+{%- if diff_stat %}
+
+### Files Changed
+{{ diff_stat }}
+{%- endif %}
+{%- if diff %}
+
+### Diff
+```
+{{ diff }}
+```
+{%- endif %}

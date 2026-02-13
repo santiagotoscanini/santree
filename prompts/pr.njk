@@ -1,0 +1,68 @@
+## Pull Request #{{ pr_number }}
+**Branch:** {{ branch }}
+[View on GitHub]({{ pr_url }})
+
+{%- if checks %}
+
+### CI Checks
+{% for check in checks %}
+- {{ "PASS" if check.bucket == "pass" else ("FAIL" if check.bucket == "fail" else "PENDING") }} — {{ check.name }}{% if check.description %}: {{ check.description }}{% endif %}
+{%- endfor %}
+{%- endif %}
+{%- if failed_checks | length %}
+
+### Failed Checks
+{% for check in failed_checks %}
+**{{ check.name }}**{% if check.workflow %} ({{ check.workflow }}){% endif %}
+{% if check.failed_step %}- Failed step: `{{ check.failed_step }}`{% endif %}
+{% if check.link %}- [View logs]({{ check.link }}){% endif %}
+{% if check.log %}
+```
+{{ check.log }}
+```
+{% endif %}
+{% endfor %}
+{%- endif %}
+{%- if reviews | length %}
+
+### Reviews
+{% for review in reviews %}
+**{{ review.author.login }}** — {{ review.state }}{% if review.submittedAt %} — {{ review.submittedAt | date }}{% endif %}
+{% if review.body %}{{ review.body }}{% endif %}
+{% if not loop.last %}
+---
+{% endif %}
+{%- endfor %}
+{%- endif %}
+{%- if review_comments | length %}
+
+### Inline Review Comments
+{% for comment in review_comments %}
+{% if not comment.in_reply_to_id %}
+**{{ comment.user.login }}** on `{{ comment.path }}{% if comment.line %}:{{ comment.line }}{% endif %}` — {{ comment.created_at | date }}
+```
+{{ comment.diff_hunk }}
+```
+{{ comment.body }}
+{% for reply in review_comments %}
+{% if reply.in_reply_to_id == comment.id %}
+> **{{ reply.user.login }}** — {{ reply.created_at | date }}
+> {{ reply.body | indent(2) }}
+
+{% endif %}
+{%- endfor %}
+---
+{% endif %}
+{%- endfor %}
+{%- endif %}
+{%- if conversation_comments | length %}
+
+### Conversation Comments
+{% for comment in conversation_comments %}
+**{{ comment.author }}** — {{ comment.createdAt | date }}
+{{ comment.body }}
+{% if not loop.last %}
+---
+{% endif %}
+{%- endfor %}
+{%- endif %}

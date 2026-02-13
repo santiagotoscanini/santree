@@ -4,12 +4,18 @@
 Note: Could not fetch Linear ticket {{ ticket_id }}. Proceed based on branch name context.
 {% endif %}
 
-If a PR URL is linked in the ticket, use `gh` CLI to fetch PR details, comments, and review feedback.
-
 Review the codebase to understand the relevant areas and existing patterns.
+{% if mode == "plan" %}
+Create a detailed implementation plan with:
+- Step-by-step approach
+- Files to modify
+- Potential risks or edge cases
 
+Do NOT implement yet - just plan. Wait for approval before making changes.
+{% else %}
 Create an implementation plan, then implement the changes.
 
 After implementation:
 - Run tests if applicable
 - Ensure code follows existing patterns
+{% endif %}

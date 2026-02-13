@@ -3,10 +3,9 @@
 {% else %}
 Note: Could not fetch Linear ticket {{ ticket_id }}. Proceed based on branch name context.
 {% endif %}
-
-If a PR URL is linked in the ticket, use `gh` CLI to fetch PR details and any existing review comments.
-
-Review the current changes by running `git diff` against the base branch.
+{% if diff_content %}
+{{ diff_content }}
+{% endif %}
 
 Analyze:
 - Do the changes fully address the ticket requirements?

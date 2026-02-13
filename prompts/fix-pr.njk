@@ -3,13 +3,13 @@
 {% else %}
 Note: Could not fetch Linear ticket {{ ticket_id }}. Proceed based on branch name context.
 {% endif %}
-
-Use `gh` CLI to fetch the latest PR comments and review feedback for the current branch.
-{% if pr_comments %}
-## PR Comments to Address
-
-{{ pr_comments }}
+{% if pr_feedback %}
+{{ pr_feedback }}
 {% endif %}
+{% if diff_content %}
+{{ diff_content }}
+{% endif %}
+
 ## Task
 
 1. Review each PR comment and understand what changes are requested

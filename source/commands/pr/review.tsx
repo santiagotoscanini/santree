@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
-import { resolveAIContext, renderAIPrompt, launchHappy, cleanupImages } from "../../lib/ai.js";
+import {
+	resolveAIContext,
+	renderAIPrompt,
+	launchHappy,
+	cleanupImages,
+	fetchAndRenderDiff,
+} from "../../lib/ai.js";
 
 export const description = "Review changes against ticket requirements";
 
@@ -30,9 +36,13 @@ export default function Review() {
 			setBranch(ctx.branch);
 			setTicketId(ctx.ticketId);
 
+			const diffContent = fetchAndRenderDiff(ctx.branch);
+
 			setStatus("launching");
 
-			const prompt = renderAIPrompt("review", ctx);
+			const prompt = renderAIPrompt("review", ctx, {
+				diff_content: diffContent,
+			});
 			const child = launchHappy(prompt);
 
 			child.on("error", (err) => {
@@ -96,7 +106,10 @@ export default function Review() {
 						<Text color="cyan">
 							<Spinner type="dots" />
 						</Text>
-						<Text> {status === "loading" ? "Loading..." : "Fetching ticket from Linear..."}</Text>
+						<Text>
+							{" "}
+							{status === "loading" ? "Loading..." : "Fetching ticket, diff, and PR feedback..."}
+						</Text>
 					</Box>
 				)}
 				{status === "launching" && (

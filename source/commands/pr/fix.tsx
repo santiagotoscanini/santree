@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
-import { resolveAIContext, renderAIPrompt, launchHappy, cleanupImages } from "../../lib/ai.js";
-import { getPRInfo, getPRComments } from "../../lib/github.js";
+import {
+	resolveAIContext,
+	renderAIPrompt,
+	launchHappy,
+	cleanupImages,
+	fetchAndRenderPR,
+	fetchAndRenderDiff,
+} from "../../lib/ai.js";
 
 export const description = "Fix PR review comments";
 
@@ -31,16 +37,21 @@ export default function Fix() {
 			setBranch(ctx.branch);
 			setTicketId(ctx.ticketId);
 
-			// Fetch PR comments
-			const prInfo = getPRInfo(ctx.branch);
-			let prComments: string | undefined;
-			if (prInfo) {
-				prComments = getPRComments(prInfo.number) || undefined;
+			const prFeedback = fetchAndRenderPR(ctx.branch);
+			if (!prFeedback) {
+				setStatus("error");
+				setError(`No pull request found for branch '${ctx.branch}'`);
+				return;
 			}
+
+			const diffContent = fetchAndRenderDiff(ctx.branch);
 
 			setStatus("launching");
 
-			const prompt = renderAIPrompt("fix-pr", ctx, { pr_comments: prComments });
+			const prompt = renderAIPrompt("fix-pr", ctx, {
+				pr_feedback: prFeedback,
+				diff_content: diffContent,
+			});
 			const child = launchHappy(prompt);
 
 			child.on("error", (err) => {
@@ -106,7 +117,7 @@ export default function Fix() {
 						</Text>
 						<Text>
 							{" "}
-							{status === "loading" ? "Loading..." : "Fetching ticket and PR comments..."}
+							{status === "loading" ? "Loading..." : "Fetching ticket and PR feedback..."}
 						</Text>
 					</Box>
 				)}

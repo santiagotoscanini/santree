@@ -31,7 +31,7 @@ import {
 	getPRTemplate,
 	type PRInfo,
 } from "../../lib/github.js";
-import { renderPrompt } from "../../lib/prompts.js";
+import { renderPrompt, renderDiff } from "../../lib/prompts.js";
 
 const execAsync = promisify(exec);
 
@@ -102,16 +102,17 @@ export default function PR({ options }: Props) {
 				return;
 			}
 
-			const commitLog = getCommitLog(baseBranch) ?? "";
-			const diffStat = getDiffStat(baseBranch) ?? "";
-			const diff = getDiffContent(baseBranch) ?? "";
 			const ticketId = extractTicketId(branch);
+			const diffContent = renderDiff({
+				base_branch: baseBranch,
+				commit_log: getCommitLog(baseBranch),
+				diff_stat: getDiffStat(baseBranch),
+				diff: getDiffContent(baseBranch),
+			});
 
 			const prompt = renderPrompt("fill-pr", {
 				pr_template: prTemplate,
-				commit_log: commitLog,
-				diff_stat: diffStat,
-				diff,
+				diff_content: diffContent,
 				ticket_id: ticketId ?? "",
 				branch_name: branch,
 			});

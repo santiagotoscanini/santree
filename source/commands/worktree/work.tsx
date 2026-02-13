@@ -69,7 +69,7 @@ export default function Work({ options }: Props) {
 
 		setStatus("launching");
 
-		const prompt = renderAIPrompt(mode, aiContext);
+		const prompt = renderAIPrompt("work", aiContext, { mode });
 
 		const child = launchHappy(prompt, { planMode: mode === "plan" });
 

@@ -5,7 +5,7 @@ import { z } from "zod";
 import {
 	resolveAIContext,
 	renderAIPrompt,
-	launchHappy,
+	launchAgent,
 	cleanupImages,
 	type AIContext,
 } from "../../lib/ai.js";
@@ -71,17 +71,22 @@ export default function Work({ options }: Props) {
 
 		const prompt = renderAIPrompt("work", aiContext, { mode });
 
-		const child = launchHappy(prompt, { planMode: mode === "plan" });
+		try {
+			const child = launchAgent(prompt, { planMode: mode === "plan" });
 
-		child.on("error", (err) => {
+			child.on("error", (err) => {
+				setStatus("error");
+				setError(`Failed to launch agent: ${err.message}`);
+			});
+
+			child.on("close", () => {
+				if (aiContext.ticketId) cleanupImages(aiContext.ticketId);
+				process.exit(0);
+			});
+		} catch (err) {
 			setStatus("error");
-			setError(`Failed to launch happy: ${err.message}`);
-		});
-
-		child.on("close", () => {
-			if (aiContext.ticketId) cleanupImages(aiContext.ticketId);
-			process.exit(0);
-		});
+			setError(err instanceof Error ? err.message : "Failed to launch agent");
+		}
 	}, [status, aiContext, mode]);
 
 	return (

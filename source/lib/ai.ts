@@ -1,24 +1,25 @@
-import { spawn, type ChildProcess } from "child_process";
+import { execSync, spawn, spawnSync, type ChildProcess } from "child_process";
+import { writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import {
 	getCurrentBranch,
 	extractTicketId,
 	findRepoRoot,
 	findMainRepoRoot,
 	getBaseBranch,
-	getCommitLog,
-	getDiffStat,
-	getDiffContent,
 } from "./git.js";
 import { renderPrompt, renderTicket, renderDiff, renderPR } from "./prompts.js";
 import { getTicketContent, cleanupImages, type LinearIssue } from "./linear.js";
 import {
-	getPRInfo,
-	getPRChecks,
-	getPRReviews,
-	getPRReviewComments,
-	getPRConversationComments,
-	getFailedCheckDetails,
+	getPRInfoAsync,
+	getPRChecksAsync,
+	getPRReviewsAsync,
+	getPRReviewCommentsAsync,
+	getPRConversationCommentsAsync,
+	getFailedCheckDetailsAsync,
 } from "./github.js";
+import { runAsync } from "./exec.js";
 
 export interface AIContext {
 	repoRoot: string;
@@ -99,21 +100,24 @@ const BOT_AUTHORS = new Set([
 ]);
 
 /**
- * Fetch and render PR feedback for a branch.
+ * Fetch and render PR feedback for a branch (async, non-blocking).
  * Returns rendered markdown or null if no PR exists.
  */
-export function fetchAndRenderPR(branch: string): string | null {
-	const prInfo = getPRInfo(branch);
+export async function fetchAndRenderPR(branch: string): Promise<string | null> {
+	const prInfo = await getPRInfoAsync(branch);
 	if (!prInfo) return null;
 
-	const checks = getPRChecks(prInfo.number);
-	const failedChecks = (checks ?? [])
-		.filter((c) => c.bucket === "fail")
-		.map((c) => getFailedCheckDetails(c));
-	const reviews = getPRReviews(prInfo.number);
-	const reviewComments = getPRReviewComments(prInfo.number);
+	const [checks, reviews, reviewComments, allComments] = await Promise.all([
+		getPRChecksAsync(prInfo.number),
+		getPRReviewsAsync(prInfo.number),
+		getPRReviewCommentsAsync(prInfo.number),
+		getPRConversationCommentsAsync(prInfo.number),
+	]);
 
-	const allComments = getPRConversationComments(prInfo.number);
+	const failedChecks = await Promise.all(
+		(checks ?? []).filter((c) => c.bucket === "fail").map((c) => getFailedCheckDetailsAsync(c)),
+	);
+
 	const conversationComments = (allComments ?? []).filter(
 		(c) => !BOT_AUTHORS.has(c.author) && !c.author.endsWith("[bot]"),
 	);
@@ -131,33 +135,112 @@ export function fetchAndRenderPR(branch: string): string | null {
 }
 
 /**
- * Fetch and render diff for a branch against its base branch.
+ * Fetch and render diff for a branch against its base branch (async, non-blocking).
  * Returns rendered markdown.
  */
-export function fetchAndRenderDiff(branch: string): string {
+export async function fetchAndRenderDiff(branch: string): Promise<string> {
 	const baseBranch = getBaseBranch(branch);
+	const [commitLog, diffStat, diff] = await Promise.all([
+		runAsync(`git log ${baseBranch}..HEAD --format="- %s"`).then((v) => v || null),
+		runAsync(`git diff ${baseBranch}..HEAD --stat`).then((v) => v || null),
+		runAsync(`git diff ${baseBranch}..HEAD`, { maxBuffer: 10 * 1024 * 1024 }).then(
+			(v) => v || null,
+		),
+	]);
 	return renderDiff({
 		base_branch: baseBranch,
-		commit_log: getCommitLog(baseBranch),
-		diff_stat: getDiffStat(baseBranch),
-		diff: getDiffContent(baseBranch),
+		commit_log: commitLog,
+		diff_stat: diffStat,
+		diff,
 	});
 }
 
 /**
- * Spawns `happy` CLI with a rendered prompt.
- * Returns the child process so callers can listen for close/error.
+ * Resolve which agent binary to use (happy or claude).
+ * Returns the binary name, or null if neither is installed.
  */
-export function launchHappy(prompt: string, opts?: { planMode?: boolean }): ChildProcess {
+function resolveAgentBinary(): string | null {
+	for (const bin of ["happy", "claude"]) {
+		try {
+			execSync(`which ${bin}`, { stdio: "ignore" });
+			return bin;
+		} catch {
+			continue;
+		}
+	}
+	return null;
+}
+
+// Conservative limit: 200KB leaves room for env vars within macOS 256KB ARG_MAX
+const ARG_MAX_SAFE = 200 * 1024;
+
+/**
+ * Build the prompt argument for the agent.
+ * If the prompt fits in ARG_MAX, returns it directly.
+ * Otherwise, writes to a temp file and returns a short instruction to read it.
+ */
+function promptArg(prompt: string): string {
+	if (Buffer.byteLength(prompt) <= ARG_MAX_SAFE) {
+		return prompt;
+	}
+	const filePath = join(tmpdir(), `santree-prompt-${Date.now()}.md`);
+	writeFileSync(filePath, prompt);
+	return `Read ${filePath} and follow the instructions inside.`;
+}
+
+/**
+ * Launch an interactive agent session with a prompt.
+ * Resolves the agent binary (happy > claude), passes prompt directly
+ * or via temp file if too large for OS arg limit.
+ * Throws if no agent binary is found.
+ */
+export function launchAgent(prompt: string, opts?: { planMode?: boolean }): ChildProcess {
+	const bin = resolveAgentBinary();
+	if (!bin) {
+		throw new Error(
+			"No agent found. Install happy (npm i -g happy-coder) or claude (npm i -g @anthropic-ai/claude-code).",
+		);
+	}
+
 	const args: string[] = [];
 
 	if (opts?.planMode) {
 		args.push("--permission-mode", "plan");
 	}
 
-	args.push(prompt);
+	args.push("--", promptArg(prompt));
 
-	return spawn("happy", args, { stdio: "inherit" });
+	return spawn(bin, args, { stdio: "inherit" });
+}
+
+export interface RunAgentResult {
+	success: boolean;
+	output: string;
+}
+
+/**
+ * Run an agent in non-interactive print mode and capture output.
+ * Resolves the agent binary (happy > claude), passes prompt directly
+ * or via temp file if too large for OS arg limit.
+ * Throws if no agent binary is found.
+ */
+export function runAgent(prompt: string): RunAgentResult {
+	const bin = resolveAgentBinary();
+	if (!bin) {
+		throw new Error(
+			"No agent found. Install happy (npm i -g happy-coder) or claude (npm i -g @anthropic-ai/claude-code).",
+		);
+	}
+
+	const result = spawnSync(bin, ["-p", "--output-format", "text", "--", promptArg(prompt)], {
+		encoding: "utf-8",
+		maxBuffer: 10 * 1024 * 1024,
+	});
+
+	return {
+		success: result.status === 0,
+		output: result.stdout?.trim() ?? "",
+	};
 }
 
 /**

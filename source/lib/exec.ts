@@ -1,4 +1,7 @@
-import { execSync, spawn } from "child_process";
+import { execSync, exec, spawn } from "child_process";
+import { promisify } from "util";
+
+const execPromise = promisify(exec);
 
 /**
  * Run a shell command and return trimmed stdout, or null on failure.
@@ -9,6 +12,21 @@ export function run(
 ): string | null {
 	try {
 		return execSync(command, { encoding: "utf-8", ...options }).trim();
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Run a shell command asynchronously and return trimmed stdout, or null on failure.
+ */
+export async function runAsync(
+	command: string,
+	options?: { cwd?: string; maxBuffer?: number },
+): Promise<string | null> {
+	try {
+		const { stdout } = await execPromise(command, { encoding: "utf-8", ...options });
+		return stdout.trim();
 	} catch {
 		return null;
 	}

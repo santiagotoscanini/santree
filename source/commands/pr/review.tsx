@@ -4,7 +4,7 @@ import Spinner from "ink-spinner";
 import {
 	resolveAIContext,
 	renderAIPrompt,
-	launchHappy,
+	launchAgent,
 	cleanupImages,
 	fetchAndRenderDiff,
 } from "../../lib/ai.js";
@@ -36,24 +36,31 @@ export default function Review() {
 			setBranch(ctx.branch);
 			setTicketId(ctx.ticketId);
 
-			const diffContent = fetchAndRenderDiff(ctx.branch);
+			const diffContent = await fetchAndRenderDiff(ctx.branch);
 
 			setStatus("launching");
 
 			const prompt = renderAIPrompt("review", ctx, {
 				diff_content: diffContent,
 			});
-			const child = launchHappy(prompt);
 
-			child.on("error", (err) => {
+			try {
+				const child = launchAgent(prompt);
+
+				child.on("error", (err) => {
+					setStatus("error");
+					setError(`Failed to launch agent: ${err.message}`);
+				});
+
+				child.on("close", () => {
+					if (ctx.ticketId) cleanupImages(ctx.ticketId);
+					process.exit(0);
+				});
+			} catch (err) {
 				setStatus("error");
-				setError(`Failed to launch happy: ${err.message}`);
-			});
-
-			child.on("close", () => {
-				if (ctx.ticketId) cleanupImages(ctx.ticketId);
-				process.exit(0);
-			});
+				setError(err instanceof Error ? err.message : "Failed to launch agent");
+				return;
+			}
 		}
 
 		init();

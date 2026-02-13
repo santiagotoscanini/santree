@@ -4,7 +4,7 @@ import Spinner from "ink-spinner";
 import {
 	resolveAIContext,
 	renderAIPrompt,
-	launchHappy,
+	launchAgent,
 	cleanupImages,
 	fetchAndRenderPR,
 	fetchAndRenderDiff,
@@ -37,14 +37,14 @@ export default function Fix() {
 			setBranch(ctx.branch);
 			setTicketId(ctx.ticketId);
 
-			const prFeedback = fetchAndRenderPR(ctx.branch);
+			const prFeedback = await fetchAndRenderPR(ctx.branch);
 			if (!prFeedback) {
 				setStatus("error");
 				setError(`No pull request found for branch '${ctx.branch}'`);
 				return;
 			}
 
-			const diffContent = fetchAndRenderDiff(ctx.branch);
+			const diffContent = await fetchAndRenderDiff(ctx.branch);
 
 			setStatus("launching");
 
@@ -52,17 +52,24 @@ export default function Fix() {
 				pr_feedback: prFeedback,
 				diff_content: diffContent,
 			});
-			const child = launchHappy(prompt);
 
-			child.on("error", (err) => {
+			try {
+				const child = launchAgent(prompt);
+
+				child.on("error", (err) => {
+					setStatus("error");
+					setError(`Failed to launch agent: ${err.message}`);
+				});
+
+				child.on("close", () => {
+					if (ctx.ticketId) cleanupImages(ctx.ticketId);
+					process.exit(0);
+				});
+			} catch (err) {
 				setStatus("error");
-				setError(`Failed to launch happy: ${err.message}`);
-			});
-
-			child.on("close", () => {
-				if (ctx.ticketId) cleanupImages(ctx.ticketId);
-				process.exit(0);
-			});
+				setError(err instanceof Error ? err.message : "Failed to launch agent");
+				return;
+			}
 		}
 
 		init();

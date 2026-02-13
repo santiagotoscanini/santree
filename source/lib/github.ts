@@ -1,6 +1,6 @@
 import { execSync, exec } from "child_process";
 import { promisify } from "util";
-import { run } from "./exec.js";
+import { run, runAsync } from "./exec.js";
 
 const execAsync = promisify(exec);
 
@@ -129,6 +129,147 @@ export function getPRComments(prNumber: string): string {
 			`gh pr view ${prNumber} --json comments --jq '.comments[] | "- \\(.author.login): \\(.body)"'`,
 		) ?? ""
 	);
+}
+
+/**
+ * Async version of getPRChecks.
+ */
+export async function getPRChecksAsync(prNumber: string): Promise<PRCheck[] | null> {
+	const output = await runAsync(
+		`gh pr checks ${prNumber} --json name,state,bucket,link,description,workflow`,
+	);
+	if (!output) return null;
+	try {
+		return JSON.parse(output);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Async version of getPRReviews.
+ */
+export async function getPRReviewsAsync(prNumber: string): Promise<PRReview[] | null> {
+	const output = await runAsync(`gh pr view ${prNumber} --json reviews`);
+	if (!output) return null;
+	try {
+		const data = JSON.parse(output);
+		return data.reviews ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Async version of getPRReviewComments.
+ */
+export async function getPRReviewCommentsAsync(
+	prNumber: string,
+): Promise<PRReviewComment[] | null> {
+	const output = await runAsync(
+		`gh api repos/{owner}/{repo}/pulls/${prNumber}/comments --paginate`,
+	);
+	if (!output) return null;
+	try {
+		return JSON.parse(output);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Async version of getPRConversationComments.
+ */
+export async function getPRConversationCommentsAsync(
+	prNumber: string,
+): Promise<PRConversationComment[] | null> {
+	const output = await runAsync(`gh pr view ${prNumber} --json comments`);
+	if (!output) return null;
+	try {
+		const data = JSON.parse(output);
+		return (data.comments ?? []).map((c: any) => ({
+			author: c.author?.login ?? "unknown",
+			body: c.body ?? "",
+			createdAt: c.createdAt ?? "",
+		}));
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Async version of getFailedCheckDetails.
+ */
+export async function getFailedCheckDetailsAsync(check: PRCheck): Promise<FailedCheckDetail> {
+	const detail: FailedCheckDetail = {
+		name: check.name,
+		workflow: check.workflow,
+		description: check.description,
+		link: check.link,
+		failed_step: null,
+		log: null,
+	};
+
+	const urlMatch = check.link?.match(/job\/(\d+)/);
+	if (!urlMatch) return detail;
+	const jobId = urlMatch[1];
+
+	let stepStartMs = 0;
+	let stepEndMs = 0;
+
+	const jobOutput = await runAsync(`gh api repos/{owner}/{repo}/actions/jobs/${jobId}`);
+	if (jobOutput) {
+		try {
+			const job = JSON.parse(jobOutput);
+			const failedStep = job.steps?.find((s: any) => s.conclusion === "failure");
+			if (failedStep) {
+				detail.failed_step = failedStep.name;
+				stepStartMs = new Date(failedStep.started_at).getTime();
+				stepEndMs = new Date(failedStep.completed_at).getTime() + 999;
+			}
+		} catch {}
+	}
+
+	if (!stepStartMs) return detail;
+
+	const logOutput = await runAsync(
+		`gh api repos/{owner}/{repo}/actions/jobs/${jobId}/logs 2>/dev/null`,
+	);
+	if (logOutput) {
+		const lines = logOutput.split("\n");
+		const stepLines = lines.filter((line) => {
+			const m = line.match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/);
+			if (!m) return false;
+			const ms = new Date(m[1]!).getTime();
+			return ms >= stepStartMs && ms <= stepEndMs;
+		});
+		const errorIdx = stepLines.findIndex((l) => l.includes("##[error]"));
+		const bounded = errorIdx !== -1 ? stepLines.slice(0, errorIdx) : stepLines;
+		const segments: string[][] = [];
+		let current: string[] = [];
+		let inGroup = false;
+		for (const raw of bounded) {
+			const line = raw.replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*/, "");
+			if (line.startsWith("##[group]")) {
+				if (current.length) {
+					segments.push(current);
+					current = [];
+				}
+				inGroup = true;
+				continue;
+			}
+			if (line.startsWith("##[endgroup]")) {
+				inGroup = false;
+				continue;
+			}
+			if (line.startsWith("##[")) continue;
+			if (!inGroup) current.push(line);
+		}
+		if (current.length) segments.push(current);
+		if (segments.length) detail.log = segments[segments.length - 1]!.join("\n");
+	}
+
+	return detail;
 }
 
 export interface PRConversationComment {

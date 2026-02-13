@@ -11,16 +11,22 @@ import {
 } from "../../lib/git.js";
 import { renderTicket } from "../../lib/prompts.js";
 import { getTicketContent } from "../../lib/linear.js";
-import { fetchAndRenderPR, fetchAndRenderDiff } from "../../lib/ai.js";
+import {
+	resolveAIContext,
+	renderAIPrompt,
+	fetchAndRenderPR,
+	fetchAndRenderDiff,
+} from "../../lib/ai.js";
 
 export const description = "Render a template to stdout";
 
 export const args = z.tuple([
-	z
-		.enum(["linear", "git-changes", "pr"])
-		.describe(
-			argument({ name: "type", description: "Template type (linear, git-changes, or pr)" }),
-		),
+	z.enum(["linear", "git-changes", "pr", "fix-pr", "review"]).describe(
+		argument({
+			name: "type",
+			description: "Template type (linear, git-changes, pr, fix-pr, or review)",
+		}),
+	),
 ]);
 
 type Props = {
@@ -60,13 +66,13 @@ export default function Template({ args }: Props) {
 			}
 
 			if (type === "git-changes") {
-				const output = fetchAndRenderDiff(branch);
+				const output = await fetchAndRenderDiff(branch);
 
 				process.stdout.write(output);
 				setStatus("done");
 				setTimeout(() => exit(), 100);
 			} else if (type === "pr") {
-				const output = fetchAndRenderPR(branch);
+				const output = await fetchAndRenderPR(branch);
 				if (!output) {
 					setStatus("error");
 					setMessage(`No pull request found for branch '${branch}'`);
@@ -75,6 +81,40 @@ export default function Template({ args }: Props) {
 				}
 
 				process.stdout.write(output);
+				setStatus("done");
+				setTimeout(() => exit(), 100);
+			} else if (type === "fix-pr" || type === "review") {
+				const result = await resolveAIContext();
+				if (!result.ok) {
+					setStatus("error");
+					setMessage(result.error);
+					setTimeout(() => exit(), 100);
+					return;
+				}
+
+				const ctx = result.context;
+				const diffContent = await fetchAndRenderDiff(branch);
+
+				if (type === "fix-pr") {
+					const prFeedback = await fetchAndRenderPR(branch);
+					if (!prFeedback) {
+						setStatus("error");
+						setMessage(`No pull request found for branch '${branch}'`);
+						setTimeout(() => exit(), 100);
+						return;
+					}
+					const output = renderAIPrompt("fix-pr", ctx, {
+						pr_feedback: prFeedback,
+						diff_content: diffContent,
+					});
+					process.stdout.write(output);
+				} else {
+					const output = renderAIPrompt("review", ctx, {
+						diff_content: diffContent,
+					});
+					process.stdout.write(output);
+				}
+
 				setStatus("done");
 				setTimeout(() => exit(), 100);
 			} else {
@@ -110,12 +150,14 @@ export default function Template({ args }: Props) {
 
 	if (status === "done") return null;
 
-	const spinnerText =
-		type === "linear"
-			? "Fetching Linear ticket..."
-			: type === "pr"
-				? "Fetching PR feedback..."
-				: "Gathering changes...";
+	const spinnerTexts: Record<string, string> = {
+		linear: "Fetching Linear ticket...",
+		"git-changes": "Gathering changes...",
+		pr: "Fetching PR feedback...",
+		"fix-pr": "Building fix-pr prompt...",
+		review: "Building review prompt...",
+	};
+	const spinnerText = spinnerTexts[type] ?? "Loading...";
 
 	return (
 		<Box>

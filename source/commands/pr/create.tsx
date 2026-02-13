@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Text, Box, useInput, useApp } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
-import { exec, spawnSync } from "child_process";
+import { exec } from "child_process";
 import { promisify } from "util";
 import { join } from "path";
 import { writeFileSync } from "fs";
@@ -32,6 +32,7 @@ import {
 	type PRInfo,
 } from "../../lib/github.js";
 import { renderPrompt, renderDiff } from "../../lib/prompts.js";
+import { runAgent } from "../../lib/ai.js";
 
 const execAsync = promisify(exec);
 
@@ -117,19 +118,16 @@ export default function PR({ options }: Props) {
 				branch_name: branch,
 			});
 
-			const result = spawnSync("happy", ["-p", prompt, "--output-format", "text"], {
-				encoding: "utf-8",
-				maxBuffer: 10 * 1024 * 1024,
-			});
+			const result = runAgent(prompt);
 
-			if (result.status !== 0) {
+			if (!result.success) {
 				setStatus("error");
 				setMessage("Failed to generate PR body with Claude");
 				setTimeout(() => exit(), 100);
 				return;
 			}
 
-			const body = result.stdout.trim();
+			const body = result.output;
 			bodyFile = join(tmpdir(), `santree-pr-${Date.now()}.md`);
 			writeFileSync(bodyFile, body);
 		}

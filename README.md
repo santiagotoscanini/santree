@@ -110,6 +110,7 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 | Command | Description |
 |---------|-------------|
 | `santree linear auth` | Authenticate with Linear (OAuth) |
+| `santree linear switch` | Switch Linear workspace for this repo |
 | `santree linear open` | Open the current Linear ticket in the browser |
 
 ### Helpers (`santree helpers`)

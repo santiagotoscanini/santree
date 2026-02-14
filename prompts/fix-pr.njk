@@ -1,7 +1,9 @@
 {% if ticket_content %}
 {{ ticket_content }}
 {% else %}
-Note: Could not fetch Linear ticket {{ ticket_id }}. Proceed based on branch name context.
+Note: Could not fetch Linear ticket {{ ticket_id }} directly.
+If a Linear MCP server is available, use it to fetch the ticket description, comments, and any relevant details for {{ ticket_id }}.
+Otherwise, proceed based on branch name context.
 {% endif %}
 {% if pr_feedback %}
 {{ pr_feedback }}

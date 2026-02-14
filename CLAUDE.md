@@ -29,7 +29,7 @@ source/
     ├── doctor.tsx        # Top-level: system requirements check
     ├── worktree/         # santree worktree {create,list,switch,remove,clean,sync,work,open,setup,commit}
     ├── pr/               # santree pr {create,open,fix,review}
-    ├── linear/           # santree linear {auth,open}
+    ├── linear/           # santree linear {auth,switch,open}
     └── helpers/          # santree helpers {shell-init,statusline}
 prompts/                 # Nunjucks templates: work, review, fix-pr, fill-pr, diff, pr, ticket
 shell/                   # Shell integration templates: init.zsh.njk, init.bash.njk
@@ -78,7 +78,7 @@ Three AI-powered commands share context resolution and prompt rendering:
 - `pr/fix.tsx` → fix PR review comments
 - `pr/review.tsx` → review changes against ticket
 
-`resolveAIContext()` finds repo, branch, ticket ID, and fetches Linear ticket data. `renderAIPrompt()` renders a named Nunjucks template with context. `launchHappy()` spawns the `happy` CLI. `fetchAndRenderPR(branch)` and `fetchAndRenderDiff(branch)` pre-fetch structured PR feedback and diff data for injection into prompts.
+`resolveAIContext()` finds repo, branch, ticket ID, and fetches Linear ticket data. `renderAIPrompt()` renders a named Nunjucks template with context. `launchAgent()` spawns the agent CLI (happy or claude). `fetchAndRenderPR(branch)` and `fetchAndRenderDiff(branch)` pre-fetch structured PR feedback and diff data for injection into prompts.
 
 ### Metadata storage
 

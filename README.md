@@ -270,6 +270,8 @@ Automatically pushes, detects existing PRs, and uses the first commit message as
 | Node.js >= 20 | Runtime |
 | Git | Worktree operations |
 | GitHub CLI (`gh`) | PR integration |
+| Claude Code (`claude`) | AI agent for `work`, `fix`, `review` |
+| happy (`happy`) | Optional: used over `claude` if installed |
 | tmux | Optional: new window support |
 | VSCode (`code`) or Cursor (`cursor`) | Optional: workspace editor |
 

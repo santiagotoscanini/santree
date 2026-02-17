@@ -108,7 +108,8 @@ Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hoo
 
 ## External Dependencies
 
-Required: Node.js >= 20, Git, GitHub CLI (`gh`), tmux, Claude CLI (`claude`), happy-coder CLI (`happy`)
+Required: Node.js >= 20, Git, GitHub CLI (`gh`), Claude Code CLI (`claude`)
+Optional: happy-coder CLI (`happy`, used over claude if installed), tmux (new window support)
 
 ### Linear Integration
 

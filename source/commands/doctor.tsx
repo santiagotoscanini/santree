@@ -517,7 +517,7 @@ export default function Doctor() {
 					"Install: brew install git",
 				),
 				checkGhAuth(),
-				checkTool("tmux", "Terminal multiplexer", true, "tmux -V", "Install: brew install tmux"),
+				checkTool("tmux", "Terminal multiplexer", false, "tmux -V", "Install: brew install tmux"),
 				checkTool(
 					"claude",
 					"Claude Code CLI",
@@ -527,8 +527,8 @@ export default function Doctor() {
 				),
 				checkTool(
 					"happy",
-					"Claude CLI wrapper",
-					true,
+					"Claude CLI wrapper (used over claude if installed)",
+					false,
 					"happy --version 2>/dev/null || echo 'installed'",
 					"Install: npm install -g happy-coder",
 				),

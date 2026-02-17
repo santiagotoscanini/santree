@@ -156,7 +156,7 @@ export async function fetchAndRenderDiff(branch: string): Promise<string> {
 }
 
 /**
- * Resolve which agent binary to use (happy or claude).
+ * Resolve which agent binary to use (happy if installed, otherwise claude).
  * Returns the binary name, or null if neither is installed.
  */
 function resolveAgentBinary(): string | null {

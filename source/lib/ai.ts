@@ -159,7 +159,7 @@ export async function fetchAndRenderDiff(branch: string): Promise<string> {
  * Resolve which agent binary to use (happy if installed, otherwise claude).
  * Returns the binary name, or null if neither is installed.
  */
-function resolveAgentBinary(): string | null {
+export function resolveAgentBinary(): string | null {
 	for (const bin of ["happy", "claude"]) {
 		try {
 			execSync(`which ${bin}`, { stdio: "ignore" });
@@ -194,7 +194,10 @@ function promptArg(prompt: string): string {
  * or via temp file if too large for OS arg limit.
  * Throws if no agent binary is found.
  */
-export function launchAgent(prompt: string, opts?: { planMode?: boolean }): ChildProcess {
+export function launchAgent(
+	prompt: string,
+	opts?: { planMode?: boolean; sessionId?: string; resume?: boolean },
+): ChildProcess {
 	const bin = resolveAgentBinary();
 	if (!bin) {
 		throw new Error(
@@ -206,6 +209,14 @@ export function launchAgent(prompt: string, opts?: { planMode?: boolean }): Chil
 
 	if (opts?.planMode) {
 		args.push("--permission-mode", "plan");
+	}
+
+	if (opts?.sessionId) {
+		if (opts.resume) {
+			args.push("--resume", opts.sessionId);
+		} else {
+			args.push("--session-id", opts.sessionId);
+		}
 	}
 
 	args.push("--", promptArg(prompt));

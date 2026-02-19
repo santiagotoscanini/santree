@@ -21,12 +21,17 @@ source/
 ├── lib/
 │   ├── ai.ts            # Shared AI logic (context resolution, prompt rendering, happy launch)
 │   ├── git.ts           # Sync/async git helpers (worktrees, branches, metadata)
-│   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push)
+│   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push, checks, reviews)
 │   ├── exec.ts          # run() — execSync wrapper returning string | null
 │   ├── linear.ts        # Linear GraphQL API client (OAuth, tickets, images)
-│   └── prompts.ts       # Nunjucks template renderer for AI prompts
+│   ├── prompts.ts       # Nunjucks template renderer for AI prompts
+│   └── dashboard/       # Dashboard UI components
+│       ├── types.ts     # State types, action types, phase enums
+│       ├── IssueList.tsx # Left pane — issue list with priority, session, PR, CI columns
+│       └── DetailPanel.tsx # Right pane — issue detail, git status, context-aware actions
 └── commands/            # One React component per CLI command
     ├── doctor.tsx        # Top-level: system requirements check
+    ├── dashboard.tsx     # Top-level: interactive dashboard (alt screen, mouse, inline flows)
     ├── worktree/         # santree worktree {create,list,switch,remove,clean,sync,work,open,setup,commit}
     ├── pr/               # santree pr {create,open,fix,review}
     ├── linear/           # santree linear {auth,switch,open}
@@ -98,6 +103,26 @@ Key functions: `findMainRepoRoot()` (resolves through worktrees to main repo), `
 ### Statusline (`commands/helpers/statusline.tsx`)
 
 Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hook), writes ANSI-colored text to stdout, then `process.exit(0)`. Detects santree worktrees via path (`/.santree/worktrees/`).
+
+### Dashboard (`commands/dashboard.tsx`)
+
+Full-screen interactive dashboard showing all Linear issues assigned to the user. Runs in the terminal alternate screen with mouse support (click-to-select, drag-to-resize panes, scroll wheel).
+
+**Layout**: Two-pane split — left pane (`IssueList`) shows issues grouped by project with columns for priority, session, PR, and CI status; right pane (`DetailPanel`) shows issue detail with description, git status, PR info, checks, reviews, and context-aware actions.
+
+**State management**: `useReducer` with `DashboardState`/`DashboardAction` (defined in `lib/dashboard/types.ts`). Overlay states (`mode-select`, `confirm-delete`, `commit`, `pr-create`) replace the right pane with inline flows.
+
+**Inline flows** (never leave the dashboard):
+- **Commit & push** (`C` key): stage confirm → message input via `TextInput` → commit → push. Uses `{ cwd: worktreePath }` for all git operations (not `git -C`).
+- **PR creation** (`c` key): choose fill/web → push → create via `gh pr create`. Fill mode uses `--fill --base --head` flags.
+
+**Tmux-launched flows** (open new tmux windows):
+- **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a tmux window
+- **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in tmux
+
+**Data fetching**: `loadDashboardData()` fetches Linear issues and enriches each with worktree info (git status, commits ahead, session ID), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 30s.
+
+**Alt screen lifecycle**: `ensureAltScreen()` enters alt screen before first render. Cleanup in `useEffect` return exits alt screen — `exit()` triggers unmount which triggers cleanup (do not write escape sequences before `exit()` or Ink's final render leaks to normal buffer).
 
 ## Key Patterns
 

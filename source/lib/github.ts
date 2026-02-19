@@ -7,21 +7,25 @@ const execAsync = promisify(exec);
 export interface PRInfo {
 	number: string;
 	state: "OPEN" | "MERGED" | "CLOSED";
+	isDraft: boolean;
 	url?: string;
 }
 
 /**
  * Get PR info for a branch using the GitHub CLI (async).
- * Runs: `gh pr view "<branchName>" --json number,state,url`
+ * Runs: `gh pr view "<branchName>" --json number,state,url,isDraft`
  * Returns null if no PR exists for the branch or gh CLI fails.
  */
 export async function getPRInfoAsync(branchName: string): Promise<PRInfo | null> {
 	try {
-		const { stdout } = await execAsync(`gh pr view "${branchName}" --json number,state,url`);
+		const { stdout } = await execAsync(
+			`gh pr view "${branchName}" --json number,state,url,isDraft`,
+		);
 		const data = JSON.parse(stdout);
 		return {
 			number: String(data.number ?? ""),
 			state: data.state ?? "OPEN",
+			isDraft: data.isDraft ?? false,
 			url: data.url,
 		};
 	} catch {

@@ -518,6 +518,75 @@ export function getAuthStatus(repoRoot: string | null): AuthStatus {
 	};
 }
 
+// ── Assigned Issues Query ──────────────────────────────────────────────
+
+const ASSIGNED_ISSUES_QUERY = `
+query AssignedIssues {
+  viewer {
+    assignedIssues(
+      filter: { state: { type: { nin: ["completed", "cancelled"] } } }
+      orderBy: updatedAt
+      first: 100
+    ) {
+      nodes {
+        identifier
+        title
+        description
+        url
+        priority
+        state { name type }
+        labels { nodes { name } }
+        project { id name }
+      }
+    }
+  }
+}
+`;
+
+export interface LinearAssignedIssue {
+	identifier: string;
+	title: string;
+	description: string | null;
+	url: string;
+	priority: number;
+	priorityLabel: string;
+	state: { name: string; type: string };
+	labels: string[];
+	projectId: string | null;
+	projectName: string | null;
+}
+
+/**
+ * Fetch all active issues assigned to the current user.
+ * Returns null if not authenticated or fetch fails.
+ */
+export async function fetchAssignedIssues(repoRoot: string): Promise<LinearAssignedIssue[] | null> {
+	const orgSlug = getRepoLinearOrg(repoRoot);
+	if (!orgSlug) return null;
+
+	const tokens = await getValidTokens(orgSlug);
+	if (!tokens) return null;
+
+	const data = await graphqlQuery(ASSIGNED_ISSUES_QUERY, {}, tokens.access_token);
+	if (!data?.viewer?.assignedIssues?.nodes) return null;
+
+	return data.viewer.assignedIssues.nodes.map((issue: any) => ({
+		identifier: issue.identifier,
+		title: issue.title,
+		description: issue.description ?? null,
+		url: issue.url,
+		priority: issue.priority as number,
+		priorityLabel: PRIORITY_MAP[issue.priority as number] ?? "No priority",
+		state: {
+			name: issue.state?.name ?? "Unknown",
+			type: issue.state?.type ?? "unstarted",
+		},
+		labels: (issue.labels?.nodes ?? []).map((l: { name: string }) => l.name),
+		projectId: issue.project?.id ?? null,
+		projectName: issue.project?.name ?? null,
+	}));
+}
+
 // ── High-Level Entry Point ─────────────────────────────────────────────
 
 /**

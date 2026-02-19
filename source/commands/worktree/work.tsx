@@ -9,6 +9,8 @@ import {
 	cleanupImages,
 	type AIContext,
 } from "../../lib/ai.js";
+import { randomUUID } from "crypto";
+import { getSessionId, setSessionId } from "../../lib/git.js";
 
 export const description = "Launch Claude to work on current ticket";
 
@@ -39,7 +41,6 @@ export default function Work({ options }: Props) {
 	const [error, setError] = useState<string | null>(null);
 	const [mode] = useState<Mode>(options.plan ? "plan" : "implement");
 	const [aiContext, setAiContext] = useState<AIContext | null>(null);
-
 	useEffect(() => {
 		async function init() {
 			// Small delay to allow spinner to render
@@ -71,8 +72,22 @@ export default function Work({ options }: Props) {
 
 		const prompt = renderAIPrompt("work", aiContext, { mode });
 
+		// Get or create a session ID for this ticket
+		let sessionId: string | undefined;
+		let isResume = false;
+		if (aiContext.ticketId) {
+			const existing = getSessionId(aiContext.mainRoot, aiContext.ticketId);
+			if (existing) {
+				sessionId = existing;
+				isResume = true;
+			} else {
+				sessionId = randomUUID();
+				setSessionId(aiContext.mainRoot, aiContext.ticketId, sessionId);
+			}
+		}
+
 		try {
-			const child = launchAgent(prompt, { planMode: mode === "plan" });
+			const child = launchAgent(prompt, { planMode: mode === "plan", sessionId, resume: isResume });
 
 			child.on("error", (err) => {
 				setStatus("error");

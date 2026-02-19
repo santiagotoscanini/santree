@@ -56,6 +56,11 @@ This checks that all required tools are installed and configured correctly.
 ## Quick Start
 
 ```bash
+# Open the interactive dashboard — manage everything from one screen
+santree dashboard
+
+# Or use individual commands:
+
 # Create a new worktree and switch to it
 santree worktree create feature/TEAM-123-my-feature
 
@@ -124,11 +129,33 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 
 | Command | Description |
 |---------|-------------|
+| `santree dashboard` | Interactive dashboard of all your Linear issues |
 | `santree doctor` | Check system requirements and integrations |
 
 ---
 
 ## Features
+
+### Interactive Dashboard
+`santree dashboard` opens a full-screen TUI to manage all your work in one place. It shows your Linear issues grouped by project, with live status for worktrees, PRs, CI checks, and reviews.
+
+**Left pane** — issue list with columns for priority, session ID, PR number, and CI status. Click to select, scroll wheel to navigate, drag the divider to resize panes.
+
+**Right pane** — issue detail with description, file-level git status (staged/unstaged/untracked), PR info, checks, reviews, and context-aware keyboard actions.
+
+**Keyboard actions:**
+| Key | Action |
+|-----|--------|
+| `w` | Create worktree & start working (plan or implement) |
+| `↵` | Resume session / switch to worktree |
+| `e` | Open worktree in editor |
+| `C` | Inline commit & push flow |
+| `c` | Create PR (fill from commits or open in browser) |
+| `f` / `r` | Fix PR / Review PR (launches in tmux) |
+| `o` / `p` | Open Linear ticket / PR in browser |
+| `d` | Remove worktree |
+
+Commit and PR creation happen inline without leaving the dashboard. Work, fix, and review open in new tmux windows.
 
 ### Worktree Management
 Create isolated worktrees for each feature branch. No more stashing or committing WIP code just to switch tasks.
@@ -336,12 +363,17 @@ source/
 ├── lib/
 │   ├── ai.ts            # Shared AI logic (context, prompt, launch)
 │   ├── git.ts           # Git helpers (worktrees, branches, metadata)
-│   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push)
+│   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push, checks, reviews)
 │   ├── linear.ts        # Linear GraphQL API client (OAuth, tickets, images)
 │   ├── exec.ts          # Shell command helpers
-│   └── prompts.ts       # Nunjucks template renderer
+│   ├── prompts.ts       # Nunjucks template renderer
+│   └── dashboard/       # Dashboard UI components
+│       ├── types.ts     # State types, action types, phase enums
+│       ├── IssueList.tsx # Left pane — issue list with priority, session, PR, CI columns
+│       └── DetailPanel.tsx # Right pane — issue detail, git status, context-aware actions
 └── commands/            # One React (Ink) component per CLI command
     ├── doctor.tsx        # Top-level: system check
+    ├── dashboard.tsx     # Top-level: interactive dashboard
     ├── worktree/         # Worktree management (create, list, switch, etc.)
     ├── pr/               # PR lifecycle (create, open, fix, review)
     ├── linear/           # Linear integration (auth, open)

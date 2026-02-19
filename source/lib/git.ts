@@ -2,7 +2,7 @@ import { execSync, exec } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
-import { run } from "./exec.js";
+import { run, runAsync } from "./exec.js";
 
 const execAsync = promisify(exec);
 
@@ -360,6 +360,24 @@ export function removeRepoLinearOrg(repoRoot: string): void {
 }
 
 /**
+ * Get the stored session ID for a given ticket from .santree/metadata.json.
+ * Returns null if no session ID is stored.
+ */
+export function getSessionId(repoRoot: string, ticketId: string): string | null {
+	const all = readAllMetadata(repoRoot);
+	return all[ticketId]?.session_id ?? null;
+}
+
+/**
+ * Store a session ID for a given ticket in .santree/metadata.json.
+ */
+export function setSessionId(repoRoot: string, ticketId: string, sessionId: string): void {
+	const all = readAllMetadata(repoRoot);
+	all[ticketId] = { ...all[ticketId], session_id: sessionId };
+	writeAllMetadata(repoRoot, all);
+}
+
+/**
  * Get the base branch for a given branch name.
  * Looks up metadata first, falls back to the default branch.
  */
@@ -438,6 +456,14 @@ export function getGitStatus(): string {
 }
 
 /**
+ * Get a short summary of the working tree status (async, with cwd).
+ * Returns empty string on failure.
+ */
+export async function getGitStatusAsync(cwd: string): Promise<string> {
+	return (await runAsync(`git -C "${cwd}" status --short`)) ?? "";
+}
+
+/**
  * Get a diffstat of staged changes.
  * Runs: `git diff --cached --stat`
  * Returns empty string on failure.
@@ -463,6 +489,15 @@ export function getCommitsBehind(baseBranch: string): number {
  */
 export function getCommitsAhead(baseBranch: string): number {
 	const output = run(`git rev-list --count ${baseBranch}..HEAD`);
+	return output ? parseInt(output, 10) || 0 : 0;
+}
+
+/**
+ * Count how many commits the current branch is ahead of baseBranch (async, with cwd).
+ * Returns 0 on failure.
+ */
+export async function getCommitsAheadAsync(cwd: string, baseBranch: string): Promise<number> {
+	const output = await runAsync(`git -C "${cwd}" rev-list --count ${baseBranch}..HEAD`);
 	return output ? parseInt(output, 10) || 0 : 0;
 }
 

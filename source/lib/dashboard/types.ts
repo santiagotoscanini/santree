@@ -30,13 +30,25 @@ export interface DashboardIssue {
 	reviews: PRReview[] | null;
 }
 
-export interface ProjectGroup {
+export interface StatusGroup {
 	name: string;
-	id: string | null;
+	type: string;
 	issues: DashboardIssue[];
 }
 
-export type ActionOverlay = "mode-select" | "confirm-delete" | "commit" | "pr-create" | null;
+export interface ProjectGroup {
+	name: string;
+	id: string | null;
+	statusGroups: StatusGroup[];
+}
+
+export type ActionOverlay =
+	| "mode-select"
+	| "confirm-delete"
+	| "confirm-setup"
+	| "commit"
+	| "pr-create"
+	| null;
 
 export type CommitPhase =
 	| "idle"
@@ -77,6 +89,7 @@ export interface DashboardState {
 	prCreateBranch: string | null;
 	prCreateError: string | null;
 	prCreateUrl: string | null;
+	setupMode: "plan" | "implement" | null;
 }
 
 export type DashboardAction =
@@ -112,7 +125,9 @@ export type DashboardAction =
 	| { type: "PR_CREATE_PHASE"; phase: PrCreatePhase }
 	| { type: "PR_CREATE_ERROR"; error: string }
 	| { type: "PR_CREATE_DONE"; url: string }
-	| { type: "PR_CREATE_CANCEL" };
+	| { type: "PR_CREATE_CANCEL" }
+	| { type: "SETUP_CONFIRM_SHOW"; mode: "plan" | "implement" }
+	| { type: "SETUP_CONFIRM_DONE" };
 
 // ── State management ──────────────────────────────────────────────────
 
@@ -144,6 +159,7 @@ export const initialState: DashboardState = {
 	prCreateBranch: null,
 	prCreateError: null,
 	prCreateUrl: null,
+	setupMode: null,
 };
 
 export function reducer(state: DashboardState, action: DashboardAction): DashboardState {
@@ -261,6 +277,18 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				prCreateBranch: null,
 				prCreateError: null,
 				prCreateUrl: null,
+			};
+		case "SETUP_CONFIRM_SHOW":
+			return {
+				...state,
+				overlay: "confirm-setup",
+				setupMode: action.mode,
+			};
+		case "SETUP_CONFIRM_DONE":
+			return {
+				...state,
+				overlay: null,
+				setupMode: null,
 			};
 		default:
 			return state;

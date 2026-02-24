@@ -13,7 +13,11 @@ interface Props {
 	deletingForTicket: string | null;
 }
 
-function stateColor(type: string): string {
+function stateColor(type: string, name?: string): string {
+	const n = name?.toLowerCase();
+	if (n === "blocked") return "red";
+	if (n === "in review") return "green";
+	if (n === "in progress") return "yellow";
 	switch (type) {
 		case "started":
 			return "green";
@@ -72,6 +76,7 @@ function sessionIndicator(
 type ListRow =
 	| { kind: "columns" }
 	| { kind: "header"; name: string; count: number }
+	| { kind: "status-header"; name: string; type: string; count: number }
 	| { kind: "issue"; issue: DashboardIssue; flatIndex: number };
 
 function buildRows(groups: ProjectGroup[], flatIssues: DashboardIssue[]): ListRow[] {
@@ -81,9 +86,13 @@ function buildRows(groups: ProjectGroup[], flatIssues: DashboardIssue[]): ListRo
 	flatIssues.forEach((di, i) => indexMap.set(di.issue.identifier, i));
 
 	for (const group of groups) {
-		rows.push({ kind: "header", name: group.name, count: group.issues.length });
-		for (const di of group.issues) {
-			rows.push({ kind: "issue", issue: di, flatIndex: indexMap.get(di.issue.identifier) ?? -1 });
+		const totalIssues = group.statusGroups.reduce((sum, sg) => sum + sg.issues.length, 0);
+		rows.push({ kind: "header", name: group.name, count: totalIssues });
+		for (const sg of group.statusGroups) {
+			rows.push({ kind: "status-header", name: sg.name, type: sg.type, count: sg.issues.length });
+			for (const di of sg.issues) {
+				rows.push({ kind: "issue", issue: di, flatIndex: indexMap.get(di.issue.identifier) ?? -1 });
+			}
 		}
 	}
 	return rows;
@@ -144,10 +153,21 @@ export default function IssueList({
 						);
 					}
 
+					if (row.kind === "status-header") {
+						return (
+							<Box key={`sh-${i}`}>
+								<Text color={stateColor(row.type, row.name)} dimColor>
+									{"   "}
+									{row.name} ({row.count})
+								</Text>
+							</Box>
+						);
+					}
+
 					const { issue, flatIndex } = row;
 					const selected = flatIndex === selectedIndex;
 					const di = issue;
-					const sc = stateColor(di.issue.state.type);
+					const sc = stateColor(di.issue.state.type, di.issue.state.name);
 					const isCreating = di.issue.identifier === creatingForTicket;
 					const isDeleting = di.issue.identifier === deletingForTicket;
 					const sess = sessionIndicator(di.worktree, isCreating, isDeleting);

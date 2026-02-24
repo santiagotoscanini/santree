@@ -3,8 +3,12 @@ import { Text, Box, useInput, useStdout, useApp } from "ink";
 import Spinner from "ink-spinner";
 import { exec, execSync, spawn } from "child_process";
 import { promisify } from "util";
+import { createRequire } from "module";
 import * as fs from "fs";
 import * as path from "path";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json");
 import {
 	findMainRepoRoot,
 	createWorktree,
@@ -47,11 +51,14 @@ function getRowIndexForFlatIndex(groups: ProjectGroup[], flatIndex: number): num
 	let row = 1; // skip column header row
 	let issuesSeen = 0;
 	for (const g of groups) {
-		row++; // group header
-		for (let i = 0; i < g.issues.length; i++) {
-			if (issuesSeen === flatIndex) return row;
-			row++;
-			issuesSeen++;
+		row++; // project header
+		for (const sg of g.statusGroups) {
+			row++; // status header
+			for (let i = 0; i < sg.issues.length; i++) {
+				if (issuesSeen === flatIndex) return row;
+				row++;
+				issuesSeen++;
+			}
 		}
 	}
 	return 0;
@@ -62,12 +69,16 @@ function getFlatIndexForListRow(groups: ProjectGroup[], listRow: number): number
 	let row = 1; // skip column header row
 	let issuesSeen = 0;
 	for (const g of groups) {
-		if (row === listRow) return null; // group header row
+		if (row === listRow) return null; // project header row
 		row++;
-		for (let i = 0; i < g.issues.length; i++) {
-			if (row === listRow) return issuesSeen;
+		for (const sg of g.statusGroups) {
+			if (row === listRow) return null; // status header row
 			row++;
-			issuesSeen++;
+			for (let i = 0; i < sg.issues.length; i++) {
+				if (row === listRow) return issuesSeen;
+				row++;
+				issuesSeen++;
+			}
 		}
 	}
 	return null;
@@ -322,30 +333,29 @@ export default function Dashboard() {
 			try {
 				// Switch to existing window if it exists
 				execSync(`tmux select-window -t "${windowName}"`, { stdio: "ignore" });
-				if (resumeCmd) {
-					execSync(`tmux send-keys -t "${windowName}" "${resumeCmd}" Enter`, { stdio: "ignore" });
-					dispatch({ type: "SET_ACTION_MESSAGE", message: `Resumed session in: ${windowName}` });
-				} else {
-					execSync(`tmux send-keys -t "${windowName}" "${workCmd}" Enter`, { stdio: "ignore" });
-					dispatch({ type: "SET_ACTION_MESSAGE", message: `Launched ${mode} in: ${windowName}` });
-				}
+				const cmd = resumeCmd ?? workCmd;
+				execSync(`tmux send-keys -t "${windowName}" "${cmd}" Enter`, { stdio: "ignore" });
+				dispatch({
+					type: "SET_ACTION_MESSAGE",
+					message: resumeCmd
+						? `Resumed session in: ${windowName}`
+						: `Launched ${mode} in: ${windowName}`,
+				});
 			} catch {
 				// Window doesn't exist — create it
 				try {
 					execSync(`tmux new-window -n "${windowName}" -c "${worktreePath}"`, { stdio: "ignore" });
-					if (resumeCmd) {
-						execSync(`tmux send-keys -t "${windowName}" "${resumeCmd}" Enter`, { stdio: "ignore" });
-						dispatch({
-							type: "SET_ACTION_MESSAGE",
-							message: `Resumed session in new window: ${windowName}`,
-						});
-					} else {
-						execSync(`tmux send-keys -t "${windowName}" "${workCmd}" Enter`, { stdio: "ignore" });
-						dispatch({
-							type: "SET_ACTION_MESSAGE",
-							message: `Launched ${mode} in tmux window: ${windowName}`,
-						});
-					}
+					// Small delay so the new shell can start reading input before we send keys,
+					// otherwise buffered keystrokes from the dashboard pane can leak in.
+					execSync("sleep 0.1", { stdio: "ignore" });
+					const cmd = resumeCmd ?? workCmd;
+					execSync(`tmux send-keys -t "${windowName}" "${cmd}" Enter`, { stdio: "ignore" });
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: resumeCmd
+							? `Resumed session in new window: ${windowName}`
+							: `Launched ${mode} in tmux window: ${windowName}`,
+					});
 				} catch {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "Failed to create tmux window" });
 				}
@@ -356,8 +366,130 @@ export default function Dashboard() {
 		[refresh],
 	);
 
+	const launchAfterCreation = useCallback(
+		(mode: "plan" | "implement", worktreePath: string, ticketId: string) => {
+			if (isInTmux()) {
+				const windowName = ticketId;
+				const workCmd = mode === "plan" ? "st worktree work --plan" : "st worktree work";
+				try {
+					execSync(`tmux new-window -n "${windowName}" -c "${worktreePath}"`, { stdio: "ignore" });
+					execSync("sleep 0.1", { stdio: "ignore" });
+					execSync(`tmux send-keys -t "${windowName}" "${workCmd}" Enter`, { stdio: "ignore" });
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: `Created worktree + launched ${mode} in: ${windowName}`,
+					});
+				} catch {
+					dispatch({ type: "SET_ACTION_MESSAGE", message: "Worktree created, but tmux failed" });
+				}
+				setTimeout(() => refresh(), 3000);
+			} else {
+				leaveAltScreen();
+				console.log(`SANTREE_CD:${worktreePath}`);
+				console.log(`SANTREE_WORK:${mode}`);
+				exit();
+			}
+		},
+		[exit, refresh],
+	);
+
+	const createAndLaunch = useCallback(
+		async (mode: "plan" | "implement", runSetup: boolean) => {
+			const di = stateRef.current.flatIssues[stateRef.current.selectedIndex];
+			if (!di) return;
+			const repoRoot = repoRootRef.current;
+			if (!repoRoot) return;
+
+			// Guard against concurrent creation
+			if (stateRef.current.creatingForTicket) return;
+
+			const ticketId = di.issue.identifier;
+			dispatch({ type: "CREATION_START", ticketId });
+
+			const slug = slugify(di.issue.title);
+			const branchName = `feature/${ticketId}-${slug}`;
+			const base = getDefaultBranch();
+
+			// 1. Pull latest (async to avoid blocking the event loop)
+			dispatch({ type: "CREATION_LOG", logs: `Fetching origin...\n` });
+			try {
+				await execAsync("git fetch origin", { cwd: repoRoot });
+				dispatch({ type: "CREATION_LOG", logs: `Checking out ${base}...\n` });
+				await execAsync(`git checkout ${base}`, { cwd: repoRoot });
+				dispatch({ type: "CREATION_LOG", logs: `Pulling ${base}...\n` });
+				await execAsync(`git pull origin ${base}`, { cwd: repoRoot });
+				dispatch({ type: "CREATION_LOG", logs: `Pulled latest ${base}\n` });
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : "Failed to pull latest";
+				dispatch({ type: "CREATION_LOG", logs: `Warning: ${msg}\n` });
+			}
+
+			// 2. Create worktree
+			dispatch({ type: "CREATION_LOG", logs: `Creating worktree ${branchName}...\n` });
+			const result = await createWorktree(branchName, base, repoRoot);
+
+			if (!result.success || !result.path) {
+				dispatch({ type: "CREATION_ERROR", error: result.error ?? "Unknown error" });
+				dispatch({
+					type: "SET_ACTION_MESSAGE",
+					message: `Failed: ${result.error ?? "Unknown error"}`,
+				});
+				return;
+			}
+
+			dispatch({ type: "CREATION_LOG", logs: `Worktree created at ${result.path}\n` });
+
+			// 3. Run init script if requested
+			if (runSetup) {
+				const initScript = getInitScriptPath(repoRoot);
+				let canExecute = true;
+				try {
+					fs.accessSync(initScript, fs.constants.X_OK);
+				} catch {
+					dispatch({
+						type: "CREATION_LOG",
+						logs: "Warning: init.sh exists but is not executable, skipping\n",
+					});
+					canExecute = false;
+				}
+
+				if (canExecute) {
+					dispatch({ type: "CREATION_LOG", logs: "Running init.sh...\n" });
+					let lastLen = 0;
+					const initResult = await spawnAsync(initScript, [], {
+						cwd: result.path,
+						env: {
+							...process.env,
+							SANTREE_WORKTREE_PATH: result.path,
+							SANTREE_REPO_ROOT: repoRoot,
+						},
+						onOutput: (output) => {
+							const delta = output.slice(lastLen);
+							if (delta) dispatch({ type: "CREATION_LOG", logs: delta });
+							lastLen = output.length;
+						},
+					});
+
+					if (initResult.code !== 0) {
+						dispatch({
+							type: "CREATION_LOG",
+							logs: `\nInit script exited with code ${initResult.code}\n`,
+						});
+					} else {
+						dispatch({ type: "CREATION_LOG", logs: "\nSetup complete!\n" });
+					}
+				}
+			}
+
+			// 4. Done — launch work
+			dispatch({ type: "CREATION_DONE" });
+			launchAfterCreation(mode, result.path, ticketId);
+		},
+		[launchAfterCreation],
+	);
+
 	const doWork = useCallback(
-		async (mode: "plan" | "implement") => {
+		(mode: "plan" | "implement") => {
 			const di = state.flatIssues[state.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
@@ -376,115 +508,16 @@ export default function Dashboard() {
 					exit();
 				}
 			} else {
-				// No worktree — full creation flow (pull + create + init script)
-				// Guard against concurrent creation
-				if (stateRef.current.creatingForTicket) return;
-
-				const ticketId = di.issue.identifier;
-				dispatch({ type: "CREATION_START", ticketId });
-
-				const slug = slugify(di.issue.title);
-				const branchName = `feature/${ticketId}-${slug}`;
-				const base = getDefaultBranch();
-
-				// 1. Pull latest (async to avoid blocking the event loop)
-				dispatch({ type: "CREATION_LOG", logs: `Fetching origin...\n` });
-				try {
-					await execAsync("git fetch origin", { cwd: repoRoot });
-					dispatch({ type: "CREATION_LOG", logs: `Checking out ${base}...\n` });
-					await execAsync(`git checkout ${base}`, { cwd: repoRoot });
-					dispatch({ type: "CREATION_LOG", logs: `Pulling ${base}...\n` });
-					await execAsync(`git pull origin ${base}`, { cwd: repoRoot });
-					dispatch({ type: "CREATION_LOG", logs: `Pulled latest ${base}\n` });
-				} catch (e) {
-					const msg = e instanceof Error ? e.message : "Failed to pull latest";
-					dispatch({ type: "CREATION_LOG", logs: `Warning: ${msg}\n` });
-				}
-
-				// 2. Create worktree
-				dispatch({ type: "CREATION_LOG", logs: `Creating worktree ${branchName}...\n` });
-				const result = await createWorktree(branchName, base, repoRoot);
-
-				if (!result.success || !result.path) {
-					dispatch({ type: "CREATION_ERROR", error: result.error ?? "Unknown error" });
-					dispatch({
-						type: "SET_ACTION_MESSAGE",
-						message: `Failed: ${result.error ?? "Unknown error"}`,
-					});
+				// No worktree — ask about setup if init script exists
+				if (hasInitScript(repoRoot)) {
+					dispatch({ type: "SETUP_CONFIRM_SHOW", mode });
 					return;
 				}
-
-				dispatch({ type: "CREATION_LOG", logs: `Worktree created at ${result.path}\n` });
-
-				// 3. Run init script if it exists
-				if (hasInitScript(repoRoot)) {
-					const initScript = getInitScriptPath(repoRoot);
-					let canExecute = true;
-					try {
-						fs.accessSync(initScript, fs.constants.X_OK);
-					} catch {
-						dispatch({
-							type: "CREATION_LOG",
-							logs: "Warning: init.sh exists but is not executable, skipping\n",
-						});
-						canExecute = false;
-					}
-
-					if (canExecute) {
-						dispatch({ type: "CREATION_LOG", logs: "Running init.sh...\n" });
-						let lastLen = 0;
-						const initResult = await spawnAsync(initScript, [], {
-							cwd: result.path,
-							env: {
-								...process.env,
-								SANTREE_WORKTREE_PATH: result.path,
-								SANTREE_REPO_ROOT: repoRoot,
-							},
-							onOutput: (output) => {
-								const delta = output.slice(lastLen);
-								if (delta) dispatch({ type: "CREATION_LOG", logs: delta });
-								lastLen = output.length;
-							},
-						});
-
-						if (initResult.code !== 0) {
-							dispatch({
-								type: "CREATION_LOG",
-								logs: `\nInit script exited with code ${initResult.code}\n`,
-							});
-						} else {
-							dispatch({ type: "CREATION_LOG", logs: "\nSetup complete!\n" });
-						}
-					}
-				}
-
-				// 4. Done — launch work
-				dispatch({ type: "CREATION_DONE" });
-
-				if (isInTmux()) {
-					const windowName = ticketId;
-					const workCmd = mode === "plan" ? "st worktree work --plan" : "st worktree work";
-					try {
-						execSync(`tmux new-window -n "${windowName}" -c "${result.path}"`, { stdio: "ignore" });
-						execSync(`tmux send-keys -t "${windowName}" "${workCmd}" Enter`, { stdio: "ignore" });
-						dispatch({
-							type: "SET_ACTION_MESSAGE",
-							message: `Created worktree + launched ${mode} in: ${windowName}`,
-						});
-					} catch {
-						dispatch({ type: "SET_ACTION_MESSAGE", message: "Worktree created, but tmux failed" });
-					}
-					// Refresh to pick up new worktree + session
-					setTimeout(() => refresh(), 3000);
-				} else {
-					leaveAltScreen();
-					console.log(`SANTREE_CD:${result.path}`);
-					console.log(`SANTREE_WORK:${mode}`);
-					exit();
-				}
+				// No init script — create directly
+				createAndLaunch(mode, false);
 			}
 		},
-		[state.flatIssues, state.selectedIndex, exit, refresh, launchWorkInTmux],
+		[state.flatIssues, state.selectedIndex, exit, launchWorkInTmux, createAndLaunch],
 	);
 
 	// ── Commit flow ──────────────────────────────────────────────────
@@ -673,6 +706,26 @@ export default function Dashboard() {
 				return;
 			}
 
+			// Confirm setup overlay
+			if (state.overlay === "confirm-setup") {
+				const mode = state.setupMode;
+				if (input === "y" && mode) {
+					dispatch({ type: "SETUP_CONFIRM_DONE" });
+					createAndLaunch(mode, true);
+					return;
+				}
+				if (input === "n" && mode) {
+					dispatch({ type: "SETUP_CONFIRM_DONE" });
+					createAndLaunch(mode, false);
+					return;
+				}
+				if (key.escape) {
+					dispatch({ type: "SETUP_CONFIRM_DONE" });
+					return;
+				}
+				return;
+			}
+
 			// Mode select overlay
 			if (state.overlay === "mode-select") {
 				if (input === "p" || input === "1") {
@@ -795,6 +848,7 @@ export default function Dashboard() {
 							execSync(`tmux new-window -n "${windowName}" -c "${di.worktree.path}"`, {
 								stdio: "ignore",
 							});
+							execSync("sleep 0.1", { stdio: "ignore" });
 							const cmd = resumeCmd ?? "st worktree work";
 							execSync(`tmux send-keys -t "${windowName}" "${cmd}" Enter`, {
 								stdio: "ignore",
@@ -1003,6 +1057,7 @@ export default function Dashboard() {
 				<Text bold color="cyan">
 					Santree Dashboard
 				</Text>
+				<Text dimColor> v{version}</Text>
 				<Text dimColor>
 					{" "}
 					({state.flatIssues.length} issues)
@@ -1073,6 +1128,33 @@ export default function Dashboard() {
 								n
 							</Text>
 							{"  Cancel"}
+						</Text>
+					</Box>
+				</Box>
+			) : state.overlay === "confirm-setup" ? (
+				<Box flexGrow={1} justifyContent="center" alignItems="center">
+					<Box
+						flexDirection="column"
+						borderStyle="round"
+						borderColor="yellow"
+						paddingX={3}
+						paddingY={1}
+					>
+						<Text bold>Run setup script?</Text>
+						<Text> </Text>
+						<Text dimColor>.santree/init.sh</Text>
+						<Text> </Text>
+						<Text>
+							<Text color="green" bold>
+								y
+							</Text>
+							{"  Run setup"}
+						</Text>
+						<Text>
+							<Text color="yellow" bold>
+								n
+							</Text>
+							{"  Skip"}
 						</Text>
 					</Box>
 				</Box>

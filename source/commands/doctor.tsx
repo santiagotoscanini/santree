@@ -3,8 +3,12 @@ import Spinner from "ink-spinner";
 import { useEffect, useState } from "react";
 import { exec, execSync } from "child_process";
 import { promisify } from "util";
+import { createRequire } from "module";
 import * as fs from "fs";
 import * as path from "path";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json");
 import { findMainRepoRoot, getSantreeDir, getInitScriptPath } from "../lib/git.js";
 import { getAuthStatus, getValidTokens } from "../lib/linear.js";
 
@@ -589,6 +593,7 @@ export default function Doctor() {
 				<Text bold color="cyan">
 					Santree Doctor
 				</Text>
+				<Text dimColor> v{version}</Text>
 			</Box>
 
 			<Box marginBottom={1} flexDirection="column">

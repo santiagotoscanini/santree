@@ -14,7 +14,7 @@ import {
 	type PRReview,
 } from "../github.js";
 import { fetchAssignedIssues } from "../linear.js";
-import type { DashboardIssue, ProjectGroup } from "./types.js";
+import type { DashboardIssue, ProjectGroup, StatusGroup } from "./types.js";
 
 export async function loadDashboardData(repoRoot: string): Promise<{
 	groups: ProjectGroup[];
@@ -93,11 +93,43 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		groupMap.set(key, list);
 	}
 
-	const groups: ProjectGroup[] = [...groupMap.entries()].map(([name, issues]) => ({
-		name,
-		id: issues[0]?.issue.projectId ?? null,
-		issues,
-	}));
+	// Status type priority: started > unstarted > backlog > triage
+	const statusTypePriority: Record<string, number> = {
+		started: 0,
+		unstarted: 1,
+		backlog: 2,
+		triage: 3,
+	};
 
-	return { groups, flatIssues: groups.flatMap((g) => g.issues) };
+	const groups: ProjectGroup[] = [...groupMap.entries()].map(([name, issues]) => {
+		// Sub-group by status
+		const statusMap = new Map<string, StatusGroup>();
+		for (const di of issues) {
+			const statusName = di.issue.state.name;
+			const existing = statusMap.get(statusName);
+			if (existing) {
+				existing.issues.push(di);
+			} else {
+				statusMap.set(statusName, {
+					name: statusName,
+					type: di.issue.state.type,
+					issues: [di],
+				});
+			}
+		}
+
+		// Sort status groups by type priority
+		const statusGroups = [...statusMap.values()].sort(
+			(a, b) => (statusTypePriority[a.type] ?? 99) - (statusTypePriority[b.type] ?? 99),
+		);
+
+		return {
+			name,
+			id: issues[0]?.issue.projectId ?? null,
+			statusGroups,
+		};
+	});
+
+	const flatIssues = groups.flatMap((g) => g.statusGroups.flatMap((sg) => sg.issues));
+	return { groups, flatIssues };
 }

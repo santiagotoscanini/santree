@@ -5,6 +5,7 @@ import {
 	resolveAIContext,
 	renderAIPrompt,
 	launchAgent,
+	resolveAgentBinary,
 	cleanupImages,
 	fetchAndRenderPR,
 	fetchAndRenderDiff,
@@ -131,9 +132,13 @@ export default function Fix() {
 				{status === "launching" && (
 					<Box flexDirection="column">
 						<Text color="green" bold>
-							✓ Launching Claude (through Happy)...
+							✓ Launching {resolveAgentBinary() === "happy" ? "Claude (through Happy)" : "Claude"}
+							...
 						</Text>
-						<Text dimColor> happy {`"<fix-pr prompt for ${ticketId}>"`}</Text>
+						<Text dimColor>
+							{" "}
+							{resolveAgentBinary()} {`"<fix-pr prompt for ${ticketId}>"`}
+						</Text>
 					</Box>
 				)}
 				{status === "error" && (

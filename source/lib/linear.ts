@@ -524,7 +524,7 @@ const ASSIGNED_ISSUES_QUERY = `
 query AssignedIssues {
   viewer {
     assignedIssues(
-      filter: { state: { type: { nin: ["completed", "cancelled"] } } }
+      filter: { state: { type: { nin: ["completed", "canceled"] } } }
       orderBy: updatedAt
       first: 100
     ) {

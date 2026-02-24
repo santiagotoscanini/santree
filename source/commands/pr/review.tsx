@@ -5,6 +5,7 @@ import {
 	resolveAIContext,
 	renderAIPrompt,
 	launchAgent,
+	resolveAgentBinary,
 	cleanupImages,
 	fetchAndRenderDiff,
 } from "../../lib/ai.js";
@@ -122,9 +123,13 @@ export default function Review() {
 				{status === "launching" && (
 					<Box flexDirection="column">
 						<Text color="green" bold>
-							✓ Launching Claude (through Happy)...
+							✓ Launching {resolveAgentBinary() === "happy" ? "Claude (through Happy)" : "Claude"}
+							...
 						</Text>
-						<Text dimColor> happy {`"<review prompt for ${ticketId}>"`}</Text>
+						<Text dimColor>
+							{" "}
+							{resolveAgentBinary()} {`"<review prompt for ${ticketId}>"`}
+						</Text>
 					</Box>
 				)}
 				{status === "error" && (

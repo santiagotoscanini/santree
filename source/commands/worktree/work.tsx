@@ -6,7 +6,6 @@ import {
 	resolveAIContext,
 	renderAIPrompt,
 	launchAgent,
-	resolveAgentBinary,
 	cleanupImages,
 	type AIContext,
 } from "../../lib/ai.js";
@@ -166,12 +165,11 @@ export default function Work({ options }: Props) {
 				{status === "launching" && (
 					<Box flexDirection="column">
 						<Text color="green" bold>
-							✓ Launching {resolveAgentBinary() === "happy" ? "Claude (through Happy)" : "Claude"}
-							...
+							✓ Launching Claude...
 						</Text>
 						<Text dimColor>
 							{" "}
-							{resolveAgentBinary()}
+							claude
 							{mode === "plan" ? " --permission-mode plan" : ""}{" "}
 							{`"<${getModeLabel(mode)} prompt for ${ticketId}>"`}
 						</Text>

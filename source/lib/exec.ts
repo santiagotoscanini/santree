@@ -43,14 +43,20 @@ export function spawnAsync(
 		cwd?: string;
 		env?: NodeJS.ProcessEnv;
 		onOutput?: (data: string) => void;
+		stdin?: string;
 	},
 ): Promise<{ code: number; output: string }> {
 	return new Promise((resolve) => {
 		const child = spawn(cmd, args, {
 			cwd: options?.cwd,
 			env: options?.env,
-			stdio: "pipe",
+			stdio: [options?.stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
 		});
+
+		if (options?.stdin !== undefined) {
+			child.stdin!.write(options.stdin);
+			child.stdin!.end();
+		}
 		let output = "";
 
 		child.stdout?.on("data", (data) => {

@@ -59,7 +59,15 @@ export type CommitPhase =
 	| "done"
 	| "error";
 
-export type PrCreatePhase = "idle" | "choose-mode" | "pushing" | "creating" | "done" | "error";
+export type PrCreatePhase =
+	| "idle"
+	| "choose-mode"
+	| "pushing"
+	| "filling"
+	| "review"
+	| "creating"
+	| "done"
+	| "error";
 
 export interface DashboardState {
 	groups: ProjectGroup[];
@@ -89,6 +97,8 @@ export interface DashboardState {
 	prCreateBranch: string | null;
 	prCreateError: string | null;
 	prCreateUrl: string | null;
+	prCreateBody: string | null;
+	prCreateTitle: string | null;
 	setupMode: "plan" | "implement" | null;
 }
 
@@ -124,6 +134,7 @@ export type DashboardAction =
 	| { type: "PR_CREATE_START"; ticketId: string; worktreePath: string; branch: string }
 	| { type: "PR_CREATE_PHASE"; phase: PrCreatePhase }
 	| { type: "PR_CREATE_ERROR"; error: string }
+	| { type: "PR_CREATE_REVIEW"; body: string; title: string }
 	| { type: "PR_CREATE_DONE"; url: string }
 	| { type: "PR_CREATE_CANCEL" }
 	| { type: "SETUP_CONFIRM_SHOW"; mode: "plan" | "implement" }
@@ -159,6 +170,8 @@ export const initialState: DashboardState = {
 	prCreateBranch: null,
 	prCreateError: null,
 	prCreateUrl: null,
+	prCreateBody: null,
+	prCreateTitle: null,
 	setupMode: null,
 };
 
@@ -265,8 +278,22 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 			return { ...state, prCreatePhase: action.phase };
 		case "PR_CREATE_ERROR":
 			return { ...state, prCreatePhase: "error", prCreateError: action.error };
+		case "PR_CREATE_REVIEW":
+			return {
+				...state,
+				prCreatePhase: "review",
+				prCreateBody: action.body,
+				prCreateTitle: action.title,
+				detailScrollOffset: 0,
+			};
 		case "PR_CREATE_DONE":
-			return { ...state, prCreatePhase: "done", prCreateUrl: action.url };
+			return {
+				...state,
+				prCreatePhase: "done",
+				prCreateUrl: action.url,
+				prCreateBody: null,
+				prCreateTitle: null,
+			};
 		case "PR_CREATE_CANCEL":
 			return {
 				...state,
@@ -277,6 +304,8 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				prCreateBranch: null,
 				prCreateError: null,
 				prCreateUrl: null,
+				prCreateBody: null,
+				prCreateTitle: null,
 			};
 		case "SETUP_CONFIRM_SHOW":
 			return {

@@ -19,7 +19,7 @@ npm run lint           # Run ESLint
 source/
 ├── cli.tsx              # Entry point — Pastel app runner
 ├── lib/
-│   ├── ai.ts            # Shared AI logic (context resolution, prompt rendering, happy launch)
+│   ├── ai.ts            # Shared AI logic (context resolution, prompt rendering, claude launch)
 │   ├── git.ts           # Sync/async git helpers (worktrees, branches, metadata)
 │   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push, checks, reviews)
 │   ├── exec.ts          # run() — execSync wrapper returning string | null
@@ -43,6 +43,7 @@ shell/                   # Shell integration templates: init.zsh.njk, init.bash.
 ### Command anatomy
 
 Every file in `commands/` exports:
+
 - `description` — help text string
 - `options` — Zod schema for CLI flags (optional)
 - `args` — Zod schema for positional arguments (optional)
@@ -71,6 +72,7 @@ Ink renders React, so the spinner freezes if the main thread blocks. Commands ha
 ### Shell integration
 
 Commands can't `cd` the parent shell. Instead they write markers to stdout:
+
 - `SANTREE_CD:<path>` — shell wrapper reads this and `cd`s
 - `SANTREE_WORK:<mode>` — shell wrapper launches `st worktree work` after `cd`
 
@@ -79,11 +81,12 @@ The shell wrapper is generated from `shell/init.{zsh,bash}.njk` via `santree hel
 ### AI shared logic (`lib/ai.ts`)
 
 Three AI-powered commands share context resolution and prompt rendering:
+
 - `worktree/work.tsx` → implement/plan mode
 - `pr/fix.tsx` → fix PR review comments
 - `pr/review.tsx` → review changes against ticket
 
-`resolveAIContext()` finds repo, branch, ticket ID, and fetches Linear ticket data. `renderAIPrompt()` renders a named Nunjucks template with context. `launchAgent()` spawns the agent CLI (happy or claude). `fetchAndRenderPR(branch)` and `fetchAndRenderDiff(branch)` pre-fetch structured PR feedback and diff data for injection into prompts.
+`resolveAIContext()` finds repo, branch, ticket ID, and fetches Linear ticket data. `renderAIPrompt()` renders a named Nunjucks template with context. `launchAgent()` spawns the Claude CLI. `fetchAndRenderPR(branch)` and `fetchAndRenderDiff(branch)` pre-fetch structured PR feedback and diff data for injection into prompts.
 
 ### Metadata storage
 
@@ -95,6 +98,7 @@ Three AI-powered commands share context resolution and prompt rendering:
 ### Git helpers (`lib/git.ts`)
 
 Two layers:
+
 - **`run(cmd)`** (`lib/exec.ts`) — `execSync` wrapper, returns trimmed stdout or `null` on failure. Used for quick git queries.
 - **`execAsync(cmd)`** — `promisify(exec)`, used for operations that may take time (worktree add/remove, push, branch delete).
 
@@ -113,10 +117,12 @@ Full-screen interactive dashboard showing all Linear issues assigned to the user
 **State management**: `useReducer` with `DashboardState`/`DashboardAction` (defined in `lib/dashboard/types.ts`). Overlay states (`mode-select`, `confirm-delete`, `commit`, `pr-create`) replace the right pane with inline flows.
 
 **Inline flows** (never leave the dashboard):
+
 - **Commit & push** (`C` key): stage confirm → message input via `TextInput` → commit → push. Uses `{ cwd: worktreePath }` for all git operations (not `git -C`).
 - **PR creation** (`c` key): choose fill/web → push → create via `gh pr create`. Fill mode uses `--fill --base --head` flags.
 
 **Tmux-launched flows** (open new tmux windows):
+
 - **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a tmux window
 - **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in tmux
 
@@ -129,12 +135,12 @@ Full-screen interactive dashboard showing all Linear issues assigned to the user
 - **Branch naming**: `{prefix}/{TICKET-ID}-description` (e.g., `feature/TEAM-123-auth`)
 - **Ticket ID extraction**: first `[A-Z]+-\d+` match in branch name, uppercased
 - **Error resilience**: commands degrade gracefully when integrations (gh, Linear API) are unavailable
-- **Prompt-driven AI**: Nunjucks templates in `prompts/` generate context-rich prompts passed to `happy` CLI
+- **Prompt-driven AI**: Nunjucks templates in `prompts/` generate context-rich prompts passed to Claude CLI
 
 ## External Dependencies
 
 Required: Node.js >= 20, Git, GitHub CLI (`gh`), Claude Code CLI (`claude`)
-Optional: happy-coder CLI (`happy`, used over claude if installed), tmux (new window support)
+Optional: tmux (new window support)
 
 ### Linear Integration
 

@@ -39,6 +39,7 @@ eval "$(santree helpers shell-init bash)"  # for bash
 This enables automatic directory switching after `worktree create` and `worktree switch` commands.
 
 The shell integration also provides:
+
 - `st` - Alias for `santree`
 - `stw` - Alias for `santree worktree` (e.g., `stw list`, `stw create`)
 - `stn` - Quick create worktree with `--work --plan --tmux` (prompts for branch name)
@@ -88,55 +89,56 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 
 ### Worktree (`santree worktree`)
 
-| Command | Description |
-|---------|-------------|
-| `santree worktree create <branch>` | Create a new worktree from base branch |
-| `santree worktree list` | List all worktrees with PR status and commits ahead |
-| `santree worktree switch <branch>` | Switch to another worktree |
-| `santree worktree remove <branch>` | Remove a worktree and its branch |
-| `santree worktree clean` | Remove worktrees with merged/closed PRs |
-| `santree worktree sync` | Sync current worktree with base branch |
-| `santree worktree work` | Launch Claude AI to work on the current ticket |
-| `santree worktree open` | Open workspace in VSCode or Cursor |
-| `santree worktree setup` | Run the init script (`.santree/init.sh`) |
-| `santree worktree commit` | Stage and commit changes |
+| Command                            | Description                                         |
+| ---------------------------------- | --------------------------------------------------- |
+| `santree worktree create <branch>` | Create a new worktree from base branch              |
+| `santree worktree list`            | List all worktrees with PR status and commits ahead |
+| `santree worktree switch <branch>` | Switch to another worktree                          |
+| `santree worktree remove <branch>` | Remove a worktree and its branch                    |
+| `santree worktree clean`           | Remove worktrees with merged/closed PRs             |
+| `santree worktree sync`            | Sync current worktree with base branch              |
+| `santree worktree work`            | Launch Claude AI to work on the current ticket      |
+| `santree worktree open`            | Open workspace in VSCode or Cursor                  |
+| `santree worktree setup`           | Run the init script (`.santree/init.sh`)            |
+| `santree worktree commit`          | Stage and commit changes                            |
 
 ### Pull Requests (`santree pr`)
 
-| Command | Description |
-|---------|-------------|
-| `santree pr create` | Create a GitHub pull request |
-| `santree pr open` | Open the current PR in the browser |
-| `santree pr fix` | Fix PR review comments with AI |
+| Command             | Description                           |
+| ------------------- | ------------------------------------- |
+| `santree pr create` | Create a GitHub pull request          |
+| `santree pr open`   | Open the current PR in the browser    |
+| `santree pr fix`    | Fix PR review comments with AI        |
 | `santree pr review` | Review changes against ticket with AI |
 
 ### Linear (`santree linear`)
 
-| Command | Description |
-|---------|-------------|
-| `santree linear auth` | Authenticate with Linear (OAuth) |
-| `santree linear switch` | Switch Linear workspace for this repo |
-| `santree linear open` | Open the current Linear ticket in the browser |
+| Command                 | Description                                   |
+| ----------------------- | --------------------------------------------- |
+| `santree linear auth`   | Authenticate with Linear (OAuth)              |
+| `santree linear switch` | Switch Linear workspace for this repo         |
+| `santree linear open`   | Open the current Linear ticket in the browser |
 
 ### Helpers (`santree helpers`)
 
-| Command | Description |
-|---------|-------------|
-| `santree helpers shell-init` | Output shell integration script |
+| Command                      | Description                       |
+| ---------------------------- | --------------------------------- |
+| `santree helpers shell-init` | Output shell integration script   |
 | `santree helpers statusline` | Custom statusline for Claude Code |
 
 ### Top-level
 
-| Command | Description |
-|---------|-------------|
+| Command             | Description                                     |
+| ------------------- | ----------------------------------------------- |
 | `santree dashboard` | Interactive dashboard of all your Linear issues |
-| `santree doctor` | Check system requirements and integrations |
+| `santree doctor`    | Check system requirements and integrations      |
 
 ---
 
 ## Features
 
 ### Interactive Dashboard
+
 `santree dashboard` opens a full-screen TUI to manage all your work in one place. It shows your Linear issues grouped by project, with live status for worktrees, PRs, CI checks, and reviews.
 
 **Left pane** — issue list with columns for priority, session ID, PR number, and CI status. Click to select, scroll wheel to navigate, drag the divider to resize panes.
@@ -158,22 +160,28 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 Commit and PR creation happen inline without leaving the dashboard. Work, fix, and review open in new tmux windows.
 
 ### Worktree Management
+
 Create isolated worktrees for each feature branch. No more stashing or committing WIP code just to switch tasks.
 
 ### GitHub Integration
+
 See PR status directly in your worktree list. Clean up worktrees automatically when PRs are merged or closed.
 
 ### Linear Integration
+
 Santree fetches Linear ticket data (title, description, comments, images) and injects it into prompts when running `santree worktree work`. See [Linear Integration](#linear-integration-1) for setup.
 
 ### Claude AI Integration
+
 Launch Claude with full context about your current ticket. Supports different modes:
+
 - `santree worktree work` - Implement the ticket
 - `santree worktree work --plan` - Create an implementation plan only
 - `santree pr review` - Review changes against ticket requirements
 - `santree pr fix` - Address PR review comments
 
 ### Init Scripts
+
 Run custom setup scripts when creating worktrees. Perfect for copying `.env` files, installing dependencies, or any project-specific setup.
 
 ---
@@ -226,81 +234,95 @@ If you have multiple workspaces authenticated, running `santree linear auth` in 
 Santree provides a custom statusline for Claude Code showing git info, model, context usage, and cost.
 
 Add to `~/.claude/settings.json`:
+
 ```json
 {
-  "statusLine": {
-    "type": "command",
-    "command": "santree helpers statusline"
-  }
+	"statusLine": {
+		"type": "command",
+		"command": "santree helpers statusline"
+	}
 }
 ```
 
 The statusline displays: `repo | branch | S: staged | U: unstaged | A: untracked | Model | Context% | $Cost`
+
+### Claude Code Remote Control (Optional)
+
+Enable [Remote Control](https://code.claude.com/docs/en/remote-control) to continue local Claude Code sessions from your phone, tablet, or any browser. This lets you kick off work with `santree worktree work` and monitor or steer the session remotely.
+
+Enable it for all sessions by running `/config` inside Claude Code and setting **Enable Remote Control for all sessions** to `true`. This writes `remoteControlAtStartup: true` to `~/.claude.json`. Run `santree doctor` to verify.
 
 ---
 
 ## Command Options
 
 ### worktree create
-| Option | Description |
-|--------|-------------|
+
+| Option            | Description                                       |
+| ----------------- | ------------------------------------------------- |
 | `--base <branch>` | Base branch to create from (default: main/master) |
-| `--work` | Launch Claude after creating |
-| `--plan` | With --work, only create implementation plan |
-| `--no-pull` | Skip pulling latest changes |
-| `--tmux` | Open worktree in new tmux window |
-| `--name <name>` | Custom tmux window name |
+| `--work`          | Launch Claude after creating                      |
+| `--plan`          | With --work, only create implementation plan      |
+| `--no-pull`       | Skip pulling latest changes                       |
+| `--tmux`          | Open worktree in new tmux window                  |
+| `--name <name>`   | Custom tmux window name                           |
 
 ### worktree sync
-| Option | Description |
-|--------|-------------|
+
+| Option     | Description                 |
+| ---------- | --------------------------- |
 | `--rebase` | Use rebase instead of merge |
 
 ### worktree remove
+
 Removes the worktree and deletes the branch. Uses force mode by default (removes even with uncommitted changes).
 
 ### worktree clean
+
 Shows worktrees with merged/closed PRs and prompts for confirmation before removing.
 
 ### worktree open
-| Option | Description |
-|--------|-------------|
+
+| Option           | Description                                                                             |
+| ---------------- | --------------------------------------------------------------------------------------- |
 | `--editor <cmd>` | Editor command to use (default: `code`). Also configurable via `SANTREE_EDITOR` env var |
 
 ### worktree work
-| Option | Description |
-|--------|-------------|
+
+| Option   | Description                     |
+| -------- | ------------------------------- |
 | `--plan` | Only create implementation plan |
 
 Automatically fetches Linear ticket data if authenticated. Degrades gracefully if not.
 
 ### pr create
-| Option | Description |
-|--------|-------------|
+
+| Option   | Description                                   |
+| -------- | --------------------------------------------- |
 | `--fill` | Use AI to fill the PR template before opening |
 
 Automatically pushes, detects existing PRs, and uses the first commit message as the title. If a closed PR exists for the branch, prompts before creating a new one.
 
 ### linear auth
-| Option | Description |
-|--------|-------------|
-| `--status` | Show current auth status (org, token expiry) |
+
+| Option        | Description                                      |
+| ------------- | ------------------------------------------------ |
+| `--status`    | Show current auth status (org, token expiry)     |
 | `--test <id>` | Fetch a ticket by ID to verify integration works |
-| `--logout` | Revoke tokens and log out |
+| `--logout`    | Revoke tokens and log out                        |
 
 ---
 
 ## Requirements
 
-| Tool | Purpose |
-|------|---------|
-| Node.js >= 20 | Runtime |
-| Git | Worktree operations |
-| GitHub CLI (`gh`) | PR integration |
-| Claude Code (`claude`) | AI agent for `work`, `fix`, `review` |
-| happy (`happy`) | Optional: used over `claude` if installed |
-| tmux | Optional: new window support |
-| VSCode (`code`) or Cursor (`cursor`) | Optional: workspace editor |
+| Tool                                 | Purpose                              |
+| ------------------------------------ | ------------------------------------ |
+| Node.js >= 20                        | Runtime                              |
+| Git                                  | Worktree operations                  |
+| GitHub CLI (`gh`)                    | PR integration                       |
+| Claude Code (`claude`)               | AI agent for `work`, `fix`, `review` |
+| tmux                                 | Optional: new window support         |
+| VSCode (`code`) or Cursor (`cursor`) | Optional: workspace editor           |
 
 ---
 

@@ -133,6 +133,9 @@ interface PrCreateOverlayProps {
 	phase: PrCreatePhase;
 	error: string | null;
 	url: string | null;
+	body: string | null;
+	title: string | null;
+	scrollOffset: number;
 }
 
 export function PrCreateOverlay({
@@ -143,6 +146,9 @@ export function PrCreateOverlay({
 	phase,
 	error,
 	url,
+	body,
+	title,
+	scrollOffset,
 }: PrCreateOverlayProps) {
 	return (
 		<Box flexDirection="column" width={width} height={height}>
@@ -168,7 +174,7 @@ export function PrCreateOverlay({
 						<Text color="cyan" bold>
 							f
 						</Text>{" "}
-						Fill — auto-fill title & body from commits
+						Fill — use AI to fill the PR template
 					</Text>
 					<Text>
 						{" "}
@@ -187,6 +193,44 @@ export function PrCreateOverlay({
 					Pushing branch...
 				</Text>
 			)}
+			{phase === "filling" && (
+				<Text>
+					<Text color="cyan">
+						<Spinner type="dots" />
+					</Text>{" "}
+					Filling PR template with AI...
+				</Text>
+			)}
+			{phase === "review" && (
+				<>
+					<Text bold>Review PR</Text>
+					<Text> </Text>
+					<Text>
+						<Text dimColor>title: </Text>
+						<Text>{title}</Text>
+					</Text>
+					<Text> </Text>
+					{body
+						?.split("\n")
+						.slice(scrollOffset, scrollOffset + height - 11)
+						.map((line, i) => (
+							<Text key={i} wrap="truncate">
+								{line}
+							</Text>
+						))}
+					<Text> </Text>
+					<Text dimColor>
+						<Text color="cyan" bold>
+							y
+						</Text>
+						/Enter create{" "}
+						<Text color="cyan" bold>
+							w
+						</Text>{" "}
+						open in browser ESC cancel Shift+arrows scroll
+					</Text>
+				</>
+			)}
 			{phase === "creating" && (
 				<Text>
 					<Text color="cyan">
@@ -203,9 +247,24 @@ export function PrCreateOverlay({
 					{url ? <Text dimColor>{url}</Text> : null}
 				</>
 			)}
-			{phase === "error" && <Text color="red">{error}</Text>}
-			<Text> </Text>
-			<Text dimColor>ESC to cancel</Text>
+			{phase === "error" && (
+				<>
+					<Text color="red">{error}</Text>
+					<Text> </Text>
+					<Text dimColor>
+						<Text color="cyan" bold>
+							w
+						</Text>{" "}
+						open in browser ESC cancel
+					</Text>
+				</>
+			)}
+			{phase !== "review" && phase !== "error" && (
+				<>
+					<Text> </Text>
+					<Text dimColor>ESC to cancel</Text>
+				</>
+			)}
 		</Box>
 	);
 }

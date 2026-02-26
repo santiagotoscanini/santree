@@ -18,8 +18,12 @@ import {
 	getInitScriptPath,
 	removeWorktree,
 } from "../lib/git.js";
-import { spawnAsync } from "../lib/exec.js";
+import { run, spawnAsync } from "../lib/exec.js";
 import { resolveAgentBinary } from "../lib/ai.js";
+import { extractTicketId } from "../lib/git.js";
+import { getPRTemplate } from "../lib/github.js";
+import { renderPrompt, renderDiff } from "../lib/prompts.js";
+import * as os from "os";
 import type { DashboardIssue, ProjectGroup } from "../lib/dashboard/types.js";
 import { initialState, reducer } from "../lib/dashboard/types.js";
 import { loadDashboardData } from "../lib/dashboard/data.js";
@@ -618,36 +622,100 @@ export default function Dashboard() {
 			if (!s.prCreateWorktreePath || !s.prCreateBranch) return;
 
 			const base = getBaseBranch(s.prCreateBranch);
+			const cwd = s.prCreateWorktreePath;
 
 			// Push first
 			dispatch({ type: "PR_CREATE_PHASE", phase: "pushing" });
 			try {
-				await execAsync(`git -C "${s.prCreateWorktreePath}" push -u origin "${s.prCreateBranch}"`);
+				await execAsync(`git -C "${cwd}" push -u origin "${s.prCreateBranch}"`);
 			} catch (e: any) {
 				const msg = e?.stderr?.trim() || e?.message || "Push failed";
 				dispatch({ type: "PR_CREATE_ERROR", error: msg });
 				return;
 			}
 
-			dispatch({ type: "PR_CREATE_PHASE", phase: "creating" });
-			try {
-				if (fill) {
-					const { stdout } = await execAsync(
-						`gh pr create --fill --base "${base}" --head "${s.prCreateBranch}"`,
-						{ cwd: s.prCreateWorktreePath },
-					);
-					const url = stdout.trim();
-					dispatch({ type: "PR_CREATE_DONE", url });
-				} else {
+			if (!fill) {
+				// Web mode — open in browser directly
+				try {
+					dispatch({ type: "PR_CREATE_PHASE", phase: "creating" });
 					await execAsync(`gh pr create --web --base "${base}" --head "${s.prCreateBranch}"`, {
-						cwd: s.prCreateWorktreePath,
+						cwd,
 					});
 					dispatch({ type: "PR_CREATE_DONE", url: "" });
+					setTimeout(() => {
+						dispatch({ type: "PR_CREATE_CANCEL" });
+						refresh();
+					}, 2500);
+				} catch (e: any) {
+					const msg = e?.stderr?.trim() || e?.message || "PR creation failed";
+					dispatch({ type: "PR_CREATE_ERROR", error: msg });
 				}
-				setTimeout(() => {
-					dispatch({ type: "PR_CREATE_CANCEL" });
-					refresh();
-				}, 2500);
+				return;
+			}
+
+			// Fill mode — use AI to generate body, then review
+			try {
+				const prTemplate = getPRTemplate();
+				if (!prTemplate) {
+					dispatch({
+						type: "PR_CREATE_ERROR",
+						error: "No PR template found at .github/pull_request_template.md",
+					});
+					return;
+				}
+
+				const bin = resolveAgentBinary();
+				if (!bin) {
+					dispatch({
+						type: "PR_CREATE_ERROR",
+						error: "Claude CLI not found (npm i -g @anthropic-ai/claude-code)",
+					});
+					return;
+				}
+
+				dispatch({ type: "PR_CREATE_PHASE", phase: "filling" });
+
+				const ticketId = extractTicketId(s.prCreateBranch) ?? "";
+				const commitLog = run(`git log ${base}..HEAD --format="- %s"`, { cwd }) || null;
+				const diffStat = run(`git diff ${base}..HEAD --stat`, { cwd }) || null;
+				const diff = run(`git diff ${base}..HEAD`, { cwd, maxBuffer: 10 * 1024 * 1024 }) || null;
+
+				const diffContent = renderDiff({
+					base_branch: base,
+					commit_log: commitLog,
+					diff_stat: diffStat,
+					diff: diff,
+				});
+
+				const prompt = renderPrompt("fill-pr", {
+					pr_template: prTemplate,
+					diff_content: diffContent,
+					ticket_id: ticketId,
+					branch_name: s.prCreateBranch,
+				});
+
+				// Pass prompt via stdin instead of temp file
+				const agentResult = await spawnAsync(bin, ["-p", "--output-format", "text"], {
+					stdin: prompt,
+				});
+
+				const body = agentResult.output.trim();
+
+				if (agentResult.code !== 0 || !body || body.toLowerCase().startsWith("error")) {
+					dispatch({
+						type: "PR_CREATE_ERROR",
+						error: body || "Failed to generate PR body with AI",
+					});
+					return;
+				}
+
+				// Get title from first commit
+				const title =
+					run(`git log ${base}..HEAD --reverse --format=%s`, { cwd })?.split("\n")[0] ??
+					s.prCreateBranch;
+
+				// Show review instead of creating immediately
+				dispatch({ type: "PR_CREATE_REVIEW", body, title });
 			} catch (e: any) {
 				const msg = e?.stderr?.trim() || e?.message || "PR creation failed";
 				dispatch({ type: "PR_CREATE_ERROR", error: msg });
@@ -655,6 +723,58 @@ export default function Dashboard() {
 		},
 		[refresh],
 	);
+
+	const confirmPrCreate = useCallback(async () => {
+		const s = stateRef.current;
+		if (!s.prCreateWorktreePath || !s.prCreateBranch || !s.prCreateBody || !s.prCreateTitle) return;
+
+		const base = getBaseBranch(s.prCreateBranch);
+		const cwd = s.prCreateWorktreePath;
+
+		dispatch({ type: "PR_CREATE_PHASE", phase: "creating" });
+		try {
+			const bodyFile = path.join(os.tmpdir(), `santree-pr-${Date.now()}.md`);
+			fs.writeFileSync(bodyFile, s.prCreateBody);
+
+			const { stdout } = await execAsync(
+				`gh pr create --title "${s.prCreateTitle.replace(/"/g, '\\"')}" --base "${base}" --head "${s.prCreateBranch}" --body-file "${bodyFile}"`,
+				{ cwd },
+			);
+
+			try {
+				fs.unlinkSync(bodyFile);
+			} catch {}
+
+			dispatch({ type: "PR_CREATE_DONE", url: stdout.trim() });
+			setTimeout(() => {
+				dispatch({ type: "PR_CREATE_CANCEL" });
+				refresh();
+			}, 2500);
+		} catch (e: any) {
+			const msg = e?.stderr?.trim() || e?.message || "PR creation failed";
+			dispatch({ type: "PR_CREATE_ERROR", error: msg });
+		}
+	}, [refresh]);
+
+	const openPrInWeb = useCallback(async () => {
+		const s = stateRef.current;
+		if (!s.prCreateWorktreePath || !s.prCreateBranch) return;
+
+		const base = getBaseBranch(s.prCreateBranch);
+		const cwd = s.prCreateWorktreePath;
+
+		try {
+			await execAsync(`gh pr create --web --base "${base}" --head "${s.prCreateBranch}"`, { cwd });
+			dispatch({ type: "PR_CREATE_DONE", url: "" });
+			setTimeout(() => {
+				dispatch({ type: "PR_CREATE_CANCEL" });
+				refresh();
+			}, 2500);
+		} catch (e: any) {
+			const msg = e?.stderr?.trim() || e?.message || "Failed to open in browser";
+			dispatch({ type: "PR_CREATE_ERROR", error: msg });
+		}
+	}, [refresh]);
 
 	// ── Keyboard ──────────────────────────────────────────────────────
 
@@ -700,6 +820,30 @@ export default function Dashboard() {
 					}
 					if (input === "w") {
 						doPrCreate(false);
+						return;
+					}
+				}
+				if (state.prCreatePhase === "review") {
+					if (input === "y" || key.return) {
+						confirmPrCreate();
+						return;
+					}
+					if (input === "w") {
+						openPrInWeb();
+						return;
+					}
+					if (key.shift && key.downArrow) {
+						dispatch({ type: "SCROLL_DETAIL", offset: state.detailScrollOffset + 3 });
+						return;
+					}
+					if (key.shift && key.upArrow) {
+						dispatch({ type: "SCROLL_DETAIL", offset: Math.max(0, state.detailScrollOffset - 3) });
+						return;
+					}
+				}
+				if (state.prCreatePhase === "error") {
+					if (input === "w") {
+						openPrInWeb();
 						return;
 					}
 				}
@@ -1207,6 +1351,9 @@ export default function Dashboard() {
 								phase={state.prCreatePhase}
 								error={state.prCreateError}
 								url={state.prCreateUrl}
+								body={state.prCreateBody}
+								title={state.prCreateTitle}
+								scrollOffset={state.detailScrollOffset}
 							/>
 						) : (
 							<DetailPanel

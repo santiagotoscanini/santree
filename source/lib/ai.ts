@@ -156,19 +156,16 @@ export async function fetchAndRenderDiff(branch: string): Promise<string> {
 }
 
 /**
- * Resolve which agent binary to use (happy if installed, otherwise claude).
- * Returns the binary name, or null if neither is installed.
+ * Check if claude CLI is available on PATH.
+ * Returns "claude" or null if not installed.
  */
 export function resolveAgentBinary(): string | null {
-	for (const bin of ["happy", "claude"]) {
-		try {
-			execSync(`which ${bin}`, { stdio: "ignore" });
-			return bin;
-		} catch {
-			continue;
-		}
+	try {
+		execSync("which claude", { stdio: "ignore" });
+		return "claude";
+	} catch {
+		return null;
 	}
-	return null;
 }
 
 // Conservative limit: 200KB leaves room for env vars within macOS 256KB ARG_MAX
@@ -190,9 +187,8 @@ function promptArg(prompt: string): string {
 
 /**
  * Launch an interactive agent session with a prompt.
- * Resolves the agent binary (happy > claude), passes prompt directly
- * or via temp file if too large for OS arg limit.
- * Throws if no agent binary is found.
+ * Passes prompt directly or via temp file if too large for OS arg limit.
+ * Throws if claude CLI is not found.
  */
 export function launchAgent(
 	prompt: string,
@@ -200,9 +196,7 @@ export function launchAgent(
 ): ChildProcess {
 	const bin = resolveAgentBinary();
 	if (!bin) {
-		throw new Error(
-			"No agent found. Install happy (npm i -g happy-coder) or claude (npm i -g @anthropic-ai/claude-code).",
-		);
+		throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
 	}
 
 	const args: string[] = [];
@@ -231,16 +225,13 @@ export interface RunAgentResult {
 
 /**
  * Run an agent in non-interactive print mode and capture output.
- * Resolves the agent binary (happy > claude), passes prompt directly
- * or via temp file if too large for OS arg limit.
- * Throws if no agent binary is found.
+ * Passes prompt directly or via temp file if too large for OS arg limit.
+ * Throws if claude CLI is not found.
  */
 export function runAgent(prompt: string): RunAgentResult {
 	const bin = resolveAgentBinary();
 	if (!bin) {
-		throw new Error(
-			"No agent found. Install happy (npm i -g happy-coder) or claude (npm i -g @anthropic-ai/claude-code).",
-		);
+		throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
 	}
 
 	const result = spawnSync(bin, ["-p", "--output-format", "text", "--", promptArg(prompt)], {

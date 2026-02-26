@@ -36,6 +36,11 @@ type LinearAuthCheckStatus = {
 	hint?: string;
 };
 
+type RemoteControlStatus = {
+	enabled: boolean;
+	hint?: string;
+};
+
 type StatuslineStatus = {
 	claudeSettingsConfigured: boolean;
 	currentCommand?: string;
@@ -209,6 +214,37 @@ function checkShellIntegration(): {
 	const configured = process.env.SANTREE_SHELL_INTEGRATION === "1";
 
 	return { configured, shell: shellName };
+}
+
+/**
+ * Checks if Claude Code Remote Control is enabled for all sessions.
+ * Remote Control lets you continue local sessions from any device.
+ *
+ * This reads from ~/.claude.json (the "global config" / application state file),
+ * which is separate from ~/.claude/settings.json (the declarative settings file).
+ * See: https://code.claude.com/docs/en/settings#settings-files
+ */
+function checkRemoteControl(): RemoteControlStatus {
+	const home = process.env.HOME || "";
+	const configPath = path.join(home, ".claude.json");
+
+	try {
+		if (fs.existsSync(configPath)) {
+			const content = fs.readFileSync(configPath, "utf-8");
+			const config = JSON.parse(content);
+
+			if (config.remoteControlAtStartup === true) {
+				return { enabled: true };
+			}
+		}
+	} catch {
+		// JSON parse error or file read error
+	}
+
+	return {
+		enabled: false,
+		hint: 'Run /config in Claude Code and enable "Enable Remote Control for all sessions"',
+	};
 }
 
 /**
@@ -438,6 +474,24 @@ function StatuslineRow({ status }: { status: StatuslineStatus }) {
 	);
 }
 
+function RemoteControlRow({ status }: { status: RemoteControlStatus }) {
+	return (
+		<Box flexDirection="column" marginBottom={1}>
+			<Box>
+				<StatusIcon ok={status.enabled} required={false} />
+				<Text> </Text>
+				<Text bold>Remote Control</Text>
+				<Text dimColor> - Continue sessions from any device</Text>
+				<Text dimColor> (optional)</Text>
+			</Box>
+			<Box marginLeft={2} flexDirection="column">
+				<Text dimColor>Enabled: {status.enabled ? "yes" : "no"}</Text>
+				{status.hint && <Text color="yellow">↳ {status.hint}</Text>}
+			</Box>
+		</Box>
+	);
+}
+
 function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 	const isOk =
 		status.santreeFolderExists &&
@@ -506,6 +560,7 @@ export default function Doctor() {
 		configured: boolean;
 		shell: string | null;
 	} | null>(null);
+	const [remoteControl, setRemoteControl] = useState<RemoteControlStatus | null>(null);
 	const [statusline, setStatusline] = useState<StatuslineStatus | null>(null);
 	const [santreeSetup, setSantreeSetup] = useState<SantreeSetupStatus | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -528,13 +583,6 @@ export default function Doctor() {
 					true,
 					"claude --version 2>/dev/null | head -1",
 					"Install: npm install -g @anthropic-ai/claude-code",
-				),
-				checkTool(
-					"happy",
-					"Claude CLI wrapper (used over claude if installed)",
-					false,
-					"happy --version 2>/dev/null || echo 'installed'",
-					"Install: npm install -g happy-coder",
 				),
 			]);
 
@@ -563,6 +611,7 @@ export default function Doctor() {
 			setTools(results);
 			setLinear(linearResult);
 			setShellStatus(checkShellIntegration());
+			setRemoteControl(checkRemoteControl());
 			setStatusline(statuslineResult);
 			setSantreeSetup(checkSantreeSetup());
 			setLoading(false);
@@ -618,10 +667,11 @@ export default function Doctor() {
 
 			<Box marginBottom={1} marginTop={1} flexDirection="column">
 				<Text bold underline>
-					Aesthetics
+					Claude Code
 				</Text>
 			</Box>
 
+			{remoteControl && <RemoteControlRow status={remoteControl} />}
 			{statusline && <StatuslineRow status={statusline} />}
 
 			<Box

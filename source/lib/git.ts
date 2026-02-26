@@ -293,8 +293,18 @@ export function extractTicketId(branch: string): string | null {
  */
 export function getWorktreePath(branchName: string): string | null {
 	const worktrees = listWorktrees();
+	// Try exact match first
 	const wt = worktrees.find((w) => w.branch === branchName);
-	return wt?.path ?? null;
+	if (wt) return wt.path;
+
+	// Fall back to matching by ticket ID
+	const inputTicketId = extractTicketId(branchName);
+	if (inputTicketId) {
+		const byTicket = worktrees.find((w) => w.branch && extractTicketId(w.branch) === inputTicketId);
+		if (byTicket) return byTicket.path;
+	}
+
+	return null;
 }
 
 /**

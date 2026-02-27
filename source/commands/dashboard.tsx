@@ -1011,6 +1011,10 @@ export default function Dashboard() {
 
 			// Open in Linear
 			if (input === "o") {
+				if (!di.issue.url) {
+					dispatch({ type: "SET_ACTION_MESSAGE", message: "No Linear ticket URL" });
+					return;
+				}
 				const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
 				execSync(`${openCmd} "${di.issue.url}"`, { stdio: "ignore" });
 				dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened in browser" });

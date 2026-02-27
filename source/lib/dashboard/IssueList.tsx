@@ -25,6 +25,8 @@ function stateColor(type: string, name?: string): string {
 			return "blue";
 		case "backlog":
 			return "gray";
+		case "orphaned":
+			return "gray";
 		default:
 			return "yellow";
 	}

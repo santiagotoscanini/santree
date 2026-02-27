@@ -1,6 +1,5 @@
 import { Box, Text } from "ink";
-import type { DashboardIssue, WorktreeInfo } from "./types.js";
-import type { PRInfo } from "../github.js";
+import type { DashboardIssue } from "./types.js";
 
 interface Props {
 	issue: DashboardIssue | null;
@@ -22,6 +21,8 @@ function stateColor(type: string): string {
 		case "unstarted":
 			return "blue";
 		case "backlog":
+			return "gray";
+		case "orphaned":
 			return "gray";
 		default:
 			return "yellow";
@@ -66,7 +67,8 @@ function fileColor(xy: string): string | undefined {
 	return "yellow";
 }
 
-function buildActions(worktree: WorktreeInfo | null, pr: PRInfo | null): ActionRow[] {
+function buildActions(di: DashboardIssue): ActionRow[] {
+	const { worktree, pr, issue } = di;
 	const items: ActionItem[] = [];
 
 	// Work/Resume
@@ -99,7 +101,9 @@ function buildActions(worktree: WorktreeInfo | null, pr: PRInfo | null): ActionR
 	}
 
 	// Links
-	items.push({ key: "o", label: "Linear", color: "gray" });
+	if (issue.url) {
+		items.push({ key: "o", label: "Linear", color: "gray" });
+	}
 	if (pr) items.push({ key: "p", label: "Open PR", color: "gray" });
 
 	// Destructive
@@ -260,7 +264,7 @@ export default function DetailPanel({
 	}
 
 	// ── Build actions footer ──────────────────────────────────────────
-	const actionRows = buildActions(worktree, pr);
+	const actionRows = buildActions(issue);
 	// +1 for the separator line
 	const actionsHeight = actionRows.length + 1;
 	const scrollableHeight = height - actionsHeight;

@@ -39,10 +39,14 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 	// Read metadata once for session IDs
 	const metadata = readAllMetadata(repoRoot);
 
+	// Track which ticket IDs are consumed by fetched issues
+	const consumedTicketIds = new Set<string>();
+
 	// Enrich issues in parallel
 	const enriched: DashboardIssue[] = await Promise.all(
 		issues.map(async (issue) => {
 			const wt = wtMap.get(issue.identifier);
+			if (wt) consumedTicketIds.add(issue.identifier);
 			let worktreeInfo = null;
 			let prInfo = null;
 
@@ -82,6 +86,63 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 				reviews: reviewsInfo,
 			};
 		}),
+	);
+
+	// Build orphan DashboardIssue objects for worktrees not matched to any fetched issue
+	const orphans: DashboardIssue[] = await Promise.all(
+		[...wtMap.entries()]
+			.filter(([tid]) => !consumedTicketIds.has(tid))
+			.map(async ([tid, wt]) => {
+				const base = getBaseBranch(wt.branch);
+				const [gitStatusOutput, ahead, pr] = await Promise.all([
+					getGitStatusAsync(wt.path),
+					getCommitsAheadAsync(wt.path, base),
+					getPRInfoAsync(wt.branch),
+				]);
+
+				let checksInfo: PRCheck[] | null = null;
+				let reviewsInfo: PRReview[] | null = null;
+				if (pr) {
+					[checksInfo, reviewsInfo] = await Promise.all([
+						getPRChecksAsync(pr.number),
+						getPRReviewsAsync(pr.number),
+					]);
+				}
+
+				// Derive a readable title from branch name: strip prefix and ticket ID
+				const titleFromBranch =
+					wt.branch
+						.replace(/^[^/]+\//, "") // strip prefix (e.g. "feature/")
+						.replace(/^[A-Z]+-\d+-?/, "") // strip ticket ID
+						.replace(/-/g, " ")
+						.trim() || tid;
+
+				return {
+					issue: {
+						identifier: tid,
+						title: titleFromBranch,
+						description: null,
+						url: "",
+						priority: 0,
+						priorityLabel: "None",
+						state: { name: "Orphaned", type: "orphaned" },
+						labels: [],
+						projectId: null,
+						projectName: null,
+					},
+					worktree: {
+						path: wt.path,
+						branch: wt.branch,
+						dirty: Boolean(gitStatusOutput),
+						commitsAhead: ahead,
+						sessionId: metadata[tid]?.session_id ?? null,
+						gitStatus: gitStatusOutput,
+					},
+					pr,
+					checks: checksInfo,
+					reviews: reviewsInfo,
+				};
+			}),
 	);
 
 	// Group by project
@@ -129,6 +190,21 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 			statusGroups,
 		};
 	});
+
+	// Append orphaned worktrees as a separate group at the bottom
+	if (orphans.length > 0) {
+		groups.push({
+			name: "Orphaned Worktrees",
+			id: null,
+			statusGroups: [
+				{
+					name: "Orphaned",
+					type: "orphaned",
+					issues: orphans,
+				},
+			],
+		});
+	}
 
 	const flatIssues = groups.flatMap((g) => g.statusGroups.flatMap((sg) => sg.issues));
 	return { groups, flatIssues };

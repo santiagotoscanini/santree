@@ -659,7 +659,7 @@ export default function Dashboard() {
 				if (!prTemplate) {
 					dispatch({
 						type: "PR_CREATE_ERROR",
-						error: "No PR template found at .github/pull_request_template.md",
+						error: "No PR template found (checked .github/, docs/, and repo root)",
 					});
 					return;
 				}

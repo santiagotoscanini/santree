@@ -98,7 +98,7 @@ export default function PR({ options }: Props) {
 			const prTemplate = getPRTemplate();
 			if (!prTemplate) {
 				setStatus("error");
-				setMessage("No PR template found at .github/pull_request_template.md");
+				setMessage("No PR template found (checked .github/, docs/, and repo root)");
 				setTimeout(() => exit(), 100);
 				return;
 			}

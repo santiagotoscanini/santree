@@ -90,16 +90,28 @@ export function createPR(
 }
 
 /**
- * Fetch the pull request template from the repo's .github/pull_request_template.md.
- * Runs: `gh api repos/{owner}/{repo}/contents/.github/pull_request_template.md --jq .content`
+ * Fetch the pull request template from the repo.
+ * Checks all standard locations and casings that GitHub supports:
+ * .github/, docs/, and repo root — with both lowercase and uppercase filenames.
+ * https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository
  * Returns the decoded template content, or null if none exists.
  */
 export function getPRTemplate(): string | null {
-	const output = run(
-		`gh api repos/{owner}/{repo}/contents/.github/pull_request_template.md --jq .content`,
-	);
-	if (!output) return null;
-	return Buffer.from(output, "base64").toString("utf-8");
+	const paths = [
+		".github/pull_request_template.md",
+		".github/PULL_REQUEST_TEMPLATE.md",
+		"docs/pull_request_template.md",
+		"docs/PULL_REQUEST_TEMPLATE.md",
+		"pull_request_template.md",
+		"PULL_REQUEST_TEMPLATE.md",
+	];
+	for (const path of paths) {
+		const output = run(`gh api repos/{owner}/{repo}/contents/${path} --jq .content`);
+		if (output) {
+			return Buffer.from(output, "base64").toString("utf-8");
+		}
+	}
+	return null;
 }
 
 /**

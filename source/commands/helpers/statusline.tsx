@@ -191,11 +191,11 @@ function buildSantreeStatusline(
 		parts.push(`${c.blue}${model}${c.reset}`);
 	}
 
-	// Usable context % (accounting for 80% auto-compact threshold)
+	// Context usage %
 	if (usedPercentage !== null) {
-		const usable = Math.round(usedPercentage * 1.25);
-		const color = usable >= 80 ? c.red : usable >= 60 ? c.yellow : c.green;
-		parts.push(`${color}${usable}%${c.reset}`);
+		const used = Math.round(usedPercentage);
+		const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
+		parts.push(`${color}${used}%${c.reset}`);
 	}
 
 	return parts.join(" | ");
@@ -227,11 +227,11 @@ function buildGitStatusline(
 		parts.push(`${c.blue}${model}${c.reset}`);
 	}
 
-	// Usable context %
+	// Context usage %
 	if (usedPercentage !== null) {
-		const usable = Math.round(usedPercentage * 1.25);
-		const color = usable >= 80 ? c.red : usable >= 60 ? c.yellow : c.green;
-		parts.push(`${color}${usable}%${c.reset}`);
+		const used = Math.round(usedPercentage);
+		const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
+		parts.push(`${color}${used}%${c.reset}`);
 	}
 
 	return parts.join(" | ");
@@ -254,11 +254,11 @@ function buildPlainStatusline(
 		parts.push(`${c.blue}${model}${c.reset}`);
 	}
 
-	// Usable context %
+	// Context usage %
 	if (usedPercentage !== null) {
-		const usable = Math.round(usedPercentage * 1.25);
-		const color = usable >= 80 ? c.red : usable >= 60 ? c.yellow : c.green;
-		parts.push(`${color}${usable}%${c.reset}`);
+		const used = Math.round(usedPercentage);
+		const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
+		parts.push(`${color}${used}%${c.reset}`);
 	}
 
 	return parts.join(" | ");

@@ -87,6 +87,27 @@ function isSantreeWorktree(cwd: string): boolean {
 	return cwd.includes("/.santree/worktrees/");
 }
 
+// Read session state from per-ticket state file
+function readSessionStateFile(cwd: string): "waiting" | "idle" | "active" | null {
+	const marker = "/.santree/worktrees/";
+	const idx = cwd.indexOf(marker);
+	if (idx === -1) return null;
+
+	const repoRoot = cwd.slice(0, idx);
+	const rest = cwd.slice(idx + marker.length);
+	const ticketId = rest.split("/")[0];
+	if (!ticketId) return null;
+
+	const filePath = path.join(repoRoot, ".santree", "session-states", `${ticketId}.json`);
+	try {
+		const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+		if (data.state === "exited") return null;
+		return data.state;
+	} catch {
+		return null;
+	}
+}
+
 // Extract ticket ID from branch name (e.g., feature/TEAM-123-desc -> TEAM-123)
 function extractTicketId(branch: string): string | null {
 	const match = branch.match(/([a-zA-Z]+)-(\d+)/);
@@ -156,6 +177,14 @@ function buildSantreeStatusline(
 	// Git changes
 	const changes = getGitChanges(cwd);
 	parts.push(formatChanges(changes));
+
+	// Session state
+	const sessState = readSessionStateFile(cwd);
+	if (sessState === "waiting") {
+		parts.push(`${c.red}WAITING${c.reset}`);
+	} else if (sessState === "idle") {
+		parts.push(`${c.yellow}idle${c.reset}`);
+	}
 
 	// Model
 	if (model) {

@@ -211,6 +211,17 @@ export default function DetailPanel({
 		} else {
 			lines.push({ text: "  session: none", color: "red" });
 		}
+
+		if (worktree.sessionState === "waiting") {
+			const msg = worktree.sessionMessage
+				? `NEEDS INPUT: ${worktree.sessionMessage}`
+				: "NEEDS INPUT";
+			lines.push({ text: `  ${msg}`, color: "red" });
+		} else if (worktree.sessionState === "idle") {
+			lines.push({ text: "  session idle (waiting for prompt)", color: "yellow" });
+		} else if (worktree.sessionState === "active") {
+			lines.push({ text: "  session active (working)", color: "green" });
+		}
 	} else {
 		lines.push({ text: "  –", dim: true });
 	}

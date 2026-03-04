@@ -47,6 +47,20 @@ type StatuslineStatus = {
 	hint?: string;
 };
 
+type HookScriptStatus = {
+	name: string;
+	exists: boolean;
+	executable: boolean;
+};
+
+type SessionSignalStatus = {
+	configured: boolean;
+	missingHooks: string[];
+	hookScripts: HookScriptStatus[];
+	hooksDir: string | null;
+	hint?: string;
+};
+
 type SantreeSetupStatus = {
 	isGitRepo: boolean;
 	mainRepoRoot?: string;
@@ -112,7 +126,8 @@ async function checkTool(
 }
 
 /**
- * Checks GitHub CLI auth status using JSON output.
+ * Checks GitHub CLI auth status.
+ * Uses `gh api user` which works across all gh versions.
  */
 async function checkGhAuth(): Promise<ToolStatus> {
 	const path = await getPath("gh");
@@ -128,25 +143,9 @@ async function checkGhAuth(): Promise<ToolStatus> {
 	}
 
 	const version = await tryExec("gh --version | head -1");
-	const authJson = await tryExec("gh auth status --json hosts 2>/dev/null");
+	const login = await tryExec("gh api user --jq .login 2>/dev/null");
 
-	let authStatus: string | undefined;
-
-	if (authJson) {
-		try {
-			const auth = JSON.parse(authJson);
-			const githubHosts = auth.hosts?.["github.com"];
-			const activeAccount = githubHosts?.find((h: { active: boolean }) => h.active);
-
-			if (activeAccount?.login) {
-				authStatus = `Authenticated as ${activeAccount.login}`;
-			}
-		} catch {
-			// JSON parse failed, auth might not be configured
-		}
-	}
-
-	if (!authStatus) {
+	if (!login) {
 		return {
 			name: "gh",
 			description: "GitHub CLI for PR operations",
@@ -165,7 +164,7 @@ async function checkGhAuth(): Promise<ToolStatus> {
 		installed: true,
 		version: version || "unknown",
 		path,
-		authStatus,
+		authStatus: `Authenticated as ${login}`,
 	};
 }
 
@@ -285,6 +284,85 @@ async function checkStatusline(): Promise<StatuslineStatus> {
 		claudeSettingsConfigured,
 		currentCommand,
 		hint,
+	};
+}
+
+/**
+ * Checks if session-signal hooks are configured in ~/.claude/settings.json.
+ * Looks for hooks on Notification, Stop, UserPromptSubmit, and SessionEnd
+ * that run "santree helpers session-signal".
+ */
+function checkSessionSignalHooks(): SessionSignalStatus {
+	const home = process.env.HOME || "";
+	const claudeSettingsPath = path.join(home, ".claude", "settings.json");
+
+	const requiredEvents = ["Notification", "Stop", "UserPromptSubmit", "SessionEnd"];
+	const missingHooks: string[] = [];
+
+	try {
+		if (fs.existsSync(claudeSettingsPath)) {
+			const content = fs.readFileSync(claudeSettingsPath, "utf-8");
+			const settings = JSON.parse(content);
+			const hooks = settings.hooks || {};
+
+			for (const event of requiredEvents) {
+				const eventHooks = hooks[event];
+				if (!Array.isArray(eventHooks)) {
+					missingHooks.push(event);
+					continue;
+				}
+				// Check if any hook entry has a nested hook command containing session-signal
+				const found = eventHooks.some((entry: any) => {
+					const innerHooks = entry.hooks || [];
+					return innerHooks.some(
+						(h: any) => typeof h.command === "string" && h.command.includes("session-signal"),
+					);
+				});
+				if (!found) missingHooks.push(event);
+			}
+		} else {
+			missingHooks.push(...requiredEvents);
+		}
+	} catch {
+		missingHooks.push(...requiredEvents);
+	}
+
+	// Check hook script files in .santree/hooks/
+	const hookScripts: HookScriptStatus[] = [];
+	const mainRepoRoot = findMainRepoRoot();
+	let hooksDir: string | null = null;
+	if (mainRepoRoot) {
+		hooksDir = path.join(mainRepoRoot, ".santree", "hooks");
+		const scriptNames = ["on-waiting.sh", "on-active.sh", "on-idle.sh", "on-exited.sh"];
+
+		for (const name of scriptNames) {
+			const scriptPath = path.join(hooksDir, name);
+			const exists = fs.existsSync(scriptPath);
+			let executable = false;
+			if (exists) {
+				try {
+					fs.accessSync(scriptPath, fs.constants.X_OK);
+					executable = true;
+				} catch {
+					// not executable
+				}
+			}
+			if (exists) {
+				hookScripts.push({ name, exists, executable });
+			}
+		}
+	}
+
+	if (missingHooks.length === 0) {
+		return { configured: true, missingHooks: [], hookScripts, hooksDir };
+	}
+
+	return {
+		configured: false,
+		missingHooks,
+		hookScripts,
+		hooksDir,
+		hint: `Missing: ${missingHooks.join(", ")}. Run: santree helpers session-signal install`,
 	};
 }
 
@@ -492,6 +570,53 @@ function RemoteControlRow({ status }: { status: RemoteControlStatus }) {
 	);
 }
 
+function SessionSignalRow({ status }: { status: SessionSignalStatus }) {
+	const allScriptNames = ["on-waiting.sh", "on-active.sh", "on-idle.sh", "on-exited.sh"];
+	const existingNames = new Set(status.hookScripts.map((s) => s.name));
+	const missingScripts = allScriptNames.filter((n) => !existingNames.has(n));
+	const nonExecutable = status.hookScripts.filter((s) => !s.executable);
+
+	return (
+		<Box flexDirection="column" marginBottom={1}>
+			<Box>
+				<StatusIcon ok={status.configured && nonExecutable.length === 0} required={false} />
+				<Text> </Text>
+				<Text bold>Session Signal Hooks</Text>
+				<Text dimColor> - Surface session state in dashboard/tmux</Text>
+				<Text dimColor> (optional)</Text>
+			</Box>
+			<Box marginLeft={2} flexDirection="column">
+				{status.configured ? (
+					<Text dimColor>All hooks configured</Text>
+				) : (
+					<>
+						<Text dimColor>Missing: {status.missingHooks.join(", ")}</Text>
+						{status.hint && <Text color="yellow">↳ {status.hint}</Text>}
+					</>
+				)}
+				{status.hooksDir && (
+					<Text dimColor>
+						Hook scripts:{" "}
+						{status.hookScripts.length > 0
+							? status.hookScripts.map((s) => s.name).join(", ")
+							: "none"}
+					</Text>
+				)}
+				{status.hooksDir && missingScripts.length > 0 && (
+					<Text color="yellow">
+						↳ Create in {status.hooksDir}: {missingScripts.join(", ")}
+					</Text>
+				)}
+				{nonExecutable.map((s) => (
+					<Text key={s.name} color="yellow">
+						↳ {s.name} is not executable. Run: chmod +x .santree/hooks/{s.name}
+					</Text>
+				))}
+			</Box>
+		</Box>
+	);
+}
+
 function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 	const isOk =
 		status.santreeFolderExists &&
@@ -562,6 +687,7 @@ export default function Doctor() {
 	} | null>(null);
 	const [remoteControl, setRemoteControl] = useState<RemoteControlStatus | null>(null);
 	const [statusline, setStatusline] = useState<StatuslineStatus | null>(null);
+	const [sessionSignal, setSessionSignal] = useState<SessionSignalStatus | null>(null);
 	const [santreeSetup, setSantreeSetup] = useState<SantreeSetupStatus | null>(null);
 	const [loading, setLoading] = useState(true);
 
@@ -613,6 +739,7 @@ export default function Doctor() {
 			setShellStatus(checkShellIntegration());
 			setRemoteControl(checkRemoteControl());
 			setStatusline(statuslineResult);
+			setSessionSignal(checkSessionSignalHooks());
 			setSantreeSetup(checkSantreeSetup());
 			setLoading(false);
 		}
@@ -673,6 +800,7 @@ export default function Doctor() {
 
 			{remoteControl && <RemoteControlRow status={remoteControl} />}
 			{statusline && <StatuslineRow status={statusline} />}
+			{sessionSignal && <SessionSignalRow status={sessionSignal} />}
 
 			<Box
 				marginTop={1}

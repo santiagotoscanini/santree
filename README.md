@@ -121,10 +121,16 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 
 ### Helpers (`santree helpers`)
 
-| Command                      | Description                       |
-| ---------------------------- | --------------------------------- |
-| `santree helpers shell-init` | Output shell integration script   |
-| `santree helpers statusline` | Custom statusline for Claude Code |
+| Command                                        | Description                                      |
+| ---------------------------------------------- | ------------------------------------------------ |
+| `santree helpers shell-init`                   | Output shell integration script                  |
+| `santree helpers statusline`                   | Custom statusline for Claude Code                |
+| `santree helpers session-signal notification`  | Signal waiting state (Notification hook)         |
+| `santree helpers session-signal stop`          | Signal idle state (Stop hook)                    |
+| `santree helpers session-signal prompt`        | Signal active state (UserPromptSubmit hook)      |
+| `santree helpers session-signal end`           | Signal exited state (SessionEnd hook)            |
+| `santree helpers session-signal install`       | Auto-install session-signal hooks in Claude Code |
+| `santree helpers session-signal install --dry` | Print the hooks JSON without writing             |
 
 ### Top-level
 
@@ -251,6 +257,65 @@ The statusline displays: `repo | branch | S: staged | U: unstaged | A: untracked
 Enable [Remote Control](https://code.claude.com/docs/en/remote-control) to continue local Claude Code sessions from your phone, tablet, or any browser. This lets you kick off work with `santree worktree work` and monitor or steer the session remotely.
 
 Enable it for all sessions by running `/config` inside Claude Code and setting **Enable Remote Control for all sessions** to `true`. This writes `remoteControlAtStartup: true` to `~/.claude.json`. Run `santree doctor` to verify.
+
+### Session State Signaling (Optional)
+
+Surfaces the current Claude Code session state in the dashboard, statusline, and tmux window names. Shows whether a session is actively working, waiting for permission approval, idle, or exited.
+
+**States:**
+| State | Meaning |
+|-------|---------|
+| `active` | User submitted a prompt, Claude is working |
+| `waiting` | Claude needs permission approval |
+| `idle` | Claude finished and is waiting for next prompt |
+| `exited` | Session ended |
+
+**Install:**
+
+```bash
+santree helpers session-signal install
+```
+
+This adds hooks for `Notification`, `Stop`, `UserPromptSubmit`, and `SessionEnd` to `~/.claude/settings.json`. Existing hooks are preserved.
+
+To preview the JSON without writing: `santree helpers session-signal install --dry`
+
+Verify with `santree doctor` — look for the "Session Signal Hooks" row under Claude Code.
+
+### Session Hooks (Optional)
+
+Run custom scripts when Claude's session state changes. Create executable scripts in `.santree/hooks/`:
+
+```
+.santree/hooks/
+  on-waiting.sh    # Runs when session needs permission approval
+  on-active.sh     # Runs when user submits a new prompt
+  on-idle.sh       # Runs when session finishes and waits for next prompt
+  on-exited.sh     # Runs when session ends
+```
+
+Each script receives these environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `SANTREE_TICKET_ID` | e.g. `TEAM-123` |
+| `SANTREE_SESSION_STATE` | `waiting`, `active`, `idle`, or `exited` |
+| `SANTREE_SESSION_ID` | The Claude session ID |
+| `SANTREE_WORKTREE_PATH` | Absolute path to the worktree |
+| `SANTREE_REPO_ROOT` | Absolute path to the main repo |
+| `SANTREE_MESSAGE` | Notification message (only for `waiting`) |
+
+Scripts are optional — only executed if they exist and are executable. They run fire-and-forget with a 5-second timeout.
+
+**Example** — log when Claude is waiting for approval:
+
+```bash
+#!/bin/bash
+# .santree/hooks/on-waiting.sh
+echo "$(date): $SANTREE_TICKET_ID waiting — $SANTREE_MESSAGE" >> /tmp/santree-hooks.log
+```
+
+Make it executable: `chmod +x .santree/hooks/on-waiting.sh`
 
 ---
 

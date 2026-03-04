@@ -3,6 +3,9 @@ import {
 	extractTicketId,
 	getBaseBranch,
 	readAllMetadata,
+	readSessionState,
+	isSessionAliveInTmux,
+	clearSessionState,
 	getGitStatusAsync,
 	getCommitsAheadAsync,
 } from "../git.js";
@@ -60,6 +63,13 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					getCommitsAheadAsync(wt.path, base),
 					getPRInfoAsync(wt.branch),
 				]);
+				let sessState = readSessionState(repoRoot, issue.identifier);
+				// Validate against tmux — if no claude process is running, clear stale state
+				if (sessState && !isSessionAliveInTmux(issue.identifier)) {
+					clearSessionState(repoRoot, issue.identifier);
+					sessState = null;
+				}
+				const ss = sessState?.state ?? null;
 				worktreeInfo = {
 					path: wt.path,
 					branch: wt.branch,
@@ -67,6 +77,8 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					commitsAhead: ahead,
 					sessionId: metadata[issue.identifier]?.session_id ?? null,
 					gitStatus: gitStatusOutput,
+					sessionState: ss === "exited" ? null : ss,
+					sessionMessage: sessState?.message ?? null,
 				};
 				prInfo = pr;
 
@@ -117,6 +129,12 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						.replace(/-/g, " ")
 						.trim() || tid;
 
+				let sessState = readSessionState(repoRoot, tid);
+				if (sessState && !isSessionAliveInTmux(tid)) {
+					clearSessionState(repoRoot, tid);
+					sessState = null;
+				}
+				const ss = sessState?.state ?? null;
 				return {
 					issue: {
 						identifier: tid,
@@ -137,6 +155,8 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						commitsAhead: ahead,
 						sessionId: metadata[tid]?.session_id ?? null,
 						gitStatus: gitStatusOutput,
+						sessionState: ss === "exited" ? null : ss,
+						sessionMessage: sessState?.message ?? null,
 					},
 					pr,
 					checks: checksInfo,

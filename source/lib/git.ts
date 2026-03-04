@@ -6,6 +6,13 @@ import { run, runAsync } from "./exec.js";
 
 const execAsync = promisify(exec);
 
+export interface SessionState {
+	state: "waiting" | "idle" | "active" | "exited";
+	message: string | null;
+	session_id: string;
+	at: string;
+}
+
 export interface Worktree {
 	path: string;
 	branch: string;
@@ -244,7 +251,7 @@ export async function removeWorktree(
 			fs.rmSync(worktreePath, { recursive: true, force: true });
 		}
 
-		// Clean up centralized metadata entry
+		// Clean up centralized metadata entry and session state
 		const ticketId = extractTicketId(branchName);
 		if (ticketId) {
 			const all = readAllMetadata(repoRoot);
@@ -252,6 +259,7 @@ export async function removeWorktree(
 				delete all[ticketId];
 				writeAllMetadata(repoRoot, all);
 			}
+			clearSessionState(repoRoot, ticketId);
 		}
 
 		// Also delete the branch
@@ -639,4 +647,73 @@ export function getDiffStat(baseBranch: string): string | null {
  */
 export function getDiffContent(baseBranch: string): string | null {
 	return run(`git diff ${baseBranch}..HEAD`, { maxBuffer: 10 * 1024 * 1024 }) || null;
+}
+
+/**
+ * Get the path to the .santree/session-states directory.
+ */
+function getSessionStatesDir(repoRoot: string): string {
+	return path.join(getSantreeDir(repoRoot), "session-states");
+}
+
+/**
+ * Read the session state file for a given ticket.
+ * Returns null if missing or "exited".
+ */
+export function readSessionState(repoRoot: string, ticketId: string): SessionState | null {
+	const filePath = path.join(getSessionStatesDir(repoRoot), `${ticketId}.json`);
+	if (!fs.existsSync(filePath)) return null;
+	try {
+		const data: SessionState = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+		if (data.state === "exited") return null;
+		return data;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Check if a claude process is running in a tmux window for the given ticket.
+ * Windows are named after ticket IDs (possibly with suffixes like " !" or " ~").
+ * Gets the pane PID and walks the process tree looking for a "claude" process.
+ */
+export function isSessionAliveInTmux(ticketId: string): boolean {
+	try {
+		const output = execSync('tmux list-windows -F "#{window_name}\t#{pane_pid}"', {
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "ignore"],
+		}).trim();
+
+		for (const line of output.split("\n")) {
+			const [name, pidStr] = line.split("\t");
+			if (!name?.startsWith(ticketId)) continue;
+			if (!pidStr) return false;
+			// Check if any descendant of the shell PID is a claude process
+			try {
+				const ps = execSync(`pgrep -P ${pidStr} -a`, {
+					encoding: "utf-8",
+					stdio: ["pipe", "pipe", "ignore"],
+				}).trim();
+				return ps.split("\n").some((proc) => proc.includes("claude"));
+			} catch {
+				// pgrep exits 1 when no matches — shell has no children
+				return false;
+			}
+		}
+	} catch {
+		// tmux not available or not in a tmux session
+	}
+	return false;
+}
+
+/**
+ * Delete the session state file for a given ticket.
+ */
+export function clearSessionState(repoRoot: string, ticketId: string): void {
+	const filePath = path.join(getSessionStatesDir(repoRoot), `${ticketId}.json`);
+	try {
+		fs.unlinkSync(filePath);
+	} catch {
+		// Ignore if file doesn't exist
+	}
 }

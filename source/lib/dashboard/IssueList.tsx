@@ -71,6 +71,10 @@ function sessionIndicator(
 	if (isDeleting) return { text: " deleting", color: "red" };
 	if (isCreating) return { text: " creating", color: "yellow" };
 	if (!wt) return { text: " -", color: "gray" };
+	// Session state takes priority over session ID
+	if (wt.sessionState === "waiting") return { text: " waiting!", color: "red" };
+	if (wt.sessionState === "active") return { text: " active", color: "green" };
+	if (wt.sessionState === "idle") return { text: " idle", color: "yellow" };
 	if (wt.sessionId) return { text: " " + wt.sessionId.slice(0, 8), color: "cyan" };
 	return { text: " none", color: "red" };
 }

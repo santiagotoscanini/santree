@@ -4,3 +4,4 @@ dist
 # Santree worktrees and metadata
 .santree/worktrees
 .santree/metadata.json
+.santree/session-states/

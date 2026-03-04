@@ -20,6 +20,8 @@ export interface WorktreeInfo {
 	commitsAhead: number;
 	sessionId: string | null;
 	gitStatus: string;
+	sessionState: "waiting" | "idle" | "active" | null;
+	sessionMessage: string | null;
 }
 
 export interface DashboardIssue {

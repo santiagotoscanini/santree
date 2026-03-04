@@ -51,6 +51,16 @@ function slugify(title: string): string {
 
 // ── Scroll helpers ────────────────────────────────────────────────────
 
+function countWithChildren(di: { children?: { children?: any[] }[] }): number {
+	let count = 1;
+	if (di.children) {
+		for (const child of di.children) {
+			count += countWithChildren(child);
+		}
+	}
+	return count;
+}
+
 function getRowIndexForFlatIndex(groups: ProjectGroup[], flatIndex: number): number {
 	let row = 1; // skip column header row
 	let issuesSeen = 0;
@@ -58,10 +68,14 @@ function getRowIndexForFlatIndex(groups: ProjectGroup[], flatIndex: number): num
 		row++; // project header
 		for (const sg of g.statusGroups) {
 			row++; // status header
-			for (let i = 0; i < sg.issues.length; i++) {
-				if (issuesSeen === flatIndex) return row;
-				row++;
-				issuesSeen++;
+			for (const di of sg.issues) {
+				const total = countWithChildren(di);
+				if (flatIndex >= issuesSeen && flatIndex < issuesSeen + total) {
+					// The target is within this issue or its children
+					return row + (flatIndex - issuesSeen);
+				}
+				row += total;
+				issuesSeen += total;
 			}
 		}
 	}
@@ -78,10 +92,13 @@ function getFlatIndexForListRow(groups: ProjectGroup[], listRow: number): number
 		for (const sg of g.statusGroups) {
 			if (row === listRow) return null; // status header row
 			row++;
-			for (let i = 0; i < sg.issues.length; i++) {
-				if (row === listRow) return issuesSeen;
-				row++;
-				issuesSeen++;
+			for (const di of sg.issues) {
+				const total = countWithChildren(di);
+				if (listRow >= row && listRow < row + total) {
+					return issuesSeen + (listRow - row);
+				}
+				row += total;
+				issuesSeen += total;
 			}
 		}
 	}
@@ -398,7 +415,7 @@ export default function Dashboard() {
 	);
 
 	const createAndLaunch = useCallback(
-		async (mode: "plan" | "implement", runSetup: boolean) => {
+		async (mode: "plan" | "implement", runSetup: boolean, base?: string) => {
 			const di = stateRef.current.flatIssues[stateRef.current.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
@@ -412,25 +429,33 @@ export default function Dashboard() {
 
 			const slug = slugify(di.issue.title);
 			const branchName = `feature/${ticketId}-${slug}`;
-			const base = getDefaultBranch();
+			const defaultBranch = getDefaultBranch();
+			const baseBranch = base ?? defaultBranch;
+			const isDefaultBase = baseBranch === defaultBranch;
 
 			// 1. Pull latest (async to avoid blocking the event loop)
 			dispatch({ type: "CREATION_LOG", logs: `Fetching origin...\n` });
 			try {
 				await execAsync("git fetch origin", { cwd: repoRoot });
-				dispatch({ type: "CREATION_LOG", logs: `Checking out ${base}...\n` });
-				await execAsync(`git checkout ${base}`, { cwd: repoRoot });
-				dispatch({ type: "CREATION_LOG", logs: `Pulling ${base}...\n` });
-				await execAsync(`git pull origin ${base}`, { cwd: repoRoot });
-				dispatch({ type: "CREATION_LOG", logs: `Pulled latest ${base}\n` });
+				if (isDefaultBase) {
+					// Only checkout + pull for default branch (can't checkout a branch with an active worktree)
+					dispatch({ type: "CREATION_LOG", logs: `Checking out ${baseBranch}...\n` });
+					await execAsync(`git checkout ${baseBranch}`, { cwd: repoRoot });
+					dispatch({ type: "CREATION_LOG", logs: `Pulling ${baseBranch}...\n` });
+					await execAsync(`git pull origin ${baseBranch}`, { cwd: repoRoot });
+				}
+				dispatch({ type: "CREATION_LOG", logs: `Pulled latest ${baseBranch}\n` });
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : "Failed to pull latest";
 				dispatch({ type: "CREATION_LOG", logs: `Warning: ${msg}\n` });
 			}
 
 			// 2. Create worktree
-			dispatch({ type: "CREATION_LOG", logs: `Creating worktree ${branchName}...\n` });
-			const result = await createWorktree(branchName, base, repoRoot);
+			dispatch({
+				type: "CREATION_LOG",
+				logs: `Creating worktree ${branchName} from ${baseBranch}...\n`,
+			});
+			const result = await createWorktree(branchName, baseBranch, repoRoot);
 
 			if (!result.success || !result.path) {
 				dispatch({ type: "CREATION_ERROR", error: result.error ?? "Unknown error" });
@@ -492,6 +517,20 @@ export default function Dashboard() {
 		[launchAfterCreation],
 	);
 
+	const proceedAfterBaseSelect = useCallback(
+		(mode: "plan" | "implement", base?: string) => {
+			const repoRoot = repoRootRef.current;
+			if (!repoRoot) return;
+
+			if (hasInitScript(repoRoot)) {
+				dispatch({ type: "SETUP_CONFIRM_SHOW", mode });
+				return;
+			}
+			createAndLaunch(mode, false, base);
+		},
+		[createAndLaunch],
+	);
+
 	const doWork = useCallback(
 		(mode: "plan" | "implement") => {
 			const di = state.flatIssues[state.selectedIndex];
@@ -512,16 +551,28 @@ export default function Dashboard() {
 					exit();
 				}
 			} else {
-				// No worktree — ask about setup if init script exists
-				if (hasInitScript(repoRoot)) {
+				// No worktree — collect possible base branches
+				const defaultBranch = getDefaultBranch();
+				const baseOptions = [defaultBranch];
+				for (const fi of state.flatIssues) {
+					if (fi.worktree && !baseOptions.includes(fi.worktree.branch)) {
+						baseOptions.push(fi.worktree.branch);
+					}
+				}
+
+				if (baseOptions.length > 1) {
+					// Store mode in setupMode so we can retrieve it after base selection
 					dispatch({ type: "SETUP_CONFIRM_SHOW", mode });
+					// Immediately replace overlay with base-select (setupMode is preserved)
+					dispatch({ type: "BASE_SELECT_SHOW", options: baseOptions });
 					return;
 				}
-				// No init script — create directly
-				createAndLaunch(mode, false);
+
+				// Only default branch available — skip base select
+				proceedAfterBaseSelect(mode);
 			}
 		},
-		[state.flatIssues, state.selectedIndex, exit, launchWorkInTmux, createAndLaunch],
+		[state.flatIssues, state.selectedIndex, exit, launchWorkInTmux, proceedAfterBaseSelect],
 	);
 
 	// ── Commit flow ──────────────────────────────────────────────────
@@ -850,17 +901,49 @@ export default function Dashboard() {
 				return;
 			}
 
+			// Base select overlay
+			if (state.overlay === "base-select") {
+				const opts = state.baseSelectOptions;
+				if (input === "j" || key.downArrow) {
+					const next = Math.min(state.baseSelectIndex + 1, opts.length - 1);
+					dispatch({ type: "BASE_SELECT_MOVE", index: next });
+					return;
+				}
+				if (input === "k" || key.upArrow) {
+					const prev = Math.max(state.baseSelectIndex - 1, 0);
+					dispatch({ type: "BASE_SELECT_MOVE", index: prev });
+					return;
+				}
+				if (key.return) {
+					const chosen = opts[state.baseSelectIndex];
+					if (chosen) {
+						dispatch({ type: "BASE_SELECT_CONFIRM", chosen });
+						const mode = state.setupMode;
+						if (mode) {
+							proceedAfterBaseSelect(mode, chosen);
+						}
+					}
+					return;
+				}
+				if (key.escape) {
+					dispatch({ type: "BASE_SELECT_DONE" });
+					return;
+				}
+				return;
+			}
+
 			// Confirm setup overlay
 			if (state.overlay === "confirm-setup") {
 				const mode = state.setupMode;
+				const base = state.baseSelectChosen ?? undefined;
 				if (input === "y" && mode) {
 					dispatch({ type: "SETUP_CONFIRM_DONE" });
-					createAndLaunch(mode, true);
+					createAndLaunch(mode, true, base);
 					return;
 				}
 				if (input === "n" && mode) {
 					dispatch({ type: "SETUP_CONFIRM_DONE" });
-					createAndLaunch(mode, false);
+					createAndLaunch(mode, false, base);
 					return;
 				}
 				if (key.escape) {
@@ -1245,6 +1328,34 @@ export default function Dashboard() {
 						</Text>
 						<Text> </Text>
 						<Text dimColor>ESC to cancel</Text>
+					</Box>
+				</Box>
+			) : state.overlay === "base-select" ? (
+				<Box flexGrow={1} justifyContent="center" alignItems="center">
+					<Box
+						flexDirection="column"
+						borderStyle="round"
+						borderColor="cyan"
+						paddingX={3}
+						paddingY={1}
+					>
+						<Text bold>Select base branch:</Text>
+						<Text> </Text>
+						{state.baseSelectOptions.map((branch, idx) => {
+							const selected = idx === state.baseSelectIndex;
+							const defaultBranch = getDefaultBranch();
+							const label = branch === defaultBranch ? `${branch} (default)` : branch;
+							return (
+								<Text key={branch}>
+									<Text color={selected ? "cyan" : undefined} bold={selected}>
+										{selected ? "> " : "  "}
+										{label}
+									</Text>
+								</Text>
+							);
+						})}
+						<Text> </Text>
+						<Text dimColor>j/k to navigate, Enter to select, ESC to cancel</Text>
 					</Box>
 				</Box>
 			) : state.overlay === "confirm-delete" ? (

@@ -1,6 +1,6 @@
 {
 	"name": "santree",
-	"version": "0.2.8",
+	"version": "0.2.9",
 	"description": "Git worktree manager",
 	"license": "MIT",
 	"author": "Santiago Toscanini",

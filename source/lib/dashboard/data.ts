@@ -165,9 +165,35 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 			}),
 	);
 
-	// Group by project
+	// ── Compute parent-child relationships ──────────────────────────
+	// Build a map from worktree branch → DashboardIssue
+	const allIssues = [...enriched, ...orphans];
+	const branchToIssue = new Map<string, DashboardIssue>();
+	for (const di of allIssues) {
+		if (di.worktree) branchToIssue.set(di.worktree.branch, di);
+	}
+
+	// For each issue with a worktree, check if its base_branch matches another issue's branch
+	const childTicketIds = new Set<string>();
+	for (const di of allIssues) {
+		if (!di.worktree) continue;
+		const ticketId = di.issue.identifier;
+		const baseBranch = metadata[ticketId]?.base_branch;
+		if (!baseBranch) continue; // no custom base = branched from default, not a child
+
+		const parent = branchToIssue.get(baseBranch);
+		if (!parent || parent === di) continue;
+
+		di.parentTicketId = parent.issue.identifier;
+		if (!parent.children) parent.children = [];
+		parent.children.push(di);
+		childTicketIds.add(ticketId);
+	}
+
+	// Group by project (excluding children — they'll appear nested under parents)
 	const groupMap = new Map<string, DashboardIssue[]>();
 	for (const di of enriched) {
+		if (childTicketIds.has(di.issue.identifier)) continue;
 		const key = di.issue.projectName ?? "No Project";
 		const list = groupMap.get(key) ?? [];
 		list.push(di);
@@ -211,8 +237,9 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		};
 	});
 
-	// Append orphaned worktrees as a separate group at the bottom
-	if (orphans.length > 0) {
+	// Append orphaned worktrees as a separate group at the bottom (excluding children)
+	const topLevelOrphans = orphans.filter((di) => !childTicketIds.has(di.issue.identifier));
+	if (topLevelOrphans.length > 0) {
 		groups.push({
 			name: "Orphaned Worktrees",
 			id: null,
@@ -220,12 +247,25 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 				{
 					name: "Orphaned",
 					type: "orphaned",
-					issues: orphans,
+					issues: topLevelOrphans,
 				},
 			],
 		});
 	}
 
-	const flatIssues = groups.flatMap((g) => g.statusGroups.flatMap((sg) => sg.issues));
+	// Flatten with children inserted right after their parent
+	function flattenWithChildren(di: DashboardIssue): DashboardIssue[] {
+		const result = [di];
+		if (di.children) {
+			for (const child of di.children) {
+				result.push(...flattenWithChildren(child));
+			}
+		}
+		return result;
+	}
+
+	const flatIssues = groups.flatMap((g) =>
+		g.statusGroups.flatMap((sg) => sg.issues.flatMap(flattenWithChildren)),
+	);
 	return { groups, flatIssues };
 }

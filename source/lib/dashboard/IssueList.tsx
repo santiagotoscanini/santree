@@ -83,7 +83,7 @@ type ListRow =
 	| { kind: "columns" }
 	| { kind: "header"; name: string; count: number }
 	| { kind: "status-header"; name: string; type: string; count: number }
-	| { kind: "issue"; issue: DashboardIssue; flatIndex: number };
+	| { kind: "issue"; issue: DashboardIssue; flatIndex: number; depth: number };
 
 function buildRows(groups: ProjectGroup[], flatIssues: DashboardIssue[]): ListRow[] {
 	const rows: ListRow[] = [{ kind: "columns" }];
@@ -91,13 +91,27 @@ function buildRows(groups: ProjectGroup[], flatIssues: DashboardIssue[]): ListRo
 	const indexMap = new Map<string, number>();
 	flatIssues.forEach((di, i) => indexMap.set(di.issue.identifier, i));
 
+	function pushIssueWithChildren(di: DashboardIssue, depth: number) {
+		rows.push({
+			kind: "issue",
+			issue: di,
+			flatIndex: indexMap.get(di.issue.identifier) ?? -1,
+			depth,
+		});
+		if (di.children) {
+			for (const child of di.children) {
+				pushIssueWithChildren(child, depth + 1);
+			}
+		}
+	}
+
 	for (const group of groups) {
 		const totalIssues = group.statusGroups.reduce((sum, sg) => sum + sg.issues.length, 0);
 		rows.push({ kind: "header", name: group.name, count: totalIssues });
 		for (const sg of group.statusGroups) {
 			rows.push({ kind: "status-header", name: sg.name, type: sg.type, count: sg.issues.length });
 			for (const di of sg.issues) {
-				rows.push({ kind: "issue", issue: di, flatIndex: indexMap.get(di.issue.identifier) ?? -1 });
+				pushIssueWithChildren(di, 0);
 			}
 		}
 	}
@@ -170,7 +184,7 @@ export default function IssueList({
 						);
 					}
 
-					const { issue, flatIndex } = row;
+					const { issue, flatIndex, depth } = row;
 					const selected = flatIndex === selectedIndex;
 					const di = issue;
 					const sc = stateColor(di.issue.state.type, di.issue.state.name);
@@ -181,9 +195,11 @@ export default function IssueList({
 					const pr = prIndicator(di.pr);
 					const prio = priorityIndicator(di.issue.priority);
 					const cursor = selected ? ">" : " ";
+					const nestPrefix = depth > 0 ? "  ".repeat(depth - 1) + "└ " : "";
+					const adjustedTitleWidth = Math.max(titleMaxWidth - nestPrefix.length, 5);
 					const title =
-						di.issue.title.length > titleMaxWidth
-							? di.issue.title.slice(0, titleMaxWidth - 1) + "…"
+						di.issue.title.length > adjustedTitleWidth
+							? di.issue.title.slice(0, adjustedTitleWidth - 1) + "…"
 							: di.issue.title;
 
 					const bg = selected ? "#1e3a5f" : undefined;
@@ -201,10 +217,11 @@ export default function IssueList({
 								{prio.text}
 							</Text>
 							<Text backgroundColor={bg} color={selected ? "cyan" : undefined} bold={selected}>
+								{nestPrefix}
 								{di.issue.identifier.padEnd(10)}
 							</Text>
 							<Text backgroundColor={bg} color={selected ? "white" : undefined} bold={selected}>
-								{title.padEnd(titleMaxWidth)}
+								{title.padEnd(adjustedTitleWidth)}
 							</Text>
 							<Text
 								backgroundColor={bg}

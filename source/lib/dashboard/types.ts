@@ -30,6 +30,8 @@ export interface DashboardIssue {
 	pr: PRInfo | null;
 	checks: PRCheck[] | null;
 	reviews: PRReview[] | null;
+	parentTicketId?: string;
+	children?: DashboardIssue[];
 }
 
 export interface StatusGroup {
@@ -46,6 +48,7 @@ export interface ProjectGroup {
 
 export type ActionOverlay =
 	| "mode-select"
+	| "base-select"
 	| "confirm-delete"
 	| "confirm-setup"
 	| "commit"
@@ -102,6 +105,9 @@ export interface DashboardState {
 	prCreateBody: string | null;
 	prCreateTitle: string | null;
 	setupMode: "plan" | "implement" | null;
+	baseSelectOptions: string[];
+	baseSelectIndex: number;
+	baseSelectChosen: string | null;
 }
 
 export type DashboardAction =
@@ -140,7 +146,11 @@ export type DashboardAction =
 	| { type: "PR_CREATE_DONE"; url: string }
 	| { type: "PR_CREATE_CANCEL" }
 	| { type: "SETUP_CONFIRM_SHOW"; mode: "plan" | "implement" }
-	| { type: "SETUP_CONFIRM_DONE" };
+	| { type: "SETUP_CONFIRM_DONE" }
+	| { type: "BASE_SELECT_SHOW"; options: string[] }
+	| { type: "BASE_SELECT_MOVE"; index: number }
+	| { type: "BASE_SELECT_CONFIRM"; chosen: string }
+	| { type: "BASE_SELECT_DONE" };
 
 // ── State management ──────────────────────────────────────────────────
 
@@ -175,6 +185,9 @@ export const initialState: DashboardState = {
 	prCreateBody: null,
 	prCreateTitle: null,
 	setupMode: null,
+	baseSelectOptions: [],
+	baseSelectIndex: 0,
+	baseSelectChosen: null,
 };
 
 export function reducer(state: DashboardState, action: DashboardAction): DashboardState {
@@ -226,9 +239,21 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 		case "CREATION_LOG":
 			return { ...state, creationLogs: state.creationLogs + action.logs };
 		case "CREATION_DONE":
-			return { ...state, creatingForTicket: null, creationLogs: "", creationError: null };
+			return {
+				...state,
+				creatingForTicket: null,
+				creationLogs: "",
+				creationError: null,
+				baseSelectChosen: null,
+			};
 		case "CREATION_ERROR":
-			return { ...state, creationError: action.error, creatingForTicket: null, creationLogs: "" };
+			return {
+				...state,
+				creationError: action.error,
+				creatingForTicket: null,
+				creationLogs: "",
+				baseSelectChosen: null,
+			};
 		case "DELETE_START":
 			return { ...state, deletingForTicket: action.ticketId };
 		case "DELETE_DONE":
@@ -320,6 +345,29 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				...state,
 				overlay: null,
 				setupMode: null,
+			};
+		case "BASE_SELECT_SHOW":
+			return {
+				...state,
+				overlay: "base-select",
+				baseSelectOptions: action.options,
+				baseSelectIndex: 0,
+				baseSelectChosen: null,
+			};
+		case "BASE_SELECT_MOVE":
+			return { ...state, baseSelectIndex: action.index };
+		case "BASE_SELECT_CONFIRM":
+			return {
+				...state,
+				overlay: null,
+				baseSelectChosen: action.chosen,
+			};
+		case "BASE_SELECT_DONE":
+			return {
+				...state,
+				overlay: null,
+				baseSelectOptions: [],
+				baseSelectIndex: 0,
 			};
 		default:
 			return state;

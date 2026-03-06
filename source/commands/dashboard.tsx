@@ -26,14 +26,29 @@ import { renderPrompt, renderDiff } from "../lib/prompts.js";
 import * as os from "os";
 import type { DashboardIssue, ProjectGroup } from "../lib/dashboard/types.js";
 import { initialState, reducer } from "../lib/dashboard/types.js";
-import { loadDashboardData } from "../lib/dashboard/data.js";
+import { loadDashboardData, loadReviewsData } from "../lib/dashboard/data.js";
 import IssueList from "../lib/dashboard/IssueList.js";
 import DetailPanel from "../lib/dashboard/DetailPanel.js";
+import ReviewList from "../lib/dashboard/ReviewList.js";
+import ReviewDetailPanel from "../lib/dashboard/ReviewDetailPanel.js";
 import { CommitOverlay, PrCreateOverlay } from "../lib/dashboard/Overlays.js";
 
 export const description = "Interactive dashboard of your Linear issues";
 
 const execAsync = promisify(exec);
+
+const CLAUDE_VERSION = (() => {
+	const bin = path.join(os.homedir(), ".claude", "local", "claude");
+	try {
+		return (
+			execSync(`${bin} --version`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] })
+				.trim()
+				.split(" ")[0] ?? ""
+		);
+	} catch {
+		return "";
+	}
+})();
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -190,7 +205,7 @@ export default function Dashboard() {
 	const leftWidthRef = useRef(leftWidth);
 	leftWidthRef.current = leftWidth;
 	const rightWidth = columns - leftWidth - separatorWidth;
-	const contentHeight = rows - 1; // 1 header
+	const contentHeight = rows - 2; // 2 header rows (tabs + version)
 	const LIST_FOOTER_HEIGHT = 2;
 
 	// ── Data loading ──────────────────────────────────────────────────
@@ -206,8 +221,12 @@ export default function Dashboard() {
 		repoRootRef.current = repoRoot;
 
 		try {
-			const data = await loadDashboardData(repoRoot);
+			const [data, reviewData] = await Promise.all([
+				loadDashboardData(repoRoot),
+				loadReviewsData(repoRoot),
+			]);
 			dispatch({ type: "SET_DATA", ...data });
+			dispatch({ type: "SET_REVIEWS_DATA", flatReviews: reviewData.flatReviews });
 		} catch (e) {
 			dispatch({
 				type: "SET_ERROR",
@@ -258,6 +277,19 @@ export default function Dashboard() {
 				const lw = leftWidthRef.current;
 				const delta = button === 65 ? 3 : -3;
 
+				if (s.activeTab === "reviews") {
+					if (col <= lw) {
+						const maxIdx = s.flatReviews.length - 1;
+						if (maxIdx < 0) return;
+						const next = Math.max(0, Math.min(s.reviewSelectedIndex + delta, maxIdx));
+						dispatch({ type: "REVIEW_SELECT", index: next });
+					} else {
+						const next = Math.max(0, s.reviewDetailScrollOffset + delta);
+						dispatch({ type: "REVIEW_SCROLL_DETAIL", offset: next });
+					}
+					return;
+				}
+
 				if (col <= lw) {
 					// Scroll left pane (issue list)
 					const maxIdx = s.flatIssues.length - 1;
@@ -283,15 +315,27 @@ export default function Dashboard() {
 				return;
 			}
 
-			// Left-click press: select issue in left pane
+			// Left-click press: select item in left pane
 			const s = stateRef.current;
-			if (s.loading || s.error || s.flatIssues.length === 0) return;
+			if (s.loading || s.error) return;
 			if (col > lw) return;
 
 			// Row 1 is the header line, content starts at row 2 (1-based)
 			const contentRow = row - 2; // 0-based row within content area
 			if (contentRow < 0) return;
 
+			if (s.activeTab === "reviews") {
+				if (s.flatReviews.length === 0) return;
+				// Row 0 is column header, PRs start at row 1
+				const listRow = s.reviewListScrollOffset + contentRow;
+				const flatIdx = listRow - 1; // subtract column header
+				if (flatIdx >= 0 && flatIdx < s.flatReviews.length) {
+					dispatch({ type: "REVIEW_SELECT", index: flatIdx });
+				}
+				return;
+			}
+
+			if (s.flatIssues.length === 0) return;
 			const listRow = s.listScrollOffset + contentRow;
 			const flatIdx = getFlatIndexForListRow(s.groups, listRow);
 			if (flatIdx !== null && flatIdx >= 0 && flatIdx < s.flatIssues.length) {
@@ -340,6 +384,25 @@ export default function Dashboard() {
 			dispatch({ type: "SCROLL_LIST", offset });
 		}
 	}, [state.selectedIndex, state.groups, contentHeight, state.listScrollOffset]);
+
+	// ── Review list scroll tracking ──────────────────────────────────
+
+	useEffect(() => {
+		// Row index = 1 (column header) + flatIndex
+		const rowIdx = 1 + state.reviewSelectedIndex;
+		const maxVisible = contentHeight - LIST_FOOTER_HEIGHT;
+		let offset = state.reviewListScrollOffset;
+
+		if (rowIdx < offset) {
+			offset = Math.max(0, rowIdx - 1);
+		} else if (rowIdx >= offset + maxVisible) {
+			offset = rowIdx - maxVisible + 2;
+		}
+
+		if (offset !== state.reviewListScrollOffset) {
+			dispatch({ type: "REVIEW_SCROLL_LIST", offset });
+		}
+	}, [state.reviewSelectedIndex, state.flatReviews, contentHeight, state.reviewListScrollOffset]);
 
 	// ── Actions ───────────────────────────────────────────────────────
 
@@ -1006,10 +1069,237 @@ export default function Dashboard() {
 				return;
 			}
 
+			// Tab switching (only when no overlay is active)
+			if (key.tab) {
+				dispatch({
+					type: "SET_TAB",
+					tab: state.activeTab === "issues" ? "reviews" : "issues",
+				});
+				return;
+			}
+			if (input === "1") {
+				dispatch({ type: "SET_TAB", tab: "issues" });
+				return;
+			}
+			if (input === "2") {
+				dispatch({ type: "SET_TAB", tab: "reviews" });
+				return;
+			}
+
 			// Quit
 			if (input === "q") {
 				exit();
 				return;
+			}
+
+			// Refresh (shared across tabs)
+			if (input === "R") {
+				refresh();
+				return;
+			}
+
+			// ── Reviews tab keyboard ─────────────────────────────────
+			if (state.activeTab === "reviews") {
+				const maxReviewIdx = state.flatReviews.length - 1;
+
+				if (input === "j" || (key.downArrow && !key.shift)) {
+					const next = Math.min(state.reviewSelectedIndex + 1, maxReviewIdx);
+					dispatch({ type: "REVIEW_SELECT", index: next });
+					return;
+				}
+				if (input === "k" || (key.upArrow && !key.shift)) {
+					const prev = Math.max(state.reviewSelectedIndex - 1, 0);
+					dispatch({ type: "REVIEW_SELECT", index: prev });
+					return;
+				}
+				if (key.shift && key.downArrow) {
+					dispatch({
+						type: "REVIEW_SCROLL_DETAIL",
+						offset: state.reviewDetailScrollOffset + 3,
+					});
+					return;
+				}
+				if (key.shift && key.upArrow) {
+					dispatch({
+						type: "REVIEW_SCROLL_DETAIL",
+						offset: Math.max(0, state.reviewDetailScrollOffset - 3),
+					});
+					return;
+				}
+
+				const ri = state.flatReviews[state.reviewSelectedIndex];
+				if (!ri) return;
+
+				// Open PR in browser
+				if (input === "o") {
+					if (ri.pr.url) {
+						const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
+						execSync(`${openCmd} "${ri.pr.url}"`, { stdio: "ignore" });
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened PR in browser" });
+					}
+					return;
+				}
+
+				// Create worktree from PR branch (checkout for local testing)
+				if (input === "w") {
+					if (ri.worktree) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "Worktree already exists" });
+						return;
+					}
+					if (!ri.branch) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "No branch info" });
+						return;
+					}
+					const repoRoot = repoRootRef.current;
+					if (!repoRoot) return;
+					if (state.creatingForTicket) return;
+
+					const ticketId = extractTicketId(ri.branch);
+					if (!ticketId) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "No ticket ID in branch" });
+						return;
+					}
+
+					dispatch({ type: "CREATION_START", ticketId });
+
+					(async () => {
+						try {
+							dispatch({ type: "CREATION_LOG", logs: `Fetching ${ri.branch}...\n` });
+							await execAsync(`git fetch origin ${ri.branch}`, { cwd: repoRoot });
+
+							dispatch({ type: "CREATION_LOG", logs: `Creating worktree...\n` });
+							const result = await createWorktree(
+								ri.branch!,
+								ri.baseBranch ?? getDefaultBranch(),
+								repoRoot,
+							);
+
+							if (!result.success || !result.path) {
+								dispatch({ type: "CREATION_ERROR", error: result.error ?? "Unknown error" });
+								dispatch({ type: "SET_ACTION_MESSAGE", message: `Failed: ${result.error}` });
+								return;
+							}
+
+							dispatch({ type: "CREATION_LOG", logs: `Worktree at ${result.path}\n` });
+
+							// Run init script if available
+							if (hasInitScript(repoRoot)) {
+								const initScript = getInitScriptPath(repoRoot);
+								let canExecute = true;
+								try {
+									fs.accessSync(initScript, fs.constants.X_OK);
+								} catch {
+									dispatch({ type: "CREATION_LOG", logs: "init.sh not executable, skipping\n" });
+									canExecute = false;
+								}
+								if (canExecute) {
+									dispatch({ type: "CREATION_LOG", logs: "Running init.sh...\n" });
+									let lastLen = 0;
+									const initResult = await spawnAsync(initScript, [], {
+										cwd: result.path,
+										env: {
+											...process.env,
+											SANTREE_WORKTREE_PATH: result.path,
+											SANTREE_REPO_ROOT: repoRoot,
+										},
+										onOutput: (output) => {
+											const delta = output.slice(lastLen);
+											if (delta) dispatch({ type: "CREATION_LOG", logs: delta });
+											lastLen = output.length;
+										},
+									});
+									if (initResult.code !== 0) {
+										dispatch({
+											type: "CREATION_LOG",
+											logs: `\ninit.sh exited with code ${initResult.code}\n`,
+										});
+									} else {
+										dispatch({ type: "CREATION_LOG", logs: "\nSetup complete!\n" });
+									}
+								}
+							}
+
+							dispatch({ type: "CREATION_DONE" });
+							dispatch({ type: "SET_ACTION_MESSAGE", message: `Worktree created for ${ticketId}` });
+							// Open in editor automatically
+							const editor = process.env.SANTREE_EDITOR || "code";
+							spawn(editor, [result.path], { detached: true, stdio: "ignore" }).unref();
+							refresh();
+						} catch (e: any) {
+							dispatch({ type: "CREATION_ERROR", error: e?.message ?? "Failed" });
+						}
+					})();
+					return;
+				}
+
+				// Open in editor
+				if (input === "e") {
+					if (!ri.worktree) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "No worktree (press w to checkout)" });
+						return;
+					}
+					const editor = process.env.SANTREE_EDITOR || "code";
+					spawn(editor, [ri.worktree.path], { detached: true, stdio: "ignore" }).unref();
+					dispatch({ type: "SET_ACTION_MESSAGE", message: `Opened in ${editor}` });
+					return;
+				}
+
+				// AI Review in tmux
+				if (input === "r") {
+					if (!ri.worktree) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: "No worktree (press w to checkout first)",
+						});
+						return;
+					}
+					if (isInTmux()) {
+						const windowName = `review-${extractTicketId(ri.branch ?? "") ?? ri.pr.number}`;
+						try {
+							execSync(`tmux new-window -n "${windowName}" -c "${ri.worktree.path}"`, {
+								stdio: "ignore",
+							});
+							execSync("sleep 0.1", { stdio: "ignore" });
+							execSync(`tmux send-keys -t "${windowName}" "st pr review" Enter`, {
+								stdio: "ignore",
+							});
+							dispatch({ type: "SET_ACTION_MESSAGE", message: "Launched AI review in tmux" });
+						} catch {
+							dispatch({ type: "SET_ACTION_MESSAGE", message: "Failed to launch review" });
+						}
+					} else {
+						leaveAltScreen();
+						console.log(`SANTREE_CD:${ri.worktree.path}`);
+						exit();
+					}
+					return;
+				}
+
+				// Delete worktree
+				if (input === "d") {
+					if (!ri.worktree || !ri.branch) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "No worktree to remove" });
+						return;
+					}
+					const repoRoot = repoRootRef.current;
+					if (!repoRoot) return;
+					const ticketId = extractTicketId(ri.branch);
+					if (!ticketId) return;
+					dispatch({ type: "DELETE_START", ticketId });
+					const force = ri.worktree.dirty;
+					removeWorktree(ri.branch, repoRoot, force).then((result) => {
+						dispatch({ type: "DELETE_DONE" });
+						if (result.success) {
+							dispatch({ type: "SET_ACTION_MESSAGE", message: `Removed worktree` });
+							refresh();
+						} else {
+							dispatch({ type: "SET_ACTION_MESSAGE", message: `Failed: ${result.error}` });
+						}
+					});
+					return;
+				}
+
+				return; // prevent fallthrough to issues actions
 			}
 
 			const maxIndex = state.flatIssues.length - 1;
@@ -1230,12 +1520,6 @@ export default function Dashboard() {
 				dispatch({ type: "SET_OVERLAY", overlay: "confirm-delete" });
 				return;
 			}
-
-			// Refresh
-			if (input === "R") {
-				refresh();
-				return;
-			}
 		},
 		{ isActive: state.overlay !== "commit" || state.commitPhase !== "awaiting-message" },
 	);
@@ -1268,18 +1552,8 @@ export default function Dashboard() {
 		);
 	}
 
-	if (state.flatIssues.length === 0) {
-		return (
-			<Box width={columns} height={rows} flexDirection="column">
-				<Box justifyContent="center" alignItems="center" flexGrow={1} flexDirection="column">
-					<Text color="yellow">No active issues assigned to you</Text>
-					<Text dimColor>Press R to refresh or q to quit</Text>
-				</Box>
-			</Box>
-		);
-	}
-
 	const selectedIssue = state.flatIssues[state.selectedIndex] ?? null;
+	const selectedReview = state.flatReviews[state.reviewSelectedIndex] ?? null;
 
 	return (
 		<Box width={columns} height={rows} flexDirection="column">
@@ -1288,18 +1562,40 @@ export default function Dashboard() {
 				<Text bold color="cyan">
 					Santree Dashboard
 				</Text>
-				<Text dimColor> v{version}</Text>
 				<Text dimColor>
-					{" "}
-					({state.flatIssues.length} issues)
-					{state.refreshing ? " refreshing..." : ""}
+					{"  "}v{version}
 				</Text>
+				{CLAUDE_VERSION ? (
+					<Text dimColor>
+						{"  "}claude {CLAUDE_VERSION}
+					</Text>
+				) : null}
+				<Text dimColor>{state.refreshing ? "  refreshing..." : ""}</Text>
 				{state.actionMessage && (
 					<Text color="yellow">
 						{"  "}
 						{state.actionMessage}
 					</Text>
 				)}
+			</Box>
+
+			{/* Tab bar */}
+			<Box>
+				<Text
+					bold={state.activeTab === "issues"}
+					color={state.activeTab === "issues" ? "cyan" : undefined}
+					dimColor={state.activeTab !== "issues"}
+				>
+					{state.activeTab === "issues" ? "\u25b8 " : "  "}1 Issues ({state.flatIssues.length})
+				</Text>
+				<Text>{"   "}</Text>
+				<Text
+					bold={state.activeTab === "reviews"}
+					color={state.activeTab === "reviews" ? "cyan" : undefined}
+					dimColor={state.activeTab !== "reviews"}
+				>
+					{state.activeTab === "reviews" ? "\u25b8 " : "  "}2 Reviews ({state.flatReviews.length})
+				</Text>
 			</Box>
 
 			{/* Main content */}
@@ -1421,16 +1717,35 @@ export default function Dashboard() {
 				<Box flexGrow={1}>
 					{/* Left pane */}
 					<Box width={leftWidth}>
-						<IssueList
-							groups={state.groups}
-							flatIssues={state.flatIssues}
-							selectedIndex={state.selectedIndex}
-							scrollOffset={state.listScrollOffset}
-							height={contentHeight}
-							width={leftWidth}
-							creatingForTicket={state.creatingForTicket}
-							deletingForTicket={state.deletingForTicket}
-						/>
+						{state.activeTab === "reviews" ? (
+							<ReviewList
+								flatReviews={state.flatReviews}
+								selectedIndex={state.reviewSelectedIndex}
+								scrollOffset={state.reviewListScrollOffset}
+								height={contentHeight}
+								width={leftWidth}
+							/>
+						) : state.flatIssues.length === 0 ? (
+							<Box
+								width={leftWidth}
+								height={contentHeight}
+								justifyContent="center"
+								alignItems="center"
+							>
+								<Text color="yellow">No active issues</Text>
+							</Box>
+						) : (
+							<IssueList
+								groups={state.groups}
+								flatIssues={state.flatIssues}
+								selectedIndex={state.selectedIndex}
+								scrollOffset={state.listScrollOffset}
+								height={contentHeight}
+								width={leftWidth}
+								creatingForTicket={state.creatingForTicket}
+								deletingForTicket={state.deletingForTicket}
+							/>
+						)}
 					</Box>
 
 					{/* Separator */}
@@ -1444,7 +1759,28 @@ export default function Dashboard() {
 
 					{/* Right pane */}
 					<Box width={rightWidth}>
-						{state.overlay === "commit" ? (
+						{state.activeTab === "reviews" && state.creatingForTicket ? (
+							<Box flexDirection="column" width={rightWidth} height={contentHeight}>
+								<Text color="yellow" bold>
+									Setting up worktree for {state.creatingForTicket}...
+								</Text>
+								{state.creationLogs
+									.split("\n")
+									.slice(-(contentHeight - 1))
+									.map((line, i) => (
+										<Box key={i}>
+											<Text dimColor>{line}</Text>
+										</Box>
+									))}
+							</Box>
+						) : state.activeTab === "reviews" ? (
+							<ReviewDetailPanel
+								item={selectedReview}
+								scrollOffset={state.reviewDetailScrollOffset}
+								height={contentHeight}
+								width={rightWidth}
+							/>
+						) : state.overlay === "commit" ? (
 							<CommitOverlay
 								width={rightWidth}
 								height={contentHeight}

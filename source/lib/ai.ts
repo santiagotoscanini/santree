@@ -201,6 +201,10 @@ export function launchAgent(
 
 	const args: string[] = [];
 
+	if (process.env.SANTREE_SKIP_PERMISSIONS) {
+		args.push("--dangerously-skip-permissions");
+	}
+
 	if (opts?.planMode) {
 		args.push("--permission-mode", "plan");
 	}
@@ -234,10 +238,16 @@ export function runAgent(prompt: string): RunAgentResult {
 		throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
 	}
 
-	const result = spawnSync(bin, ["-p", "--output-format", "text", "--", promptArg(prompt)], {
-		encoding: "utf-8",
-		maxBuffer: 10 * 1024 * 1024,
-	});
+	const skipPerms = process.env.SANTREE_SKIP_PERMISSIONS ? ["--dangerously-skip-permissions"] : [];
+
+	const result = spawnSync(
+		bin,
+		[...skipPerms, "-p", "--output-format", "text", "--", promptArg(prompt)],
+		{
+			encoding: "utf-8",
+			maxBuffer: 10 * 1024 * 1024,
+		},
+	);
 
 	return {
 		success: result.status === 0,

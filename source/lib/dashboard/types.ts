@@ -1,4 +1,4 @@
-import type { PRInfo, PRCheck, PRReview } from "../github.js";
+import type { PRInfo, PRCheck, PRReview, PRConversationComment, SearchPR } from "../github.js";
 
 export interface LinearAssignedIssue {
 	identifier: string;
@@ -46,6 +46,24 @@ export interface ProjectGroup {
 	statusGroups: StatusGroup[];
 }
 
+export type ReviewPR = SearchPR;
+
+export interface EnrichedReviewPR {
+	pr: SearchPR;
+	body: string | null;
+	branch: string | null;
+	baseBranch: string | null;
+	additions: number;
+	deletions: number;
+	changedFiles: number;
+	checks: PRCheck[] | null;
+	reviews: PRReview[] | null;
+	comments: PRConversationComment[] | null;
+	worktree: WorktreeInfo | null;
+}
+
+export type DashboardTab = "issues" | "reviews";
+
 export type ActionOverlay =
 	| "mode-select"
 	| "base-select"
@@ -75,11 +93,16 @@ export type PrCreatePhase =
 	| "error";
 
 export interface DashboardState {
+	activeTab: DashboardTab;
 	groups: ProjectGroup[];
 	flatIssues: DashboardIssue[];
 	selectedIndex: number;
 	listScrollOffset: number;
 	detailScrollOffset: number;
+	flatReviews: EnrichedReviewPR[];
+	reviewSelectedIndex: number;
+	reviewListScrollOffset: number;
+	reviewDetailScrollOffset: number;
 	loading: boolean;
 	refreshing: boolean;
 	error: string | null;
@@ -150,16 +173,26 @@ export type DashboardAction =
 	| { type: "BASE_SELECT_SHOW"; options: string[] }
 	| { type: "BASE_SELECT_MOVE"; index: number }
 	| { type: "BASE_SELECT_CONFIRM"; chosen: string }
-	| { type: "BASE_SELECT_DONE" };
+	| { type: "BASE_SELECT_DONE" }
+	| { type: "SET_TAB"; tab: DashboardTab }
+	| { type: "SET_REVIEWS_DATA"; flatReviews: EnrichedReviewPR[] }
+	| { type: "REVIEW_SELECT"; index: number }
+	| { type: "REVIEW_SCROLL_LIST"; offset: number }
+	| { type: "REVIEW_SCROLL_DETAIL"; offset: number };
 
 // ── State management ──────────────────────────────────────────────────
 
 export const initialState: DashboardState = {
+	activeTab: "issues",
 	groups: [],
 	flatIssues: [],
 	selectedIndex: 0,
 	listScrollOffset: 0,
 	detailScrollOffset: 0,
+	flatReviews: [],
+	reviewSelectedIndex: 0,
+	reviewListScrollOffset: 0,
+	reviewDetailScrollOffset: 0,
 	loading: true,
 	refreshing: false,
 	error: null,
@@ -369,6 +402,28 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				baseSelectOptions: [],
 				baseSelectIndex: 0,
 			};
+		case "SET_TAB":
+			return { ...state, activeTab: action.tab };
+		case "SET_REVIEWS_DATA": {
+			const prevNum = state.flatReviews[state.reviewSelectedIndex]?.pr.number;
+			let newIdx = 0;
+			if (prevNum !== undefined) {
+				const found = action.flatReviews.findIndex((p) => p.pr.number === prevNum);
+				if (found >= 0) newIdx = found;
+			}
+			return {
+				...state,
+				flatReviews: action.flatReviews,
+				reviewSelectedIndex: newIdx,
+				reviewDetailScrollOffset: 0,
+			};
+		}
+		case "REVIEW_SELECT":
+			return { ...state, reviewSelectedIndex: action.index, reviewDetailScrollOffset: 0 };
+		case "REVIEW_SCROLL_LIST":
+			return { ...state, reviewListScrollOffset: action.offset };
+		case "REVIEW_SCROLL_DETAIL":
+			return { ...state, reviewDetailScrollOffset: action.offset };
 		default:
 			return state;
 	}

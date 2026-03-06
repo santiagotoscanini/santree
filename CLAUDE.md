@@ -137,6 +137,12 @@ Full-screen interactive dashboard showing all Linear issues assigned to the user
 - **Error resilience**: commands degrade gracefully when integrations (gh, Linear API) are unavailable
 - **Prompt-driven AI**: Nunjucks templates in `prompts/` generate context-rich prompts passed to Claude CLI
 
+## Environment Variables
+
+| Variable | Effect |
+|---|---|
+| `SANTREE_SKIP_PERMISSIONS` | When set (any truthy value), passes `--dangerously-skip-permissions` to all Claude CLI invocations (`launchAgent` and `runAgent` in `lib/ai.ts`). Disables permission prompts for worktree-scoped automation. |
+
 ## External Dependencies
 
 Required: Node.js >= 20, Git, GitHub CLI (`gh`), Claude Code CLI (`claude`)

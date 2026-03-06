@@ -297,3 +297,83 @@ export interface PRReviewComment {
 	in_reply_to_id?: number;
 	id: number;
 }
+
+export interface SearchPR {
+	number: number;
+	title: string;
+	repository: { nameWithOwner: string };
+	author: { login: string };
+	url: string;
+	createdAt: string;
+	updatedAt: string;
+	isDraft: boolean;
+	commentsCount: number;
+}
+
+export interface PRViewDetail {
+	body: string;
+	headRefName: string;
+	baseRefName: string;
+	additions: number;
+	deletions: number;
+	changedFiles: number;
+}
+
+/**
+ * Fetch detailed PR info by number (async).
+ * Returns body, branch names, and change stats.
+ */
+export async function getPRViewAsync(prNumber: number): Promise<PRViewDetail | null> {
+	try {
+		const { stdout } = await execAsync(
+			`gh pr view ${prNumber} --json body,headRefName,baseRefName,additions,deletions,changedFiles`,
+		);
+		return JSON.parse(stdout);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Get the current repo's `owner/name` from the GitHub CLI.
+ * Returns null if not in a GitHub repo or gh is unavailable.
+ */
+export async function getRepoNameAsync(): Promise<string | null> {
+	try {
+		const { stdout } = await execAsync(`gh repo view --json nameWithOwner --jq .nameWithOwner`);
+		return stdout.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Fetch open PRs where the current user's review is still pending (async).
+ * Uses the GitHub search API with `user-review-requested:@me` which excludes
+ * PRs where you've already submitted a review (unlike `review-requested` which
+ * includes stale requests). Scoped to a specific repo.
+ * Returns an empty array on failure.
+ */
+export async function getReviewRequestedPRsAsync(repo: string): Promise<SearchPR[]> {
+	try {
+		const { stdout } = await execAsync(
+			`gh api 'search/issues?q=is:open+is:pr+user-review-requested:@me+archived:false+repo:${repo}&per_page=100' --jq '.items'`,
+		);
+		const items: any[] = JSON.parse(stdout);
+		return items.map((item) => ({
+			number: item.number,
+			title: item.title,
+			repository: {
+				nameWithOwner: repo,
+			},
+			author: { login: item.user?.login ?? "unknown" },
+			url: item.html_url ?? item.url,
+			createdAt: item.created_at,
+			updatedAt: item.updated_at,
+			isDraft: item.draft ?? false,
+			commentsCount: item.comments ?? 0,
+		}));
+	} catch {
+		return [];
+	}
+}

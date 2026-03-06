@@ -13,11 +13,15 @@ import {
 	getPRInfoAsync,
 	getPRChecksAsync,
 	getPRReviewsAsync,
+	getPRConversationCommentsAsync,
+	getPRViewAsync,
+	getReviewRequestedPRsAsync,
+	getRepoNameAsync,
 	type PRCheck,
 	type PRReview,
 } from "../github.js";
 import { fetchAssignedIssues } from "../linear.js";
-import type { DashboardIssue, ProjectGroup, StatusGroup } from "./types.js";
+import type { DashboardIssue, ProjectGroup, StatusGroup, EnrichedReviewPR } from "./types.js";
 
 export async function loadDashboardData(repoRoot: string): Promise<{
 	groups: ProjectGroup[];
@@ -268,4 +272,81 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		g.statusGroups.flatMap((sg) => sg.issues.flatMap(flattenWithChildren)),
 	);
 	return { groups, flatIssues };
+}
+
+export async function loadReviewsData(repoRoot: string): Promise<{
+	flatReviews: EnrichedReviewPR[];
+}> {
+	const repo = await getRepoNameAsync();
+	if (!repo) return { flatReviews: [] };
+
+	const prs = await getReviewRequestedPRsAsync(repo);
+	prs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+	// Build worktree map for matching PR branches to local worktrees
+	const worktrees = listWorktrees();
+	const branchToWt = new Map<string, { path: string; branch: string }>();
+	for (const wt of worktrees) {
+		if (wt.branch) branchToWt.set(wt.branch, { path: wt.path, branch: wt.branch });
+	}
+	const metadata = readAllMetadata(repoRoot);
+
+	// Enrich each PR in parallel
+	const enriched: EnrichedReviewPR[] = await Promise.all(
+		prs.map(async (pr) => {
+			const [view, checks, reviews, comments] = await Promise.all([
+				getPRViewAsync(pr.number),
+				getPRChecksAsync(String(pr.number)),
+				getPRReviewsAsync(String(pr.number)),
+				getPRConversationCommentsAsync(String(pr.number)),
+			]);
+
+			// Check if we have a local worktree for this PR's branch
+			let worktreeInfo = null;
+			const branch = view?.headRefName ?? null;
+			if (branch) {
+				const wt = branchToWt.get(branch);
+				if (wt) {
+					const ticketId = extractTicketId(branch);
+					const base = getBaseBranch(branch);
+					const [gitStatusOutput, ahead] = await Promise.all([
+						getGitStatusAsync(wt.path),
+						getCommitsAheadAsync(wt.path, base),
+					]);
+					let sessState = ticketId ? readSessionState(repoRoot, ticketId) : null;
+					if (sessState && ticketId && !isSessionAliveInTmux(ticketId)) {
+						clearSessionState(repoRoot, ticketId);
+						sessState = null;
+					}
+					const ss = sessState?.state ?? null;
+					worktreeInfo = {
+						path: wt.path,
+						branch: wt.branch,
+						dirty: Boolean(gitStatusOutput),
+						commitsAhead: ahead,
+						sessionId: ticketId ? (metadata[ticketId]?.session_id ?? null) : null,
+						gitStatus: gitStatusOutput,
+						sessionState: ss === "exited" ? null : ss,
+						sessionMessage: sessState?.message ?? null,
+					};
+				}
+			}
+
+			return {
+				pr,
+				body: view?.body ?? null,
+				branch,
+				baseBranch: view?.baseRefName ?? null,
+				additions: view?.additions ?? 0,
+				deletions: view?.deletions ?? 0,
+				changedFiles: view?.changedFiles ?? 0,
+				checks,
+				reviews,
+				comments,
+				worktree: worktreeInfo,
+			};
+		}),
+	);
+
+	return { flatReviews: enriched };
 }

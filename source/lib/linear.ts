@@ -169,14 +169,20 @@ export async function startOAuthFlow(): Promise<{
 
 			const authUrl = `${LINEAR_AUTHORIZE_URL}?${params.toString()}`;
 
-			// Open browser
+			// Try to open browser, fall back to printing URL
 			const openCmd =
 				process.platform === "darwin"
 					? "open"
 					: process.platform === "win32"
 						? "start"
 						: "xdg-open";
-			exec(`${openCmd} "${authUrl}"`);
+			exec(`${openCmd} "${authUrl}"`, (err) => {
+				if (err) {
+					console.error(
+						`\nCouldn't open browser automatically. Open this URL manually:\n${authUrl}\n`,
+					);
+				}
+			});
 		});
 
 		// Timeout after 2 minutes

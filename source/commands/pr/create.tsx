@@ -31,8 +31,9 @@ import {
 	getPRTemplate,
 	type PRInfo,
 } from "../../lib/github.js";
-import { renderPrompt, renderDiff } from "../../lib/prompts.js";
+import { renderPrompt, renderDiff, renderTicket } from "../../lib/prompts.js";
 import { runAgent } from "../../lib/ai.js";
+import { getTicketContent } from "../../lib/linear.js";
 
 const execAsync = promisify(exec);
 
@@ -85,7 +86,7 @@ export default function PR({ options }: Props) {
 		openPR();
 	}, [pendingCreate]);
 
-	function openPR() {
+	async function openPR() {
 		if (!branch || !baseBranch) return;
 
 		const title = getFirstCommitMessage(baseBranch) ?? branch;
@@ -104,6 +105,17 @@ export default function PR({ options }: Props) {
 			}
 
 			const ticketId = extractTicketId(branch);
+			const mainRepoRoot = findMainRepoRoot();
+
+			// Fetch ticket content (downloads images for Linear tickets)
+			let ticketContent: string | undefined;
+			if (ticketId && mainRepoRoot) {
+				const ticket = await getTicketContent(ticketId, mainRepoRoot);
+				if (ticket) {
+					ticketContent = renderTicket(ticket);
+				}
+			}
+
 			const diffContent = renderDiff({
 				base_branch: baseBranch,
 				commit_log: getCommitLog(baseBranch),
@@ -115,10 +127,11 @@ export default function PR({ options }: Props) {
 				pr_template: prTemplate,
 				diff_content: diffContent,
 				ticket_id: ticketId ?? "",
+				ticket_content: ticketContent,
 				branch_name: branch,
 			});
 
-			const result = runAgent(prompt);
+			const result = runAgent(prompt, { allowedTools: ["Read"] });
 
 			if (!result.success) {
 				setStatus("error");

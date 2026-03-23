@@ -22,7 +22,8 @@ import { run, spawnAsync } from "../lib/exec.js";
 import { resolveAgentBinary } from "../lib/ai.js";
 import { extractTicketId } from "../lib/git.js";
 import { getPRTemplate } from "../lib/github.js";
-import { renderPrompt, renderDiff } from "../lib/prompts.js";
+import { renderPrompt, renderDiff, renderTicket } from "../lib/prompts.js";
+import { getTicketContent } from "../lib/linear.js";
 import * as os from "os";
 import type { DashboardIssue, ProjectGroup } from "../lib/dashboard/types.js";
 import { initialState, reducer } from "../lib/dashboard/types.js";
@@ -790,6 +791,17 @@ export default function Dashboard() {
 				dispatch({ type: "PR_CREATE_PHASE", phase: "filling" });
 
 				const ticketId = extractTicketId(s.prCreateBranch) ?? "";
+				const mainRepoRoot = findMainRepoRoot();
+
+				// Fetch ticket content (downloads images for Linear tickets)
+				let ticketContent: string | undefined;
+				if (ticketId && mainRepoRoot) {
+					const ticket = await getTicketContent(ticketId, mainRepoRoot);
+					if (ticket) {
+						ticketContent = renderTicket(ticket);
+					}
+				}
+
 				const commitLog = run(`git log ${base}..HEAD --format="- %s"`, { cwd }) || null;
 				const diffStat = run(`git diff ${base}..HEAD --stat`, { cwd }) || null;
 				const diff = run(`git diff ${base}..HEAD`, { cwd, maxBuffer: 10 * 1024 * 1024 }) || null;
@@ -805,13 +817,18 @@ export default function Dashboard() {
 					pr_template: prTemplate,
 					diff_content: diffContent,
 					ticket_id: ticketId,
+					ticket_content: ticketContent,
 					branch_name: s.prCreateBranch,
 				});
 
 				// Pass prompt via stdin instead of temp file
-				const agentResult = await spawnAsync(bin, ["-p", "--output-format", "text"], {
-					stdin: prompt,
-				});
+				const agentResult = await spawnAsync(
+					bin,
+					["-p", "--output-format", "text", "--allowedTools", "Read"],
+					{
+						stdin: prompt,
+					},
+				);
 
 				const body = agentResult.output.trim();
 

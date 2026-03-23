@@ -232,17 +232,18 @@ export interface RunAgentResult {
  * Passes prompt directly or via temp file if too large for OS arg limit.
  * Throws if claude CLI is not found.
  */
-export function runAgent(prompt: string): RunAgentResult {
+export function runAgent(prompt: string, opts?: { allowedTools?: string[] }): RunAgentResult {
 	const bin = resolveAgentBinary();
 	if (!bin) {
 		throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
 	}
 
 	const skipPerms = process.env.SANTREE_SKIP_PERMISSIONS ? ["--dangerously-skip-permissions"] : [];
+	const toolArgs = opts?.allowedTools?.length ? ["--allowedTools", ...opts.allowedTools] : [];
 
 	const result = spawnSync(
 		bin,
-		[...skipPerms, "-p", "--output-format", "text", "--", promptArg(prompt)],
+		[...skipPerms, ...toolArgs, "-p", "--output-format", "text", "--", promptArg(prompt)],
 		{
 			encoding: "utf-8",
 			maxBuffer: 10 * 1024 * 1024,

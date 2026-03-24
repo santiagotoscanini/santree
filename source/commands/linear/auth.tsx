@@ -175,6 +175,18 @@ export default function LinearAuth({ options }: Props) {
 					setStatus("done");
 					return;
 				}
+				// Token expired and refresh failed — re-authenticate
+				setStatus("authenticating");
+				const result = await startOAuthFlow();
+				if (!result) {
+					setError("Authentication failed or timed out. Please try again.");
+					setStatus("error");
+					return;
+				}
+				setRepoLinearOrg(repoRoot, result.orgSlug);
+				setMessage(`Re-authenticated as ${result.orgName} (${result.orgSlug})`);
+				setStatus("done");
+				return;
 			}
 
 			// Check for existing authenticated orgs

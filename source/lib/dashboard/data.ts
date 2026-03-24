@@ -33,7 +33,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		Promise.resolve(listWorktrees()),
 	]);
 
-	if (!issues) throw new Error("Failed to fetch Linear issues. Check authentication.");
+	if (!issues) throw new Error("Failed to authenticate with Linear. Run: santree linear auth");
 
 	// Build worktree map: ticketId -> worktree info
 	const wtMap = new Map<string, { path: string; branch: string }>();

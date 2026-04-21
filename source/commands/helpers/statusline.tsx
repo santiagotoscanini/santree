@@ -142,6 +142,17 @@ function getGitChanges(cwd: string): {
 	};
 }
 
+// Build a progress bar for context usage
+function formatContextUsage(usedPercentage: number): string {
+	const used = Math.round(usedPercentage);
+	const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
+	const width = 20;
+	const filled = Math.round((used * width) / 100);
+	const empty = width - filled;
+	const bar = "▓".repeat(filled) + "░".repeat(empty);
+	return `${color}[${bar}] ${used}%${c.reset}`;
+}
+
 // Format changes compactly
 function formatChanges(changes: { staged: number; unstaged: number; untracked: number }): string {
 	const parts: string[] = [];
@@ -193,9 +204,7 @@ function buildSantreeStatusline(
 
 	// Context usage %
 	if (usedPercentage !== null) {
-		const used = Math.round(usedPercentage);
-		const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
-		parts.push(`${color}${used}%${c.reset}`);
+		parts.push(formatContextUsage(usedPercentage));
 	}
 
 	return parts.join(" | ");
@@ -229,9 +238,7 @@ function buildGitStatusline(
 
 	// Context usage %
 	if (usedPercentage !== null) {
-		const used = Math.round(usedPercentage);
-		const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
-		parts.push(`${color}${used}%${c.reset}`);
+		parts.push(formatContextUsage(usedPercentage));
 	}
 
 	return parts.join(" | ");
@@ -256,9 +263,7 @@ function buildPlainStatusline(
 
 	// Context usage %
 	if (usedPercentage !== null) {
-		const used = Math.round(usedPercentage);
-		const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
-		parts.push(`${color}${used}%${c.reset}`);
+		parts.push(formatContextUsage(usedPercentage));
 	}
 
 	return parts.join(" | ");

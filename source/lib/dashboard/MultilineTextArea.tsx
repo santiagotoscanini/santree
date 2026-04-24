@@ -23,14 +23,16 @@ export function MultilineTextArea({
 }: MultilineTextAreaProps) {
 	useInput(
 		(input, key) => {
-			if (key.escape) {
-				onCancel();
+			// Ctrl+D submits
+			if (key.ctrl && input === "d") {
+				onSubmit();
 				return;
 			}
 
-			// Ctrl+D submits (empty or not)
-			if (key.ctrl && input === "d") {
-				onSubmit();
+			// ESC cancels. Parent disables SGR mouse tracking while this overlay is
+			// mounted so clicks can no longer masquerade as ESC.
+			if (key.escape) {
+				onCancel();
 				return;
 			}
 
@@ -39,22 +41,25 @@ export function MultilineTextArea({
 				return;
 			}
 
-			// Swallow arrow/tab navigation to avoid stray characters
+			// Swallow navigation keys — this is an append-only text area.
 			if (key.upArrow || key.downArrow || key.leftArrow || key.rightArrow || key.tab) return;
 
-			// Meta combos — ignore
-			if (key.meta || (key.ctrl && !key.return)) return;
-
-			// Enter inserts a newline. Some terminals deliver "\r" as input with
-			// key.return; we always normalize to "\n".
+			// Enter inserts a newline. MUST run before the meta/ctrl swallow below so
+			// Option+Enter and Ctrl+Enter also insert newlines. When Ink delivers a
+			// paste as one chunk, `input` may carry embedded content alongside the
+			// \r — normalize and append the whole thing instead of dropping it.
 			if (key.return) {
-				onChange(value + "\n");
+				const chunk = input ? input.replace(/\r\n?/g, "\n") : "\n";
+				onChange(value + chunk);
 				return;
 			}
 
+			// Swallow remaining modifier combos.
+			if (key.ctrl || key.meta) return;
+
 			if (!input) return;
 
-			// Pasted content may embed \r or \r\n — normalize to \n
+			// Pasted content may embed \r or \r\n — normalize to \n.
 			const normalized = input.replace(/\r\n?/g, "\n");
 			onChange(value + normalized);
 		},
@@ -75,15 +80,15 @@ export function MultilineTextArea({
 			minHeight={height + 2}
 		>
 			{isEmpty && placeholder ? (
-				<Box>
-					<Text dimColor>{placeholder}</Text>
+				<Box minHeight={1}>
 					<Text color="cyan">█</Text>
+					<Text dimColor>{placeholder}</Text>
 				</Box>
 			) : (
 				visibleLines.map((line, i) => {
 					const isLast = i === visibleLines.length - 1;
 					return (
-						<Box key={i}>
+						<Box key={i} minHeight={1}>
 							<Text>{line}</Text>
 							{isLast && focus ? <Text color="cyan">█</Text> : null}
 						</Box>

@@ -406,6 +406,19 @@ export default function Dashboard() {
 		}
 	}, [state.reviewSelectedIndex, state.flatReviews, contentHeight, state.reviewListScrollOffset]);
 
+	// ── Mouse tracking pause ─────────────────────────────────────────
+	// The MultilineTextArea captures ESC for cancel. With SGR mouse tracking on,
+	// every click emits `\x1b[<btn;col;rowM` — Ink reads the leading ESC and fires
+	// key.escape, dismissing the overlay. Disable mouse tracking while the
+	// context-input overlay is mounted; restore on unmount.
+	useEffect(() => {
+		if (state.overlay !== "context-input") return;
+		process.stdout.write("\x1b[?1002l\x1b[?1006l");
+		return () => {
+			process.stdout.write("\x1b[?1002h\x1b[?1006h");
+		};
+	}, [state.overlay]);
+
 	// ── Actions ───────────────────────────────────────────────────────
 
 	const launchWorkInTmux = useCallback(
@@ -1720,7 +1733,7 @@ export default function Dashboard() {
 							onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
 							width={Math.min(columns - 8, 100)}
 							height={10}
-							placeholder="Type or paste additional context — Enter for newline, Ctrl+D to launch, ESC to cancel"
+							placeholder="Type or paste extra context…"
 						/>
 						<Text> </Text>
 						<Text dimColor>

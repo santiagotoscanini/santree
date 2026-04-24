@@ -89,6 +89,7 @@ export type PrCreatePhase =
 	| "pushing"
 	| "filling"
 	| "review"
+	| "confirm"
 	| "creating"
 	| "done"
 	| "error";
@@ -134,6 +135,7 @@ export interface DashboardState {
 	baseSelectChosen: string | null;
 	contextInputValue: string;
 	contextInputMode: "plan" | "implement" | null;
+	contextInputPhase: "editing" | "review";
 }
 
 export type DashboardAction =
@@ -169,6 +171,9 @@ export type DashboardAction =
 	| { type: "PR_CREATE_PHASE"; phase: PrCreatePhase }
 	| { type: "PR_CREATE_ERROR"; error: string }
 	| { type: "PR_CREATE_REVIEW"; body: string; title: string }
+	| { type: "PR_CREATE_BODY_CHANGE"; body: string }
+	| { type: "PR_CREATE_CONFIRM" }
+	| { type: "PR_CREATE_EDIT" }
 	| { type: "PR_CREATE_DONE"; url: string }
 	| { type: "PR_CREATE_CANCEL" }
 	| { type: "SETUP_CONFIRM_SHOW"; mode: "plan" | "implement" }
@@ -184,6 +189,8 @@ export type DashboardAction =
 	| { type: "REVIEW_SCROLL_DETAIL"; offset: number }
 	| { type: "CONTEXT_INPUT_SHOW"; mode: "plan" | "implement" }
 	| { type: "CONTEXT_INPUT_CHANGE"; value: string }
+	| { type: "CONTEXT_INPUT_REVIEW" }
+	| { type: "CONTEXT_INPUT_EDIT" }
 	| { type: "CONTEXT_INPUT_DONE" };
 
 // ── State management ──────────────────────────────────────────────────
@@ -229,6 +236,7 @@ export const initialState: DashboardState = {
 	baseSelectChosen: null,
 	contextInputValue: "",
 	contextInputMode: null,
+	contextInputPhase: "editing",
 };
 
 export function reducer(state: DashboardState, action: DashboardAction): DashboardState {
@@ -354,6 +362,12 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				prCreateTitle: action.title,
 				detailScrollOffset: 0,
 			};
+		case "PR_CREATE_BODY_CHANGE":
+			return { ...state, prCreateBody: action.body };
+		case "PR_CREATE_CONFIRM":
+			return { ...state, prCreatePhase: "confirm" };
+		case "PR_CREATE_EDIT":
+			return { ...state, prCreatePhase: "review" };
 		case "PR_CREATE_DONE":
 			return {
 				...state,
@@ -438,15 +452,21 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				overlay: "context-input",
 				contextInputMode: action.mode,
 				contextInputValue: "",
+				contextInputPhase: "editing",
 			};
 		case "CONTEXT_INPUT_CHANGE":
 			return { ...state, contextInputValue: action.value };
+		case "CONTEXT_INPUT_REVIEW":
+			return { ...state, contextInputPhase: "review" };
+		case "CONTEXT_INPUT_EDIT":
+			return { ...state, contextInputPhase: "editing" };
 		case "CONTEXT_INPUT_DONE":
 			return {
 				...state,
 				overlay: null,
 				contextInputMode: null,
 				contextInputValue: "",
+				contextInputPhase: "editing",
 			};
 		default:
 			return state;

@@ -409,15 +409,19 @@ export default function Dashboard() {
 	// ── Mouse tracking pause ─────────────────────────────────────────
 	// The MultilineTextArea captures ESC for cancel. With SGR mouse tracking on,
 	// every click emits `\x1b[<btn;col;rowM` — Ink reads the leading ESC and fires
-	// key.escape, dismissing the overlay. Disable mouse tracking while the
-	// context-input overlay is mounted; restore on unmount.
+	// key.escape, dismissing the overlay. Disable tracking while any overlay
+	// phase mounts a MultilineTextArea (context-input editing OR pr-create
+	// review); restore when that phase ends.
 	useEffect(() => {
-		if (state.overlay !== "context-input") return;
+		const needsMouseOff =
+			(state.overlay === "context-input" && state.contextInputPhase === "editing") ||
+			(state.overlay === "pr-create" && state.prCreatePhase === "review");
+		if (!needsMouseOff) return;
 		process.stdout.write("\x1b[?1002l\x1b[?1006l");
 		return () => {
 			process.stdout.write("\x1b[?1002h\x1b[?1006h");
 		};
-	}, [state.overlay]);
+	}, [state.overlay, state.contextInputPhase, state.prCreatePhase]);
 
 	// ── Actions ───────────────────────────────────────────────────────
 
@@ -995,6 +999,9 @@ export default function Dashboard() {
 
 			// PR create overlay
 			if (state.overlay === "pr-create") {
+				// Review phase — MultilineTextArea owns the keyboard
+				if (state.prCreatePhase === "review") return;
+
 				if (key.escape) {
 					dispatch({ type: "PR_CREATE_CANCEL" });
 					return;
@@ -1009,21 +1016,17 @@ export default function Dashboard() {
 						return;
 					}
 				}
-				if (state.prCreatePhase === "review") {
+				if (state.prCreatePhase === "confirm") {
 					if (input === "y" || key.return) {
 						confirmPrCreate();
 						return;
 					}
+					if (input === "e") {
+						dispatch({ type: "PR_CREATE_EDIT" });
+						return;
+					}
 					if (input === "w") {
 						openPrInWeb();
-						return;
-					}
-					if (key.shift && key.downArrow) {
-						dispatch({ type: "SCROLL_DETAIL", offset: state.detailScrollOffset + 3 });
-						return;
-					}
-					if (key.shift && key.upArrow) {
-						dispatch({ type: "SCROLL_DETAIL", offset: Math.max(0, state.detailScrollOffset - 3) });
 						return;
 					}
 				}
@@ -1110,9 +1113,28 @@ export default function Dashboard() {
 				return;
 			}
 
-			// Context-input overlay — MultilineTextArea owns its own useInput;
-			// outer useInput is disabled for this overlay via isActive below.
+			// Context-input overlay.
+			// Editing phase: MultilineTextArea owns useInput (outer is disabled
+			// via isActive below).
+			// Review phase: outer handles y/n/e/ESC.
 			if (state.overlay === "context-input") {
+				if (state.contextInputPhase === "review") {
+					if (input === "y" || key.return) {
+						const mode = state.contextInputMode;
+						const ctx = state.contextInputValue;
+						dispatch({ type: "CONTEXT_INPUT_DONE" });
+						if (mode) doWork(mode, ctx);
+						return;
+					}
+					if (input === "n" || input === "e") {
+						dispatch({ type: "CONTEXT_INPUT_EDIT" });
+						return;
+					}
+					if (key.escape) {
+						dispatch({ type: "CONTEXT_INPUT_DONE" });
+						return;
+					}
+				}
 				return;
 			}
 
@@ -1606,7 +1628,8 @@ export default function Dashboard() {
 		},
 		{
 			isActive:
-				state.overlay !== "context-input" &&
+				(state.overlay !== "context-input" || state.contextInputPhase === "review") &&
+				(state.overlay !== "pr-create" || state.prCreatePhase !== "review") &&
 				(state.overlay !== "commit" || state.commitPhase !== "awaiting-message"),
 		},
 	);
@@ -1715,41 +1738,95 @@ export default function Dashboard() {
 				</Box>
 			) : state.overlay === "context-input" ? (
 				<Box flexGrow={1} justifyContent="center" alignItems="center">
-					<Box flexDirection="column" paddingX={2}>
+					<Box flexDirection="column" paddingX={2} width={Math.min(columns - 8, 100)}>
 						<Text bold color="cyan">
 							Extra context for {state.contextInputMode}
 						</Text>
 						<Text dimColor>Optional — appended to the prompt before launching Claude</Text>
 						<Text> </Text>
-						<MultilineTextArea
-							value={state.contextInputValue}
-							onChange={(v) => dispatch({ type: "CONTEXT_INPUT_CHANGE", value: v })}
-							onSubmit={() => {
-								const mode = state.contextInputMode;
-								const ctx = state.contextInputValue;
-								dispatch({ type: "CONTEXT_INPUT_DONE" });
-								if (mode) doWork(mode, ctx);
-							}}
-							onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
-							width={Math.min(columns - 8, 100)}
-							height={10}
-							placeholder="Type or paste extra context…"
-						/>
-						<Text> </Text>
-						<Text dimColor>
-							<Text color="cyan" bold>
-								Ctrl+D
-							</Text>{" "}
-							launch{"   "}
-							<Text color="cyan" bold>
-								Enter
-							</Text>{" "}
-							newline{"   "}
-							<Text color="cyan" bold>
-								ESC
-							</Text>{" "}
-							cancel
-						</Text>
+						{state.contextInputPhase === "editing" ? (
+							<>
+								<MultilineTextArea
+									value={state.contextInputValue}
+									onChange={(v) => dispatch({ type: "CONTEXT_INPUT_CHANGE", value: v })}
+									onSubmit={() => dispatch({ type: "CONTEXT_INPUT_REVIEW" })}
+									onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
+									width={Math.min(columns - 8, 100)}
+									height={10}
+									placeholder="Type or paste extra context…"
+								/>
+								<Text> </Text>
+								<Text dimColor>
+									<Text color="cyan" bold>
+										Enter
+									</Text>
+									{" newline  "}
+									<Text color="cyan" bold>
+										↑↓←→
+									</Text>
+									{" move  "}
+									<Text color="cyan" bold>
+										Ctrl+V
+									</Text>
+									{" paste image  "}
+									<Text color="cyan" bold>
+										Ctrl+D
+									</Text>
+									{" continue  "}
+									<Text color="cyan" bold>
+										ESC
+									</Text>
+									{" cancel"}
+								</Text>
+							</>
+						) : (
+							<>
+								<Box
+									flexDirection="column"
+									borderStyle="round"
+									borderColor="green"
+									paddingX={1}
+									minHeight={6}
+								>
+									{(state.contextInputValue || "(no extra context)")
+										.split("\n")
+										.slice(0, 12)
+										.map((line, i) => (
+											<Text key={i}>{line || " "}</Text>
+										))}
+									{state.contextInputValue.split("\n").length > 12 && (
+										<Text dimColor>
+											…+{state.contextInputValue.split("\n").length - 12} more lines
+										</Text>
+									)}
+								</Box>
+								<Text> </Text>
+								<Text bold>Anything else to add?</Text>
+								<Text> </Text>
+								<Text>
+									<Text color="green" bold>
+										y
+									</Text>
+									{" / "}
+									<Text color="green" bold>
+										Enter
+									</Text>
+									{"  launch   "}
+									<Text color="yellow" bold>
+										n
+									</Text>
+									{" / "}
+									<Text color="yellow" bold>
+										e
+									</Text>
+									{"  keep editing   "}
+									<Text color="red" bold>
+										ESC
+									</Text>
+									{"  cancel"}
+								</Text>
+							</>
+						)}
 					</Box>
 				</Box>
 			) : state.overlay === "base-select" ? (
@@ -1930,7 +2007,7 @@ export default function Dashboard() {
 								url={state.prCreateUrl}
 								body={state.prCreateBody}
 								title={state.prCreateTitle}
-								scrollOffset={state.detailScrollOffset}
+								dispatch={dispatch}
 							/>
 						) : (
 							<DetailPanel

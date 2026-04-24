@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import TextInput from "ink-text-input";
 import type { CommitPhase, PrCreatePhase, DashboardAction } from "./types.js";
+import { MultilineTextArea } from "./MultilineTextArea.js";
 
 // ── Commit Overlay ───────────────────────────────────────────────────
 
@@ -135,7 +136,7 @@ interface PrCreateOverlayProps {
 	url: string | null;
 	body: string | null;
 	title: string | null;
-	scrollOffset: number;
+	dispatch: React.Dispatch<DashboardAction>;
 }
 
 export function PrCreateOverlay({
@@ -148,7 +149,7 @@ export function PrCreateOverlay({
 	url,
 	body,
 	title,
-	scrollOffset,
+	dispatch,
 }: PrCreateOverlayProps) {
 	return (
 		<Box flexDirection="column" width={width} height={height}>
@@ -203,31 +204,93 @@ export function PrCreateOverlay({
 			)}
 			{phase === "review" && (
 				<>
-					<Text bold>Review PR</Text>
+					<Text bold>Edit PR description</Text>
 					<Text> </Text>
 					<Text>
 						<Text dimColor>title: </Text>
 						<Text>{title}</Text>
 					</Text>
 					<Text> </Text>
-					{body
-						?.split("\n")
-						.slice(scrollOffset, scrollOffset + height - 11)
-						.map((line, i) => (
-							<Text key={i} wrap="truncate">
-								{line}
-							</Text>
-						))}
+					<MultilineTextArea
+						value={body ?? ""}
+						onChange={(v) => dispatch({ type: "PR_CREATE_BODY_CHANGE", body: v })}
+						onSubmit={() => dispatch({ type: "PR_CREATE_CONFIRM" })}
+						onCancel={() => dispatch({ type: "PR_CREATE_CANCEL" })}
+						width={width}
+						height={Math.max(6, height - 10)}
+						placeholder="(empty PR body)"
+					/>
 					<Text> </Text>
 					<Text dimColor>
 						<Text color="cyan" bold>
+							Enter
+						</Text>
+						{" newline  "}
+						<Text color="cyan" bold>
+							↑↓←→
+						</Text>
+						{" move  "}
+						<Text color="cyan" bold>
+							Ctrl+V
+						</Text>
+						{" paste image  "}
+						<Text color="cyan" bold>
+							Ctrl+D
+						</Text>
+						{" continue  "}
+						<Text color="cyan" bold>
+							ESC
+						</Text>
+						{" cancel"}
+					</Text>
+				</>
+			)}
+			{phase === "confirm" && (
+				<>
+					<Text bold>Create this PR?</Text>
+					<Text> </Text>
+					<Text>
+						<Text dimColor>title: </Text>
+						<Text>{title}</Text>
+					</Text>
+					<Text> </Text>
+					<Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={1}>
+						{(body ?? "")
+							.split("\n")
+							.slice(0, Math.max(4, height - 12))
+							.map((line, i) => (
+								<Text key={i} wrap="truncate">
+									{line || " "}
+								</Text>
+							))}
+						{(body ?? "").split("\n").length > Math.max(4, height - 12) && (
+							<Text dimColor>
+								…+{(body ?? "").split("\n").length - Math.max(4, height - 12)} more lines
+							</Text>
+						)}
+					</Box>
+					<Text> </Text>
+					<Text>
+						<Text color="green" bold>
 							y
 						</Text>
-						/Enter create{" "}
+						{" / "}
+						<Text color="green" bold>
+							Enter
+						</Text>
+						{"  create   "}
+						<Text color="yellow" bold>
+							e
+						</Text>
+						{"  keep editing   "}
 						<Text color="cyan" bold>
 							w
-						</Text>{" "}
-						open in browser ESC cancel Shift+arrows scroll
+						</Text>
+						{"  open in browser   "}
+						<Text color="red" bold>
+							ESC
+						</Text>
+						{"  cancel"}
 					</Text>
 				</>
 			)}
@@ -259,7 +322,7 @@ export function PrCreateOverlay({
 					</Text>
 				</>
 			)}
-			{phase !== "review" && phase !== "error" && (
+			{phase !== "review" && phase !== "confirm" && phase !== "error" && (
 				<>
 					<Text> </Text>
 					<Text dimColor>ESC to cancel</Text>

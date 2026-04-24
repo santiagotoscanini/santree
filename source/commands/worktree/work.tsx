@@ -17,7 +17,7 @@ export const description = "Launch Claude to work on current ticket";
 
 export const options = z.object({
 	plan: z.boolean().optional().describe("Only create implementation plan"),
-	"context-file": z
+	contextFile: z
 		.string()
 		.optional()
 		.describe("Path to a file whose contents are appended to the prompt as extra context"),
@@ -46,7 +46,7 @@ export default function Work({ options }: Props) {
 	const [error, setError] = useState<string | null>(null);
 	const [mode] = useState<Mode>(options.plan ? "plan" : "implement");
 	const [aiContext, setAiContext] = useState<AIContext | null>(null);
-	const contextFilePath = options["context-file"];
+	const contextFilePath = options.contextFile;
 	useEffect(() => {
 		async function init() {
 			// Small delay to allow spinner to render

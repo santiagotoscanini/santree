@@ -6,6 +6,12 @@ If a Linear MCP server is available, use it to fetch the ticket description, com
 Otherwise, proceed based on branch name context.
 {% endif %}
 
+{% if custom_context %}
+## Additional context from the user
+
+{{ custom_context }}
+
+{% endif %}
 Review the codebase to understand the relevant areas and existing patterns.
 {% if mode == "plan" %}
 Create a detailed implementation plan with:

@@ -51,7 +51,7 @@ function santree() {
         local exit_code=$?
 
         if [[ "$output" == *SANTREE_CD:* ]]; then
-            echo "$output" | grep -v "SANTREE_CD:" | grep -v "SANTREE_WORK:"
+            echo "$output" | grep -v "SANTREE_CD:" | grep -v "SANTREE_WORK:" | grep -v "SANTREE_WORK_CONTEXT:"
 
             local target_dir=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "SANTREE_CD:" | sed 's/.*SANTREE_CD://')
 
@@ -60,8 +60,16 @@ function santree() {
             fi
 
             if [[ "$output" == *SANTREE_WORK:* ]]; then
-                local work_mode=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "SANTREE_WORK:" | sed 's/.*SANTREE_WORK://')
-                [[ "$work_mode" == "plan" ]] && command santree worktree work --plan || command santree worktree work
+                local work_mode=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "^SANTREE_WORK:" | sed 's/.*SANTREE_WORK://')
+                local context_file=""
+                if [[ "$output" == *SANTREE_WORK_CONTEXT:* ]]; then
+                    context_file=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | grep "SANTREE_WORK_CONTEXT:" | sed 's/.*SANTREE_WORK_CONTEXT://')
+                fi
+                if [[ -n "$context_file" ]]; then
+                    [[ "$work_mode" == "plan" ]] && command santree worktree work --plan --context-file "$context_file" || command santree worktree work --context-file "$context_file"
+                else
+                    [[ "$work_mode" == "plan" ]] && command santree worktree work --plan || command santree worktree work
+                fi
             fi
         else
             echo "$output"

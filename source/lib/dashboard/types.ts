@@ -66,6 +66,7 @@ export type DashboardTab = "issues" | "reviews";
 
 export type ActionOverlay =
 	| "mode-select"
+	| "context-input"
 	| "base-select"
 	| "confirm-delete"
 	| "confirm-setup"
@@ -131,6 +132,8 @@ export interface DashboardState {
 	baseSelectOptions: string[];
 	baseSelectIndex: number;
 	baseSelectChosen: string | null;
+	contextInputValue: string;
+	contextInputMode: "plan" | "implement" | null;
 }
 
 export type DashboardAction =
@@ -178,7 +181,10 @@ export type DashboardAction =
 	| { type: "SET_REVIEWS_DATA"; flatReviews: EnrichedReviewPR[] }
 	| { type: "REVIEW_SELECT"; index: number }
 	| { type: "REVIEW_SCROLL_LIST"; offset: number }
-	| { type: "REVIEW_SCROLL_DETAIL"; offset: number };
+	| { type: "REVIEW_SCROLL_DETAIL"; offset: number }
+	| { type: "CONTEXT_INPUT_SHOW"; mode: "plan" | "implement" }
+	| { type: "CONTEXT_INPUT_CHANGE"; value: string }
+	| { type: "CONTEXT_INPUT_DONE" };
 
 // ── State management ──────────────────────────────────────────────────
 
@@ -221,6 +227,8 @@ export const initialState: DashboardState = {
 	baseSelectOptions: [],
 	baseSelectIndex: 0,
 	baseSelectChosen: null,
+	contextInputValue: "",
+	contextInputMode: null,
 };
 
 export function reducer(state: DashboardState, action: DashboardAction): DashboardState {
@@ -424,6 +432,22 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 			return { ...state, reviewListScrollOffset: action.offset };
 		case "REVIEW_SCROLL_DETAIL":
 			return { ...state, reviewDetailScrollOffset: action.offset };
+		case "CONTEXT_INPUT_SHOW":
+			return {
+				...state,
+				overlay: "context-input",
+				contextInputMode: action.mode,
+				contextInputValue: "",
+			};
+		case "CONTEXT_INPUT_CHANGE":
+			return { ...state, contextInputValue: action.value };
+		case "CONTEXT_INPUT_DONE":
+			return {
+				...state,
+				overlay: null,
+				contextInputMode: null,
+				contextInputValue: "",
+			};
 		default:
 			return state;
 	}

@@ -33,6 +33,7 @@ import DetailPanel from "../lib/dashboard/DetailPanel.js";
 import ReviewList from "../lib/dashboard/ReviewList.js";
 import ReviewDetailPanel from "../lib/dashboard/ReviewDetailPanel.js";
 import { CommitOverlay, PrCreateOverlay } from "../lib/dashboard/Overlays.js";
+import { MultilineTextArea } from "../lib/dashboard/MultilineTextArea.js";
 
 export const description = "Interactive dashboard of your Linear issues";
 
@@ -408,12 +409,19 @@ export default function Dashboard() {
 	// ── Actions ───────────────────────────────────────────────────────
 
 	const launchWorkInTmux = useCallback(
-		(di: DashboardIssue, mode: "plan" | "implement", worktreePath: string) => {
+		(
+			di: DashboardIssue,
+			mode: "plan" | "implement",
+			worktreePath: string,
+			contextFile?: string,
+		) => {
 			const windowName = di.issue.identifier;
 			const sessionId = di.worktree?.sessionId;
 			const bin = resolveAgentBinary();
 			const resumeCmd = sessionId && bin ? `${bin} --resume ${sessionId}` : null;
-			const workCmd = mode === "plan" ? "st worktree work --plan" : "st worktree work";
+			const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
+			const workCmd =
+				mode === "plan" ? `st worktree work --plan${contextArg}` : `st worktree work${contextArg}`;
 
 			try {
 				// Switch to existing window if it exists
@@ -452,10 +460,14 @@ export default function Dashboard() {
 	);
 
 	const launchAfterCreation = useCallback(
-		(mode: "plan" | "implement", worktreePath: string, ticketId: string) => {
+		(mode: "plan" | "implement", worktreePath: string, ticketId: string, contextFile?: string) => {
 			if (isInTmux()) {
 				const windowName = ticketId;
-				const workCmd = mode === "plan" ? "st worktree work --plan" : "st worktree work";
+				const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
+				const workCmd =
+					mode === "plan"
+						? `st worktree work --plan${contextArg}`
+						: `st worktree work${contextArg}`;
 				try {
 					execSync(`tmux new-window -n "${windowName}" -c "${worktreePath}"`, { stdio: "ignore" });
 					execSync("sleep 0.1", { stdio: "ignore" });
@@ -472,14 +484,27 @@ export default function Dashboard() {
 				leaveAltScreen();
 				console.log(`SANTREE_CD:${worktreePath}`);
 				console.log(`SANTREE_WORK:${mode}`);
+				if (contextFile) console.log(`SANTREE_WORK_CONTEXT:${contextFile}`);
 				exit();
 			}
 		},
 		[exit, refresh],
 	);
 
+	const writeContextFile = useCallback((context: string | null | undefined): string | undefined => {
+		const trimmed = context?.trim();
+		if (!trimmed) return undefined;
+		const filePath = path.join(os.tmpdir(), `santree-context-${Date.now()}.md`);
+		try {
+			fs.writeFileSync(filePath, trimmed);
+			return filePath;
+		} catch {
+			return undefined;
+		}
+	}, []);
+
 	const createAndLaunch = useCallback(
-		async (mode: "plan" | "implement", runSetup: boolean, base?: string) => {
+		async (mode: "plan" | "implement", runSetup: boolean, base?: string, contextFile?: string) => {
 			const di = stateRef.current.flatIssues[stateRef.current.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
@@ -576,10 +601,13 @@ export default function Dashboard() {
 
 			// 4. Done — launch work
 			dispatch({ type: "CREATION_DONE" });
-			launchAfterCreation(mode, result.path, ticketId);
+			launchAfterCreation(mode, result.path, ticketId, contextFile);
 		},
 		[launchAfterCreation],
 	);
+
+	// Holds the context file path through multi-step flows (mode-select → base-select → confirm-setup → create)
+	const pendingContextFileRef = useRef<string | null>(null);
 
 	const proceedAfterBaseSelect = useCallback(
 		(mode: "plan" | "implement", base?: string) => {
@@ -590,13 +618,15 @@ export default function Dashboard() {
 				dispatch({ type: "SETUP_CONFIRM_SHOW", mode });
 				return;
 			}
-			createAndLaunch(mode, false, base);
+			const contextFile = pendingContextFileRef.current ?? undefined;
+			pendingContextFileRef.current = null;
+			createAndLaunch(mode, false, base, contextFile);
 		},
 		[createAndLaunch],
 	);
 
 	const doWork = useCallback(
-		(mode: "plan" | "implement") => {
+		(mode: "plan" | "implement", customContext?: string) => {
 			const di = state.flatIssues[state.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
@@ -604,18 +634,23 @@ export default function Dashboard() {
 
 			dispatch({ type: "SET_OVERLAY", overlay: null });
 
+			const contextFile = writeContextFile(customContext);
+
 			if (di.worktree) {
 				// Worktree exists — launch work
 				if (isInTmux()) {
-					launchWorkInTmux(di, mode, di.worktree.path);
+					launchWorkInTmux(di, mode, di.worktree.path, contextFile);
 				} else {
 					leaveAltScreen();
 					console.log(`SANTREE_CD:${di.worktree.path}`);
 					console.log(`SANTREE_WORK:${mode}`);
+					if (contextFile) console.log(`SANTREE_WORK_CONTEXT:${contextFile}`);
 					exit();
 				}
 			} else {
-				// No worktree — collect possible base branches
+				// No worktree — stash context for the create flow to pick up
+				pendingContextFileRef.current = contextFile ?? null;
+
 				const defaultBranch = getDefaultBranch();
 				const baseOptions = [defaultBranch];
 				for (const fi of state.flatIssues) {
@@ -636,7 +671,14 @@ export default function Dashboard() {
 				proceedAfterBaseSelect(mode);
 			}
 		},
-		[state.flatIssues, state.selectedIndex, exit, launchWorkInTmux, proceedAfterBaseSelect],
+		[
+			state.flatIssues,
+			state.selectedIndex,
+			exit,
+			launchWorkInTmux,
+			proceedAfterBaseSelect,
+			writeContextFile,
+		],
 	);
 
 	// ── Commit flow ──────────────────────────────────────────────────
@@ -1018,16 +1060,21 @@ export default function Dashboard() {
 				const base = state.baseSelectChosen ?? undefined;
 				if (input === "y" && mode) {
 					dispatch({ type: "SETUP_CONFIRM_DONE" });
-					createAndLaunch(mode, true, base);
+					const contextFile = pendingContextFileRef.current ?? undefined;
+					pendingContextFileRef.current = null;
+					createAndLaunch(mode, true, base, contextFile);
 					return;
 				}
 				if (input === "n" && mode) {
 					dispatch({ type: "SETUP_CONFIRM_DONE" });
-					createAndLaunch(mode, false, base);
+					const contextFile = pendingContextFileRef.current ?? undefined;
+					pendingContextFileRef.current = null;
+					createAndLaunch(mode, false, base, contextFile);
 					return;
 				}
 				if (key.escape) {
 					dispatch({ type: "SETUP_CONFIRM_DONE" });
+					pendingContextFileRef.current = null;
 					return;
 				}
 				return;
@@ -1036,17 +1083,23 @@ export default function Dashboard() {
 			// Mode select overlay
 			if (state.overlay === "mode-select") {
 				if (input === "p" || input === "1") {
-					doWork("plan");
+					dispatch({ type: "CONTEXT_INPUT_SHOW", mode: "plan" });
 					return;
 				}
 				if (input === "i" || input === "2") {
-					doWork("implement");
+					dispatch({ type: "CONTEXT_INPUT_SHOW", mode: "implement" });
 					return;
 				}
 				if (key.escape || input === "q") {
 					dispatch({ type: "SET_OVERLAY", overlay: null });
 					return;
 				}
+				return;
+			}
+
+			// Context-input overlay — MultilineTextArea owns its own useInput;
+			// outer useInput is disabled for this overlay via isActive below.
+			if (state.overlay === "context-input") {
 				return;
 			}
 
@@ -1538,7 +1591,11 @@ export default function Dashboard() {
 				return;
 			}
 		},
-		{ isActive: state.overlay !== "commit" || state.commitPhase !== "awaiting-message" },
+		{
+			isActive:
+				state.overlay !== "context-input" &&
+				(state.overlay !== "commit" || state.commitPhase !== "awaiting-message"),
+		},
 	);
 
 	// ── Render ─────────────────────────────────────────────────────────
@@ -1641,6 +1698,45 @@ export default function Dashboard() {
 						</Text>
 						<Text> </Text>
 						<Text dimColor>ESC to cancel</Text>
+					</Box>
+				</Box>
+			) : state.overlay === "context-input" ? (
+				<Box flexGrow={1} justifyContent="center" alignItems="center">
+					<Box flexDirection="column" paddingX={2}>
+						<Text bold color="cyan">
+							Extra context for {state.contextInputMode}
+						</Text>
+						<Text dimColor>Optional — appended to the prompt before launching Claude</Text>
+						<Text> </Text>
+						<MultilineTextArea
+							value={state.contextInputValue}
+							onChange={(v) => dispatch({ type: "CONTEXT_INPUT_CHANGE", value: v })}
+							onSubmit={() => {
+								const mode = state.contextInputMode;
+								const ctx = state.contextInputValue;
+								dispatch({ type: "CONTEXT_INPUT_DONE" });
+								if (mode) doWork(mode, ctx);
+							}}
+							onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
+							width={Math.min(columns - 8, 100)}
+							height={10}
+							placeholder="Type or paste additional context — Enter for newline, Ctrl+D to launch, ESC to cancel"
+						/>
+						<Text> </Text>
+						<Text dimColor>
+							<Text color="cyan" bold>
+								Ctrl+D
+							</Text>{" "}
+							launch{"   "}
+							<Text color="cyan" bold>
+								Enter
+							</Text>{" "}
+							newline{"   "}
+							<Text color="cyan" bold>
+								ESC
+							</Text>{" "}
+							cancel
+						</Text>
 					</Box>
 				</Box>
 			) : state.overlay === "base-select" ? (

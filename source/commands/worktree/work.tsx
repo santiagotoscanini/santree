@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
+import { readFileSync, unlinkSync } from "fs";
 import {
 	resolveAIContext,
 	renderAIPrompt,
@@ -16,6 +17,10 @@ export const description = "Launch Claude to work on current ticket";
 
 export const options = z.object({
 	plan: z.boolean().optional().describe("Only create implementation plan"),
+	"context-file": z
+		.string()
+		.optional()
+		.describe("Path to a file whose contents are appended to the prompt as extra context"),
 });
 
 type Props = {
@@ -41,6 +46,7 @@ export default function Work({ options }: Props) {
 	const [error, setError] = useState<string | null>(null);
 	const [mode] = useState<Mode>(options.plan ? "plan" : "implement");
 	const [aiContext, setAiContext] = useState<AIContext | null>(null);
+	const contextFilePath = options["context-file"];
 	useEffect(() => {
 		async function init() {
 			// Small delay to allow spinner to render
@@ -70,7 +76,21 @@ export default function Work({ options }: Props) {
 
 		setStatus("launching");
 
-		const prompt = renderAIPrompt("work", aiContext, { mode });
+		let customContext: string | undefined;
+		if (contextFilePath) {
+			try {
+				customContext = readFileSync(contextFilePath, "utf-8").trim() || undefined;
+			} catch {
+				// File missing or unreadable — proceed without extra context
+			}
+			try {
+				unlinkSync(contextFilePath);
+			} catch {
+				// Cleanup failure is non-fatal
+			}
+		}
+
+		const prompt = renderAIPrompt("work", aiContext, { mode, custom_context: customContext });
 
 		// Get or create a session ID for this ticket
 		let sessionId: string | undefined;

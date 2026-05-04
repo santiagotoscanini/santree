@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { openSync, readSync, closeSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { editExternally } from "./external-editor.js";
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -26,14 +27,9 @@ on error
 return "no-image"
 end try`;
 	try {
-		const result = spawnSync("osascript", ["-e", script], {
-			encoding: "utf-8",
-			timeout: 3000,
-		});
+		const result = spawnSync("osascript", ["-e", script], { encoding: "utf-8", timeout: 3000 });
 		if (result.status !== 0 || result.stdout.trim() !== "ok") return null;
 
-		// Defense in depth: verify the file is non-empty and starts with the PNG
-		// magic header. Guards against an osascript quirk writing a stub.
 		if (statSync(filePath).size === 0) {
 			try {
 				unlinkSync(filePath);
@@ -68,29 +64,102 @@ interface MultilineTextAreaProps {
 	focus?: boolean;
 }
 
-function offsetToRowCol(value: string, offset: number): [number, number] {
-	const lines = value.split("\n");
-	let idx = 0;
-	for (let r = 0; r < lines.length; r++) {
-		const len = lines[r]!.length;
-		if (offset <= idx + len) {
-			return [r, offset - idx];
-		}
-		idx += len + 1;
-	}
-	const last = lines.length - 1;
-	return [last, lines[last]!.length];
+// ── Word boundary helpers (whitespace-delimited) ────────────────────────────
+
+function prevWordStart(text: string, pos: number): number {
+	let p = pos;
+	while (p > 0 && /\s/.test(text[p - 1]!)) p--;
+	while (p > 0 && /\S/.test(text[p - 1]!)) p--;
+	return p;
 }
 
-function rowColToOffset(value: string, row: number, col: number): number {
-	const lines = value.split("\n");
-	const clampedRow = Math.max(0, Math.min(row, lines.length - 1));
-	let idx = 0;
-	for (let r = 0; r < clampedRow; r++) {
-		idx += lines[r]!.length + 1;
+function nextWordEnd(text: string, pos: number): number {
+	let p = pos;
+	while (p < text.length && /\s/.test(text[p]!)) p++;
+	while (p < text.length && /\S/.test(text[p]!)) p++;
+	return p;
+}
+
+function lineStart(text: string, pos: number): number {
+	const before = text.lastIndexOf("\n", pos - 1);
+	return before === -1 ? 0 : before + 1;
+}
+
+function lineEnd(text: string, pos: number): number {
+	const after = text.indexOf("\n", pos);
+	return after === -1 ? text.length : after;
+}
+
+// ── Visual layout (soft-wrap each logical line at inner width) ──────────────
+
+interface VisualRow {
+	logicalLine: number;
+	startCol: number;
+	text: string;
+}
+
+function buildVisualRows(value: string, innerWidth: number): VisualRow[] {
+	const lines = value.length === 0 ? [""] : value.split("\n");
+	const rows: VisualRow[] = [];
+	const w = Math.max(1, innerWidth);
+	for (let li = 0; li < lines.length; li++) {
+		const line = lines[li]!;
+		if (line.length === 0) {
+			rows.push({ logicalLine: li, startCol: 0, text: "" });
+			continue;
+		}
+		for (let i = 0; i < line.length; i += w) {
+			rows.push({ logicalLine: li, startCol: i, text: line.slice(i, i + w) });
+		}
 	}
-	const clampedCol = Math.max(0, Math.min(col, lines[clampedRow]!.length));
-	return idx + clampedCol;
+	return rows;
+}
+
+function cursorVisualPos(
+	rows: VisualRow[],
+	value: string,
+	cursor: number,
+	innerWidth: number,
+): { vRow: number; vCol: number } {
+	const lines = value.length === 0 ? [""] : value.split("\n");
+	let logicalLine = 0;
+	let lineStartOffset = 0;
+	for (let li = 0; li < lines.length; li++) {
+		const len = lines[li]!.length;
+		if (cursor <= lineStartOffset + len) {
+			logicalLine = li;
+			break;
+		}
+		lineStartOffset += len + 1;
+	}
+	const colInLine = cursor - lineStartOffset;
+	const candidates = rows
+		.map((r, i) => ({ r, i }))
+		.filter(({ r }) => r.logicalLine === logicalLine);
+	for (let ci = 0; ci < candidates.length; ci++) {
+		const { r, i } = candidates[ci]!;
+		if (colInLine >= r.startCol && colInLine < r.startCol + r.text.length) {
+			return { vRow: i, vCol: colInLine - r.startCol };
+		}
+		if (colInLine === r.startCol + r.text.length) {
+			// Cursor sits at the end of this visual row. If the row is exactly width-full
+			// AND there's another visual row in the same logical line, the next typed char
+			// belongs at the start of that next row — defer.
+			if (r.text.length === innerWidth && ci + 1 < candidates.length) {
+				continue;
+			}
+			// Last row of this logical line and exactly width-full → return a virtual row
+			// past the end so the cursor is rendered at col 0 of a fresh row instead of
+			// overflowing the right edge.
+			if (r.text.length === innerWidth) {
+				return { vRow: i + 1, vCol: 0 };
+			}
+			return { vRow: i, vCol: colInLine - r.startCol };
+		}
+	}
+	const last = candidates[candidates.length - 1];
+	if (last) return { vRow: last.i, vCol: last.r.text.length };
+	return { vRow: 0, vCol: 0 };
 }
 
 export function MultilineTextArea({
@@ -105,7 +174,6 @@ export function MultilineTextArea({
 }: MultilineTextAreaProps) {
 	const [cursor, setCursor] = useState(value.length);
 
-	// Keep cursor within bounds if value shrinks externally
 	useEffect(() => {
 		if (cursor > value.length) setCursor(value.length);
 	}, [value, cursor]);
@@ -115,132 +183,235 @@ export function MultilineTextArea({
 		setCursor(pos + text.length);
 	};
 
-	const deleteBefore = (pos: number) => {
-		if (pos === 0) return;
-		onChange(value.slice(0, pos - 1) + value.slice(pos));
-		setCursor(pos - 1);
+	const deleteRange = (from: number, to: number) => {
+		if (from === to) return;
+		const lo = Math.min(from, to);
+		const hi = Math.max(from, to);
+		onChange(value.slice(0, lo) + value.slice(hi));
+		setCursor(lo);
 	};
 
 	useInput(
 		(input, key) => {
-			// Ctrl+D submits
+			// Ctrl+D: submit
 			if (key.ctrl && input === "d") {
 				onSubmit();
 				return;
 			}
 
-			// Ctrl+V — try to paste clipboard image as a temp file reference.
-			// Regular Cmd+V text paste is handled by the terminal and arrives as
-			// normal input below.
-			if (key.ctrl && input === "v") {
-				const imagePath = pasteClipboardImageToTmp();
-				if (imagePath) {
-					insertAt(cursor, `![pasted image](${imagePath})`);
-				}
-				return;
-			}
-
-			// ESC cancels (parent disables SGR mouse tracking while mounted
-			// so clicks don't masquerade as ESC)
-			if (key.escape) {
+			// Ctrl+C: cancel (preferred over Esc — vim users rely on Esc muscle memory)
+			if (key.ctrl && input === "c") {
 				onCancel();
 				return;
 			}
 
-			if (key.backspace || key.delete) {
-				deleteBefore(cursor);
-				return;
-			}
-
-			// Arrow navigation — column is remembered via col-from-current-pos
-			if (key.upArrow || key.downArrow || key.leftArrow || key.rightArrow) {
-				const lines = value.split("\n");
-				const [row, col] = offsetToRowCol(value, cursor);
-
-				if (key.upArrow) {
-					if (row === 0) setCursor(0);
-					else setCursor(rowColToOffset(value, row - 1, col));
-				} else if (key.downArrow) {
-					if (row === lines.length - 1) setCursor(value.length);
-					else setCursor(rowColToOffset(value, row + 1, col));
-				} else if (key.leftArrow) {
-					setCursor(Math.max(0, cursor - 1));
-				} else if (key.rightArrow) {
-					setCursor(Math.min(value.length, cursor + 1));
+			// Ctrl+O: escalate to $SANTREE_EDITOR / $VISUAL / $EDITOR. On save+close
+			// the buffer is replaced and the form is auto-submitted (matches git commit).
+			if (key.ctrl && input === "o") {
+				const result = editExternally(value, "md");
+				if (!result.ok) return;
+				if (result.cancelled) {
+					onCancel();
+					return;
 				}
+				onChange(result.content);
+				setCursor(result.content.length);
+				onSubmit();
 				return;
 			}
 
-			if (key.tab) return;
+			// Ctrl+V: paste clipboard image as a temp file reference.
+			if (key.ctrl && input === "v") {
+				const imagePath = pasteClipboardImageToTmp();
+				if (imagePath) insertAt(cursor, `![pasted image](${imagePath})`);
+				return;
+			}
 
-			// Enter inserts a newline at cursor. MUST run before meta/ctrl swallow
-			// so Option+Enter / Ctrl+Enter also insert. When a paste carries content
-			// alongside \r, append the whole normalized chunk.
+			// Esc: swallow without cancelling (vim users hit it constantly).
+			if (key.escape) return;
+
+			// ── Readline-ish line editing ───────────────────────────────────
+			// Ctrl+A: start of line (also what iTerm2 / Ghostty send for Cmd+Left)
+			if (key.ctrl && input === "a") {
+				setCursor(lineStart(value, cursor));
+				return;
+			}
+			// Ctrl+E: end of line (also what iTerm2 / Ghostty send for Cmd+Right)
+			if (key.ctrl && input === "e") {
+				setCursor(lineEnd(value, cursor));
+				return;
+			}
+			// Ctrl+W: delete word backwards
+			if (key.ctrl && input === "w") {
+				deleteRange(prevWordStart(value, cursor), cursor);
+				return;
+			}
+			// Ctrl+U: delete to line start
+			if (key.ctrl && input === "u") {
+				deleteRange(lineStart(value, cursor), cursor);
+				return;
+			}
+			// Ctrl+K: delete to line end
+			if (key.ctrl && input === "k") {
+				deleteRange(cursor, lineEnd(value, cursor));
+				return;
+			}
+
+			// Option+Backspace (meta+backspace): delete word backwards
+			if (key.meta && (key.backspace || key.delete)) {
+				deleteRange(prevWordStart(value, cursor), cursor);
+				return;
+			}
+
+			// Option+Left / Option+Right: word jump.
+			// Mac terminals (Ghostty/iTerm2/Terminal.app) typically send the emacs-style
+			// `\x1bb` / `\x1bf` rather than the meta+arrow CSI sequence, so Ink reports
+			// these as `key.meta && input === "b" | "f"`. Cover both forms.
+			if (key.meta && (key.leftArrow || input === "b")) {
+				setCursor(prevWordStart(value, cursor));
+				return;
+			}
+			if (key.meta && (key.rightArrow || input === "f")) {
+				setCursor(nextWordEnd(value, cursor));
+				return;
+			}
+			// Option+Up / Option+Down: doc start/end (used by some Mac terminals)
+			if (key.meta && key.upArrow) {
+				setCursor(0);
+				return;
+			}
+			if (key.meta && key.downArrow) {
+				setCursor(value.length);
+				return;
+			}
+
+			if (key.backspace || key.delete) {
+				if (cursor === 0) return;
+				onChange(value.slice(0, cursor - 1) + value.slice(cursor));
+				setCursor(cursor - 1);
+				return;
+			}
+
+			// Plain arrows: visual-row navigation when possible; left/right by 1 char.
+			if (key.upArrow || key.downArrow || key.leftArrow || key.rightArrow) {
+				if (key.leftArrow) {
+					setCursor(Math.max(0, cursor - 1));
+					return;
+				}
+				if (key.rightArrow) {
+					setCursor(Math.min(value.length, cursor + 1));
+					return;
+				}
+				const innerW = Math.max(1, (width ?? 80) - 4);
+				const rows = buildVisualRows(value, innerW);
+				const { vRow, vCol } = cursorVisualPos(rows, value, cursor, innerW);
+				const targetVRow = key.upArrow ? vRow - 1 : vRow + 1;
+				if (targetVRow < 0) {
+					setCursor(0);
+					return;
+				}
+				if (targetVRow >= rows.length) {
+					setCursor(value.length);
+					return;
+				}
+				const target = rows[targetVRow]!;
+				const targetColInLine = target.startCol + Math.min(vCol, target.text.length);
+				let offset = 0;
+				const lines = value.length === 0 ? [""] : value.split("\n");
+				for (let li = 0; li < target.logicalLine; li++) offset += lines[li]!.length + 1;
+				setCursor(offset + targetColInLine);
+				return;
+			}
+
+			// Tab: insert a literal tab character.
+			if (key.tab) {
+				insertAt(cursor, "\t");
+				return;
+			}
+
+			// Enter: insert newline (also handles paste containing \r).
 			if (key.return) {
 				const chunk = input ? input.replace(/\r\n?/g, "\n") : "\n";
 				insertAt(cursor, chunk);
 				return;
 			}
 
-			// Swallow remaining modifier combos
 			if (key.ctrl || key.meta) return;
-
 			if (!input) return;
 
-			const normalized = input.replace(/\r\n?/g, "\n");
-			insertAt(cursor, normalized);
+			insertAt(cursor, input.replace(/\r\n?/g, "\n"));
 		},
 		{ isActive: focus },
 	);
 
-	const [cursorRow, cursorCol] = offsetToRowCol(value, cursor);
-	const lines = value.length === 0 ? [""] : value.split("\n");
+	const innerWidth = Math.max(1, (width ?? 80) - 4);
+	const rows = buildVisualRows(value, innerWidth);
+	const { vRow: cursorVRow, vCol: cursorVCol } = cursorVisualPos(rows, value, cursor, innerWidth);
+	const totalRows = Math.max(rows.length, cursorVRow + 1);
 
-	// Scroll viewport so the cursor row is always visible
 	let scrollStart = 0;
-	if (cursorRow >= height) scrollStart = cursorRow - height + 1;
-	const visibleLines = lines.slice(scrollStart, scrollStart + height);
+	if (cursorVRow >= height) scrollStart = cursorVRow - height + 1;
+	const visibleRows = rows.slice(scrollStart, scrollStart + height);
 	const isEmpty = value.length === 0;
+	const hiddenAbove = scrollStart;
+	const hiddenBelow = Math.max(0, totalRows - scrollStart - height);
 
 	return (
-		<Box
-			flexDirection="column"
-			width={width}
-			borderStyle="round"
-			borderColor="cyan"
-			paddingX={1}
-			minHeight={height + 2}
-		>
-			{isEmpty && placeholder ? (
-				<Box minHeight={1}>
-					<Text inverse> </Text>
-					<Text dimColor>{placeholder}</Text>
-				</Box>
-			) : (
-				visibleLines.map((line, i) => {
-					const absoluteRow = scrollStart + i;
-					const isCursorRow = focus && absoluteRow === cursorRow;
-
-					if (!isCursorRow) {
+		<Box flexDirection="column" width={width}>
+			<Box
+				flexDirection="column"
+				width={width}
+				borderStyle="round"
+				borderColor="cyan"
+				paddingX={1}
+				minHeight={height + 2}
+			>
+				{isEmpty && placeholder ? (
+					<Box minHeight={1}>
+						<Text inverse> </Text>
+						<Text dimColor>{placeholder}</Text>
+					</Box>
+				) : (
+					Array.from({ length: height }).map((_, i) => {
+						const row = visibleRows[i];
+						const absoluteVRow = scrollStart + i;
+						const isCursorRow = focus && absoluteVRow === cursorVRow;
+						if (!row) {
+							// Phantom row past the end (cursor sits on a fresh line at wrap boundary)
+							if (isCursorRow) {
+								return (
+									<Box key={`phantom-${i}`} minHeight={1}>
+										<Text inverse> </Text>
+									</Box>
+								);
+							}
+							return <Box key={`pad-${i}`} minHeight={1} />;
+						}
+						if (!isCursorRow) {
+							return (
+								<Box key={i} minHeight={1}>
+									<Text>{row.text}</Text>
+								</Box>
+							);
+						}
+						const before = row.text.slice(0, cursorVCol);
+						const atCursor = cursorVCol < row.text.length ? row.text[cursorVCol]! : " ";
+						const after = cursorVCol < row.text.length ? row.text.slice(cursorVCol + 1) : "";
 						return (
 							<Box key={i} minHeight={1}>
-								<Text>{line}</Text>
+								<Text>{before}</Text>
+								<Text inverse>{atCursor}</Text>
+								<Text>{after}</Text>
 							</Box>
 						);
-					}
-
-					const before = line.slice(0, cursorCol);
-					const atCursor = cursorCol < line.length ? line[cursorCol]! : " ";
-					const after = cursorCol < line.length ? line.slice(cursorCol + 1) : "";
-
-					return (
-						<Box key={i} minHeight={1}>
-							<Text>{before}</Text>
-							<Text inverse>{atCursor}</Text>
-							<Text>{after}</Text>
-						</Box>
-					);
-				})
+					})
+				)}
+			</Box>
+			{(hiddenAbove > 0 || hiddenBelow > 0) && (
+				<Box justifyContent="space-between" paddingX={1}>
+					<Text dimColor>{hiddenAbove > 0 ? `↑ ${hiddenAbove} more above` : ""}</Text>
+					<Text dimColor>{hiddenBelow > 0 ? `${hiddenBelow} more below ↓` : ""}</Text>
+				</Box>
 			)}
 		</Box>
 	);

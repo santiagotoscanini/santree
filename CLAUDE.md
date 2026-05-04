@@ -104,6 +104,14 @@ Two layers:
 
 Key functions: `findMainRepoRoot()` (resolves through worktrees to main repo), `findRepoRoot()` (current checkout), `isInWorktree()` (compares `--git-dir` vs `--git-common-dir`), `extractTicketId(branch)` (regex `[A-Z]+-\d+`).
 
+### Multiplexer abstraction (`lib/multiplexer/`)
+
+Santree supports pluggable terminal multiplexers (currently tmux and cmux; zellij planned). Selection is driven by `SANTREE_MULTIPLEXER` (`tmux` | `cmux` | `none`), falling back to runtime detection (`$TMUX` → tmux, `$CMUX_SURFACE_ID` → cmux, else `none`).
+
+The `Multiplexer` interface (`lib/multiplexer/types.ts`) exposes: `isActive()`, `createWindow({name, cwd, command})`, `selectWindow(name)`, `renameWindow(currentName, newName)`, `sendCommand(name, command)`, and `isSessionAlive(ticketId)`. All ops return a `SessionResult` (`{ ok: true } | { ok: false, reason, message? }`). Use `getMultiplexer()` from `lib/multiplexer/index.js` at call sites.
+
+**cmux caveat**: cmux is macOS-only and requires the cmux.app GUI running. Upstream issue [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472) — programmatically created workspaces have dead PTYs, so `sendCommand` is unimplemented (returns `unsupported`) and post-creation flows degrade. tmux remains the recommended backend until #1472 lands. `santree doctor` surfaces the warning when cmux is active.
+
 ### Statusline (`commands/helpers/statusline.tsx`)
 
 Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hook), writes ANSI-colored text to stdout, then `process.exit(0)`. Detects santree worktrees via path (`/.santree/worktrees/`).
@@ -121,10 +129,10 @@ Full-screen interactive dashboard showing all Linear issues assigned to the user
 - **Commit & push** (`C` key): stage confirm → message input via `TextInput` → commit → push. Uses `{ cwd: worktreePath }` for all git operations (not `git -C`).
 - **PR creation** (`c` key): choose fill/web → push → create via `gh pr create`. Fill mode uses `--fill --base --head` flags.
 
-**Tmux-launched flows** (open new tmux windows):
+**Multiplexer-launched flows** (open new windows/workspaces in the active multiplexer — see [Multiplexer abstraction](#multiplexer-abstraction-libmultiplexer)):
 
-- **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a tmux window
-- **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in tmux
+- **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a new window
+- **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in a new window
 
 **Data fetching**: `loadDashboardData()` fetches Linear issues and enriches each with worktree info (git status, commits ahead, session ID), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 30s.
 
@@ -141,12 +149,14 @@ Full-screen interactive dashboard showing all Linear issues assigned to the user
 
 | Variable | Effect |
 |---|---|
-| `SANTREE_SKIP_PERMISSIONS` | When set (any truthy value), passes `--dangerously-skip-permissions` to all Claude CLI invocations (`launchAgent` and `runAgent` in `lib/ai.ts`). Disables permission prompts for worktree-scoped automation. |
+| `SANTREE_MULTIPLEXER` | Select the terminal multiplexer used by the dashboard and worktree-create flows: `tmux`, `cmux`, or `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. |
+
+Santree always launches Claude with `--permission-mode auto` (or `plan` for plan mode), Claude Code's auto mode. There is no opt-in env var — worktree-scoped automation is the default. Set `--permission-mode default` upstream if you ever need stricter prompting.
 
 ## External Dependencies
 
 Required: Node.js >= 20, Git, GitHub CLI (`gh`), Claude Code CLI (`claude`)
-Optional: tmux (new window support)
+Optional: a terminal multiplexer for new-window flows — tmux (default, all platforms) or cmux (experimental, macOS-only; limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472))
 
 ### Linear Integration
 

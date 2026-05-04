@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
-import { execSync } from "child_process";
 import * as fs from "fs";
 import {
 	createWorktree,
@@ -14,6 +13,7 @@ import {
 	extractTicketId,
 } from "../../lib/git.js";
 import { spawnAsync } from "../../lib/exec.js";
+import { getMultiplexer } from "../../lib/multiplexer/index.js";
 
 export const description = "Create a new worktree from a branch";
 
@@ -22,8 +22,9 @@ export const options = z.object({
 	work: z.boolean().optional().describe("Launch Claude after creating"),
 	plan: z.boolean().optional().describe("With --work, only plan"),
 	"no-pull": z.boolean().optional().describe("Skip pulling latest changes"),
-	tmux: z.boolean().optional().describe("Create a new tmux window"),
-	name: z.string().optional().describe("Custom tmux window name"),
+	window: z.boolean().optional().describe("Create a new multiplexer window/workspace (tmux/cmux)"),
+	tmux: z.boolean().optional().describe("Alias for --window (deprecated)"),
+	name: z.string().optional().describe("Custom window/workspace name"),
 });
 
 export const args = z.tuple([z.string().optional().describe("Branch name")]);
@@ -33,24 +34,14 @@ type Props = {
 	args: z.infer<typeof args>;
 };
 
-type Status = "idle" | "pulling" | "creating" | "init-script" | "tmux" | "done" | "error";
-
-function isInTmux(): boolean {
-	return !!process.env.TMUX;
-}
-
-function createTmuxWindow(name: string, path: string, runCommand?: string): boolean {
-	try {
-		execSync(`tmux new-window -n "${name}" -c "${path}"`, { stdio: "ignore" });
-		// If a command is provided, send it to the new window
-		if (runCommand) {
-			execSync(`tmux send-keys -t "${name}" "${runCommand}" Enter`, { stdio: "ignore" });
-		}
-		return true;
-	} catch {
-		return false;
-	}
-}
+type Status =
+	| "idle"
+	| "pulling"
+	| "creating"
+	| "init-script"
+	| "spawning-window"
+	| "done"
+	| "error";
 
 function getWindowName(branchName: string, customName?: string): string {
 	if (customName) return customName;
@@ -70,32 +61,37 @@ export default function Create({ options, args }: Props) {
 	const [message, setMessage] = useState("");
 	const [worktreePath, setWorktreePath] = useState("");
 	const [baseBranch, setBaseBranch] = useState<string | null>(null);
-	const [tmuxWindowName, setTmuxWindowName] = useState<string | null>(null);
+	const [muxWindowName, setMuxWindowName] = useState<string | null>(null);
+	const [muxKind, setMuxKind] = useState<string | null>(null);
 
-	function finalize(path: string, branch: string) {
-		// Handle tmux window creation
-		if (options.tmux) {
-			if (!isInTmux()) {
-				setMessage("Worktree created, but not in tmux session");
+	async function finalize(path: string, branch: string) {
+		const wantsWindow = options.window || options.tmux;
+		if (wantsWindow) {
+			const mux = getMultiplexer();
+			if (!mux.isActive()) {
+				setMessage("Worktree created, but no active multiplexer");
 				setStatus("done");
 				console.log(`SANTREE_CD:${path}`);
 				return;
 			}
 
-			setStatus("tmux");
-			setMessage("Creating tmux window...");
+			setStatus("spawning-window");
+			setMessage(`Creating ${mux.kind} window...`);
 
 			const windowName = getWindowName(branch, options.name);
-			setTmuxWindowName(windowName);
+			setMuxWindowName(windowName);
+			setMuxKind(mux.kind);
 
-			// Build command to run in new window (if --work is set)
 			let runCommand: string | undefined;
 			if (options.work) {
 				runCommand = options.plan ? "st worktree work --plan" : "st worktree work";
 			}
 
-			if (!createTmuxWindow(windowName, path, runCommand)) {
-				setMessage("Worktree created, but failed to create tmux window");
+			const result = await mux.createWindow({ name: windowName, cwd: path, command: runCommand });
+			if (!result.ok) {
+				setMessage(
+					`Worktree created, but failed to create ${mux.kind} window${result.message ? `: ${result.message}` : ""}`,
+				);
 				setStatus("done");
 				console.log(`SANTREE_CD:${path}`);
 				return;
@@ -103,8 +99,8 @@ export default function Create({ options, args }: Props) {
 
 			setStatus("done");
 			const workInfo = options.work ? (options.plan ? " + Claude (plan)" : " + Claude") : "";
-			setMessage(`Worktree and tmux window created!${workInfo}`);
-			// Don't output SANTREE_CD when tmux window is created - user is already in new window
+			setMessage(`Worktree and ${mux.kind} window created!${workInfo}`);
+			// Don't output SANTREE_CD when a window is created — user is already in the new window
 			return;
 		}
 
@@ -173,7 +169,7 @@ export default function Create({ options, args }: Props) {
 						fs.accessSync(initScript, fs.constants.X_OK);
 					} catch {
 						setMessage("Warning: Init script exists but is not executable");
-						finalize(result.path!, branch);
+						await finalize(result.path!, branch);
 						return;
 					}
 
@@ -189,9 +185,9 @@ export default function Create({ options, args }: Props) {
 					if (initResult.code !== 0) {
 						setMessage(`Warning: Init script exited with code ${initResult.code}`);
 					}
-					finalize(result.path!, branch);
+					await finalize(result.path!, branch);
 				} else {
-					finalize(result.path!, branch);
+					await finalize(result.path!, branch);
 				}
 			} else {
 				setStatus("error");
@@ -206,12 +202,16 @@ export default function Create({ options, args }: Props) {
 		options.work,
 		options.plan,
 		options["no-pull"],
+		options.window,
 		options.tmux,
 		options.name,
 	]);
 
 	const isLoading =
-		status === "pulling" || status === "creating" || status === "init-script" || status === "tmux";
+		status === "pulling" ||
+		status === "creating" ||
+		status === "init-script" ||
+		status === "spawning-window";
 
 	return (
 		<Box flexDirection="column" padding={1} width="100%">
@@ -259,9 +259,9 @@ export default function Create({ options, args }: Props) {
 						</Box>
 					)}
 
-					{options.tmux && (
+					{(options.window || options.tmux) && (
 						<Box gap={1}>
-							<Text dimColor>tmux:</Text>
+							<Text dimColor>window:</Text>
 							<Text backgroundColor="green" color="white">
 								{` ${options.name || "auto"} `}
 							</Text>
@@ -285,7 +285,12 @@ export default function Create({ options, args }: Props) {
 							✓ {message}
 						</Text>
 						<Text dimColor> {worktreePath}</Text>
-						{tmuxWindowName && <Text dimColor> tmux window: {tmuxWindowName}</Text>}
+						{muxWindowName && (
+							<Text dimColor>
+								{" "}
+								{muxKind ?? "tmux"} window: {muxWindowName}
+							</Text>
+						)}
 					</Box>
 				)}
 				{status === "error" && (

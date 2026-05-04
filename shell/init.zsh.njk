@@ -1,22 +1,45 @@
+# Santree Shell Integration for Zsh — self-caching bootstrap
+# ===========================================================
+#
+# This output is produced by `santree helpers shell-init zsh`. The santree CLI
+# cold-starts in several seconds (Node + Pastel), so eval'ing it on every shell
+# launch is too slow. To avoid that, the bootstrap below writes the rendered
+# integration body to a cache file once, then sources the cache. Subsequent
+# shells can source the cache file directly — bypassing the santree CLI
+# entirely — and the cache self-invalidates whenever the santree binary is
+# upgraded (see the self-validation header at the top of the cache content).
+#
+# .zshrc usage (one-liner with first-run fallback):
+#   _SI=${XDG_CACHE_HOME:-$HOME/.cache}/santree/init-zsh.zsh
+#   [[ -f $_SI ]] && source $_SI || eval "$(santree helpers shell-init zsh)"
+#
+# Behavior:
+#   - First shell after install: cache miss → runs santree (slow), writes cache.
+#   - Subsequent shells: source cache directly (fast, no santree spawn).
+#   - After `npm i -g santree` upgrade: cache mtime older than new binary,
+#     self-validation triggers a one-time regeneration in that shell.
+
+_santree_cache="${SANTREE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/santree}/init-zsh.zsh"
+mkdir -p "${_santree_cache:h}"
+
+# Write the integration body to the cache file. Single-quoted heredoc
+# delimiter ('SANTREE_INIT_BODY_EOF__') prevents parameter expansion of the
+# body — the variables and functions are evaluated only when the cache file
+# is sourced, not during this write.
+cat > "$_santree_cache" <<'SANTREE_INIT_BODY_EOF__'
 # Santree Shell Integration for Zsh
 # ==================================
+# AUTO-GENERATED CACHE — do not edit. Regenerate with:
+#   eval "$(santree helpers shell-init zsh)"
 #
-# This script provides a shell wrapper around the santree CLI to enable:
-# 1. Automatic directory switching after `worktree create` and `worktree switch` commands
-# 2. Automatic recovery when the current worktree directory is deleted
-#
-# Installation:
-#   Add to your .zshrc: eval "$(santree helpers shell-init zsh)"
-#
-# How it works:
-# -------------
-# Since child processes cannot change the parent shell's directory, the CLI
-# outputs special markers (SANTREE_CD:path) that this wrapper intercepts
-# to perform the actual `cd` command in the current shell.
-#
-# The wrapper also handles the case where you're in a worktree directory
-# that gets deleted (e.g., after `santree worktree clean` or `santree worktree remove`),
-# automatically returning you to the main repository or home directory.
+# Self-validation: if the santree binary on $PATH is newer than this cache
+# file, fall back to the slow path: re-run santree, which overwrites this
+# cache and re-sources the fresh integration. `return` short-circuits the
+# (now-stale) body below so its definitions don't get loaded.
+if [[ ${commands[santree]:-} -nt ${(%):-%x} ]]; then
+  eval "$(command santree helpers shell-init zsh)"
+  return
+fi
 
 # Export marker so `santree doctor` can verify shell integration is loaded
 export SANTREE_SHELL_INTEGRATION=1
@@ -172,3 +195,10 @@ if (( $+functions[compdef] )); then
     compdef _santree santree
     compdef _santree st
 fi
+SANTREE_INIT_BODY_EOF__
+
+# Source the cache we just wrote so this shell gets the integration immediately.
+# Future shells can skip the santree CLI and source the cache directly via the
+# .zshrc one-liner shown in the comment block at the top of this output.
+source "$_santree_cache"
+unset _santree_cache

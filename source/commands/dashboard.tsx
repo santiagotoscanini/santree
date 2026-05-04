@@ -21,6 +21,7 @@ import {
 import { run, spawnAsync } from "../lib/exec.js";
 import { resolveAgentBinary } from "../lib/ai.js";
 import { extractTicketId } from "../lib/git.js";
+import { getMultiplexer } from "../lib/multiplexer/index.js";
 import { getPRTemplate } from "../lib/github.js";
 import { renderPrompt, renderDiff, renderTicket } from "../lib/prompts.js";
 import { getTicketContent } from "../lib/linear.js";
@@ -53,10 +54,6 @@ const CLAUDE_VERSION = (() => {
 })();
 
 // ── Helpers ───────────────────────────────────────────────────────────
-
-function isInTmux(): boolean {
-	return !!process.env.TMUX;
-}
 
 function slugify(title: string): string {
 	return title
@@ -155,11 +152,7 @@ let altScreenEntered = false;
 function ensureAltScreen() {
 	if (altScreenEntered) return;
 	altScreenEntered = true;
-	if (isInTmux()) {
-		try {
-			execSync('tmux rename-window "santree"', { stdio: "ignore" });
-		} catch {}
-	}
+	getMultiplexer().renameWindow("", "santree");
 	process.stdout.write("\x1b[?1049h"); // Enter alternate screen buffer
 	process.stdout.write("\x1b[?25l"); // Hide cursor
 }
@@ -426,7 +419,7 @@ export default function Dashboard() {
 	// ── Actions ───────────────────────────────────────────────────────
 
 	const launchWorkInTmux = useCallback(
-		(
+		async (
 			di: DashboardIssue,
 			mode: "plan" | "implement",
 			worktreePath: string,
@@ -439,35 +432,43 @@ export default function Dashboard() {
 			const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
 			const workCmd =
 				mode === "plan" ? `st worktree work --plan${contextArg}` : `st worktree work${contextArg}`;
+			const cmd = resumeCmd ?? workCmd;
+			const mux = getMultiplexer();
 
-			try {
-				// Switch to existing window if it exists
-				execSync(`tmux select-window -t "${windowName}"`, { stdio: "ignore" });
-				const cmd = resumeCmd ?? workCmd;
-				execSync(`tmux send-keys -t "${windowName}" "${cmd}" Enter`, { stdio: "ignore" });
-				dispatch({
-					type: "SET_ACTION_MESSAGE",
-					message: resumeCmd
-						? `Resumed session in: ${windowName}`
-						: `Launched ${mode} in: ${windowName}`,
+			const selected = await mux.selectWindow(windowName);
+			if (selected.ok) {
+				const sent = mux.sendCommand(windowName, cmd);
+				if (sent.ok) {
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: resumeCmd
+							? `Resumed session in: ${windowName}`
+							: `Launched ${mode} in: ${windowName}`,
+					});
+				} else {
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: `Focused ${windowName} — run \`${cmd}\` manually (${sent.reason})`,
+					});
+				}
+			} else {
+				const created = await mux.createWindow({
+					name: windowName,
+					cwd: worktreePath,
+					command: cmd,
 				});
-			} catch {
-				// Window doesn't exist — create it
-				try {
-					execSync(`tmux new-window -n "${windowName}" -c "${worktreePath}"`, { stdio: "ignore" });
-					// Small delay so the new shell can start reading input before we send keys,
-					// otherwise buffered keystrokes from the dashboard pane can leak in.
-					execSync("sleep 0.1", { stdio: "ignore" });
-					const cmd = resumeCmd ?? workCmd;
-					execSync(`tmux send-keys -t "${windowName}" "${cmd}" Enter`, { stdio: "ignore" });
+				if (created.ok) {
 					dispatch({
 						type: "SET_ACTION_MESSAGE",
 						message: resumeCmd
 							? `Resumed session in new window: ${windowName}`
-							: `Launched ${mode} in tmux window: ${windowName}`,
+							: `Launched ${mode} in ${mux.kind} window: ${windowName}`,
 					});
-				} catch {
-					dispatch({ type: "SET_ACTION_MESSAGE", message: "Failed to create tmux window" });
+				} else {
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: `Failed to create ${mux.kind} window${created.message ? `: ${created.message}` : ""}`,
+					});
 				}
 			}
 			// Delayed refresh to pick up session ID created by `st worktree work`
@@ -477,24 +478,35 @@ export default function Dashboard() {
 	);
 
 	const launchAfterCreation = useCallback(
-		(mode: "plan" | "implement", worktreePath: string, ticketId: string, contextFile?: string) => {
-			if (isInTmux()) {
+		async (
+			mode: "plan" | "implement",
+			worktreePath: string,
+			ticketId: string,
+			contextFile?: string,
+		) => {
+			const mux = getMultiplexer();
+			if (mux.isActive()) {
 				const windowName = ticketId;
 				const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
 				const workCmd =
 					mode === "plan"
 						? `st worktree work --plan${contextArg}`
 						: `st worktree work${contextArg}`;
-				try {
-					execSync(`tmux new-window -n "${windowName}" -c "${worktreePath}"`, { stdio: "ignore" });
-					execSync("sleep 0.1", { stdio: "ignore" });
-					execSync(`tmux send-keys -t "${windowName}" "${workCmd}" Enter`, { stdio: "ignore" });
+				const created = await mux.createWindow({
+					name: windowName,
+					cwd: worktreePath,
+					command: workCmd,
+				});
+				if (created.ok) {
 					dispatch({
 						type: "SET_ACTION_MESSAGE",
 						message: `Created worktree + launched ${mode} in: ${windowName}`,
 					});
-				} catch {
-					dispatch({ type: "SET_ACTION_MESSAGE", message: "Worktree created, but tmux failed" });
+				} else {
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: `Worktree created, but ${mux.kind} failed${created.message ? `: ${created.message}` : ""}`,
+					});
 				}
 				setTimeout(() => refresh(), 3000);
 			} else {
@@ -655,8 +667,8 @@ export default function Dashboard() {
 
 			if (di.worktree) {
 				// Worktree exists — launch work
-				if (isInTmux()) {
-					launchWorkInTmux(di, mode, di.worktree.path, contextFile);
+				if (getMultiplexer().isActive()) {
+					void launchWorkInTmux(di, mode, di.worktree.path, contextFile);
 				} else {
 					leaveAltScreen();
 					console.log(`SANTREE_CD:${di.worktree.path}`);
@@ -1349,7 +1361,7 @@ export default function Dashboard() {
 					return;
 				}
 
-				// AI Review in tmux
+				// AI Review in multiplexer
 				if (input === "r") {
 					if (!ri.worktree) {
 						dispatch({
@@ -1358,20 +1370,23 @@ export default function Dashboard() {
 						});
 						return;
 					}
-					if (isInTmux()) {
+					const mux = getMultiplexer();
+					if (mux.isActive()) {
 						const windowName = `review-${extractTicketId(ri.branch ?? "") ?? ri.pr.number}`;
-						try {
-							execSync(`tmux new-window -n "${windowName}" -c "${ri.worktree.path}"`, {
-								stdio: "ignore",
+						const cwd = ri.worktree.path;
+						void (async () => {
+							const created = await mux.createWindow({
+								name: windowName,
+								cwd,
+								command: "st pr review",
 							});
-							execSync("sleep 0.1", { stdio: "ignore" });
-							execSync(`tmux send-keys -t "${windowName}" "st pr review" Enter`, {
-								stdio: "ignore",
+							dispatch({
+								type: "SET_ACTION_MESSAGE",
+								message: created.ok
+									? `Launched AI review in ${mux.kind}`
+									: `Failed to launch review${created.message ? `: ${created.message}` : ""}`,
 							});
-							dispatch({ type: "SET_ACTION_MESSAGE", message: "Launched AI review in tmux" });
-						} catch {
-							dispatch({ type: "SET_ACTION_MESSAGE", message: "Failed to launch review" });
-						}
+						})();
 					} else {
 						leaveAltScreen();
 						console.log(`SANTREE_CD:${ri.worktree.path}`);
@@ -1456,29 +1471,29 @@ export default function Dashboard() {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "No worktree to switch to" });
 					return;
 				}
-				if (isInTmux()) {
+				const mux = getMultiplexer();
+				if (mux.isActive()) {
 					const windowName = di.issue.identifier;
 					const sessionId = di.worktree.sessionId;
 					const bin = resolveAgentBinary();
 					const resumeCmd = sessionId && bin ? `${bin} --resume ${sessionId}` : null;
-
-					try {
-						execSync(`tmux select-window -t "${windowName}"`, { stdio: "ignore" });
-					} catch {
-						// Window doesn't exist — create one and resume/launch
-						try {
-							execSync(`tmux new-window -n "${windowName}" -c "${di.worktree.path}"`, {
-								stdio: "ignore",
+					const worktreePath = di.worktree.path;
+					void (async () => {
+						const selected = await mux.selectWindow(windowName);
+						if (selected.ok) return;
+						const cmd = resumeCmd ?? "st worktree work";
+						const created = await mux.createWindow({
+							name: windowName,
+							cwd: worktreePath,
+							command: cmd,
+						});
+						if (!created.ok) {
+							dispatch({
+								type: "SET_ACTION_MESSAGE",
+								message: `Failed to switch ${mux.kind} window${created.message ? `: ${created.message}` : ""}`,
 							});
-							execSync("sleep 0.1", { stdio: "ignore" });
-							const cmd = resumeCmd ?? "st worktree work";
-							execSync(`tmux send-keys -t "${windowName}" "${cmd}" Enter`, {
-								stdio: "ignore",
-							});
-						} catch {
-							dispatch({ type: "SET_ACTION_MESSAGE", message: "Failed to switch tmux window" });
 						}
-					}
+					})();
 				} else {
 					leaveAltScreen();
 					console.log(`SANTREE_CD:${di.worktree.path}`);
@@ -1536,17 +1551,23 @@ export default function Dashboard() {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "No PR to review" });
 					return;
 				}
-				if (isInTmux()) {
+				const mux = getMultiplexer();
+				if (mux.isActive()) {
 					const windowName = `review-${di.issue.identifier}`;
-					try {
-						execSync(`tmux new-window -n "${windowName}" -c "${di.worktree.path}"`, {
-							stdio: "ignore",
+					const cwd = di.worktree.path;
+					void (async () => {
+						const created = await mux.createWindow({
+							name: windowName,
+							cwd,
+							command: "st pr review",
 						});
-						execSync(`tmux send-keys -t "${windowName}" "st pr review" Enter`, { stdio: "ignore" });
-						dispatch({ type: "SET_ACTION_MESSAGE", message: "Launched review in tmux" });
-					} catch {
-						dispatch({ type: "SET_ACTION_MESSAGE", message: "Failed to launch review" });
-					}
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: created.ok
+								? `Launched review in ${mux.kind}`
+								: `Failed to launch review${created.message ? `: ${created.message}` : ""}`,
+						});
+					})();
 				} else {
 					leaveAltScreen();
 					console.log(`SANTREE_CD:${di.worktree.path}`);
@@ -1597,17 +1618,23 @@ export default function Dashboard() {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "No PR to fix" });
 					return;
 				}
-				if (isInTmux()) {
+				const mux = getMultiplexer();
+				if (mux.isActive()) {
 					const windowName = `fix-${di.issue.identifier}`;
-					try {
-						execSync(`tmux new-window -n "${windowName}" -c "${di.worktree.path}"`, {
-							stdio: "ignore",
+					const cwd = di.worktree.path;
+					void (async () => {
+						const created = await mux.createWindow({
+							name: windowName,
+							cwd,
+							command: "st pr fix",
 						});
-						execSync(`tmux send-keys -t "${windowName}" "st pr fix" Enter`, { stdio: "ignore" });
-						dispatch({ type: "SET_ACTION_MESSAGE", message: "Launched PR fix in tmux" });
-					} catch {
-						dispatch({ type: "SET_ACTION_MESSAGE", message: "Failed to launch PR fix" });
-					}
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: created.ok
+								? `Launched PR fix in ${mux.kind}`
+								: `Failed to launch PR fix${created.message ? `: ${created.message}` : ""}`,
+						});
+					})();
 				} else {
 					leaveAltScreen();
 					console.log(`SANTREE_CD:${di.worktree.path}`);
@@ -1758,23 +1785,15 @@ export default function Dashboard() {
 								<Text> </Text>
 								<Text dimColor>
 									<Text color="cyan" bold>
-										Enter
-									</Text>
-									{" newline  "}
-									<Text color="cyan" bold>
-										↑↓←→
-									</Text>
-									{" move  "}
-									<Text color="cyan" bold>
-										Ctrl+V
-									</Text>
-									{" paste image  "}
-									<Text color="cyan" bold>
 										Ctrl+D
 									</Text>
-									{" continue  "}
+									{" send  ·  "}
 									<Text color="cyan" bold>
-										ESC
+										Ctrl+O
+									</Text>
+									{" editor  ·  "}
+									<Text color="cyan" bold>
+										Ctrl+C
 									</Text>
 									{" cancel"}
 								</Text>

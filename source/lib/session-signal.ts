@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import { execSync, spawn } from "child_process";
+import { spawn } from "child_process";
+import { getMultiplexer } from "./multiplexer/index.js";
 
 export type SessionStateValue = "waiting" | "idle" | "active" | "exited";
 
@@ -26,7 +27,8 @@ export function extractRepoAndTicket(cwd: string): { repoRoot: string; ticketId:
 }
 
 export function renameTmuxWindow(ticketId: string, state: SessionStateValue): void {
-	if (!process.env.TMUX) return;
+	const mux = getMultiplexer();
+	if (!mux.isActive()) return;
 
 	let name: string;
 	switch (state) {
@@ -41,11 +43,7 @@ export function renameTmuxWindow(ticketId: string, state: SessionStateValue): vo
 			break;
 	}
 
-	try {
-		execSync(`tmux rename-window "${name}"`, { stdio: "ignore" });
-	} catch {
-		// Ignore tmux errors
-	}
+	mux.renameWindow("", name);
 }
 
 export function runHookScript(

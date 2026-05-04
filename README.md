@@ -317,6 +317,15 @@ echo "$(date): $SANTREE_TICKET_ID waiting — $SANTREE_MESSAGE" >> /tmp/santree-
 
 Make it executable: `chmod +x .santree/hooks/on-waiting.sh`
 
+### Environment Variables
+
+| Variable | Effect |
+|---|---|
+| `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. Examples: `cursor`, `zed`, `code`, `nvim`. |
+| `SANTREE_MULTIPLEXER` | Terminal multiplexer used by the dashboard and `worktree create --window`. One of `tmux`, `cmux`, `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. cmux is macOS-only and limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472). |
+
+Santree always launches Claude with `--permission-mode auto` (Claude Code's auto mode), or `plan` when invoked in plan mode. Worktree-scoped automation is the default — there is no opt-in flag.
+
 ---
 
 ## Command Options

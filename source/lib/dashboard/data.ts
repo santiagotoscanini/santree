@@ -4,7 +4,7 @@ import {
 	getBaseBranch,
 	readAllMetadata,
 	readSessionState,
-	isSessionAliveInTmux,
+	isSessionAlive,
 	clearSessionState,
 	getGitStatusAsync,
 	getCommitsAheadAsync,
@@ -68,8 +68,8 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					getPRInfoAsync(wt.branch),
 				]);
 				let sessState = readSessionState(repoRoot, issue.identifier);
-				// Validate against tmux — if no claude process is running, clear stale state
-				if (sessState && !isSessionAliveInTmux(issue.identifier)) {
+				// Validate against the active multiplexer — if the session has gone, clear stale state
+				if (sessState && !isSessionAlive(issue.identifier)) {
 					clearSessionState(repoRoot, issue.identifier);
 					sessState = null;
 				}
@@ -134,7 +134,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						.trim() || tid;
 
 				let sessState = readSessionState(repoRoot, tid);
-				if (sessState && !isSessionAliveInTmux(tid)) {
+				if (sessState && !isSessionAlive(tid)) {
 					clearSessionState(repoRoot, tid);
 					sessState = null;
 				}
@@ -314,7 +314,7 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 						getCommitsAheadAsync(wt.path, base),
 					]);
 					let sessState = ticketId ? readSessionState(repoRoot, ticketId) : null;
-					if (sessState && ticketId && !isSessionAliveInTmux(ticketId)) {
+					if (sessState && ticketId && !isSessionAlive(ticketId)) {
 						clearSessionState(repoRoot, ticketId);
 						sessState = null;
 					}

@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 const { version } = require("../../package.json");
 import { findMainRepoRoot, getSantreeDir, getInitScriptPath } from "../lib/git.js";
 import { getAuthStatus, getValidTokens } from "../lib/linear.js";
+import { getMultiplexer } from "../lib/multiplexer/index.js";
 
 const execAsync = promisify(exec);
 
@@ -122,6 +123,74 @@ async function checkTool(
 		installed: true,
 		version: version || "unknown",
 		path,
+	};
+}
+
+/**
+ * Reports the active multiplexer (tmux/cmux/none) and verifies the underlying
+ * binary is reachable. Surfaces a hint when the configured multiplexer can't run.
+ */
+async function checkMultiplexer(): Promise<ToolStatus> {
+	const mux = getMultiplexer();
+	const explicit = process.env["SANTREE_MULTIPLEXER"]?.toLowerCase();
+	const description = `Multiplexer (active: ${mux.kind}${explicit ? `, SANTREE_MULTIPLEXER=${explicit}` : ""})`;
+
+	if (mux.kind === "none") {
+		return {
+			name: "multiplexer",
+			description,
+			required: false,
+			installed: false,
+			hint: "No multiplexer active. Set SANTREE_MULTIPLEXER=tmux (or cmux) and run inside one. Install: brew install tmux",
+		};
+	}
+
+	if (mux.kind === "tmux") {
+		const path = await getPath("tmux");
+		if (!path) {
+			return {
+				name: "tmux",
+				description,
+				required: false,
+				installed: false,
+				hint: "Install: brew install tmux",
+			};
+		}
+		const version = await tryExec("tmux -V");
+		return {
+			name: "tmux",
+			description,
+			required: false,
+			installed: true,
+			version: version || "unknown",
+			path,
+		};
+	}
+
+	// cmux
+	const path = await getPath("cmux");
+	if (!path) {
+		return {
+			name: "cmux",
+			description,
+			required: false,
+			installed: false,
+			hint: "Install cmux.app from https://cmux.com or set SANTREE_MULTIPLEXER=tmux. cmux is macOS-only.",
+		};
+	}
+	const version = await tryExec("cmux --version 2>/dev/null");
+	const ping = await tryExec("cmux ping 2>/dev/null");
+	const hint = !ping
+		? "cmux app not reachable — open cmux.app or set SANTREE_MULTIPLEXER=tmux. NOTE: cmux #1472 — programmatic workspaces may have dead PTYs (https://github.com/manaflow-ai/cmux/issues/1472)."
+		: "NOTE: cmux #1472 — programmatic workspaces may have dead PTYs (https://github.com/manaflow-ai/cmux/issues/1472).";
+	return {
+		name: "cmux",
+		description,
+		required: false,
+		installed: !!ping,
+		version: version || "unknown",
+		path,
+		hint,
 	};
 }
 
@@ -702,7 +771,7 @@ export default function Doctor() {
 					"Install: brew install git",
 				),
 				checkGhAuth(),
-				checkTool("tmux", "Terminal multiplexer", false, "tmux -V", "Install: brew install tmux"),
+				checkMultiplexer(),
 				checkTool(
 					"claude",
 					"Claude Code CLI",

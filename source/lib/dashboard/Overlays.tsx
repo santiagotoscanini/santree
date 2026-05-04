@@ -223,23 +223,15 @@ export function PrCreateOverlay({
 					<Text> </Text>
 					<Text dimColor>
 						<Text color="cyan" bold>
-							Enter
-						</Text>
-						{" newline  "}
-						<Text color="cyan" bold>
-							↑↓←→
-						</Text>
-						{" move  "}
-						<Text color="cyan" bold>
-							Ctrl+V
-						</Text>
-						{" paste image  "}
-						<Text color="cyan" bold>
 							Ctrl+D
 						</Text>
-						{" continue  "}
+						{" send  ·  "}
 						<Text color="cyan" bold>
-							ESC
+							Ctrl+O
+						</Text>
+						{" editor  ·  "}
+						<Text color="cyan" bold>
+							Ctrl+C
 						</Text>
 						{" cancel"}
 					</Text>

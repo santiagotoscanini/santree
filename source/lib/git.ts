@@ -3,6 +3,7 @@ import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
 import { run, runAsync } from "./exec.js";
+import { getMultiplexer } from "./multiplexer/index.js";
 
 const execAsync = promisify(exec);
 
@@ -673,37 +674,14 @@ export function readSessionState(repoRoot: string, ticketId: string): SessionSta
 }
 
 /**
- * Check if a claude process is running in a tmux window for the given ticket.
- * Windows are named after ticket IDs (possibly with suffixes like " !" or " ~").
- * Gets the pane PID and walks the process tree looking for a "claude" process.
+ * Check if a session for the given ticket is still alive in the active multiplexer.
+ * Delegates to the configured multiplexer (tmux: pane_pid + pgrep claude;
+ * cmux: workspace lookup; none: always false). Callers should also consult the
+ * .santree/session-states/<ticketId>.json file — that's the authoritative signal
+ * written by Claude Code hooks, while this is the "is the terminal still up" backstop.
  */
-export function isSessionAliveInTmux(ticketId: string): boolean {
-	try {
-		const output = execSync('tmux list-windows -F "#{window_name}\t#{pane_pid}"', {
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "ignore"],
-		}).trim();
-
-		for (const line of output.split("\n")) {
-			const [name, pidStr] = line.split("\t");
-			if (!name?.startsWith(ticketId)) continue;
-			if (!pidStr) return false;
-			// Check if any descendant of the shell PID is a claude process
-			try {
-				const ps = execSync(`pgrep -P ${pidStr} -a`, {
-					encoding: "utf-8",
-					stdio: ["pipe", "pipe", "ignore"],
-				}).trim();
-				return ps.split("\n").some((proc) => proc.includes("claude"));
-			} catch {
-				// pgrep exits 1 when no matches — shell has no children
-				return false;
-			}
-		}
-	} catch {
-		// tmux not available or not in a tmux session
-	}
-	return false;
+export function isSessionAlive(ticketId: string): boolean {
+	return getMultiplexer().isSessionAlive(ticketId);
 }
 
 /**

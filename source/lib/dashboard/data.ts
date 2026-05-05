@@ -8,6 +8,7 @@ import {
 	clearSessionState,
 	getGitStatusAsync,
 	getCommitsAheadAsync,
+	getDiffShortstatAsync,
 } from "../git.js";
 import {
 	getPRInfoAsync,
@@ -62,10 +63,11 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 
 			if (wt) {
 				const base = getBaseBranch(wt.branch);
-				const [gitStatusOutput, ahead, pr] = await Promise.all([
+				const [gitStatusOutput, ahead, pr, shortstat] = await Promise.all([
 					getGitStatusAsync(wt.path),
 					getCommitsAheadAsync(wt.path, base),
 					getPRInfoAsync(wt.branch),
+					getDiffShortstatAsync(wt.path, base),
 				]);
 				let sessState = readSessionState(repoRoot, issue.identifier);
 				// Validate against the active multiplexer — if the session has gone, clear stale state
@@ -83,6 +85,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					gitStatus: gitStatusOutput,
 					sessionState: ss === "exited" ? null : ss,
 					sessionMessage: sessState?.message ?? null,
+					diffStats: shortstat,
 				};
 				prInfo = pr;
 
@@ -110,10 +113,11 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 			.filter(([tid]) => !consumedTicketIds.has(tid))
 			.map(async ([tid, wt]) => {
 				const base = getBaseBranch(wt.branch);
-				const [gitStatusOutput, ahead, pr] = await Promise.all([
+				const [gitStatusOutput, ahead, pr, shortstat] = await Promise.all([
 					getGitStatusAsync(wt.path),
 					getCommitsAheadAsync(wt.path, base),
 					getPRInfoAsync(wt.branch),
+					getDiffShortstatAsync(wt.path, base),
 				]);
 
 				let checksInfo: PRCheck[] | null = null;
@@ -161,6 +165,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						gitStatus: gitStatusOutput,
 						sessionState: ss === "exited" ? null : ss,
 						sessionMessage: sessState?.message ?? null,
+						diffStats: shortstat,
 					},
 					pr,
 					checks: checksInfo,
@@ -309,9 +314,10 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 				if (wt) {
 					const ticketId = extractTicketId(branch);
 					const base = getBaseBranch(branch);
-					const [gitStatusOutput, ahead] = await Promise.all([
+					const [gitStatusOutput, ahead, shortstat] = await Promise.all([
 						getGitStatusAsync(wt.path),
 						getCommitsAheadAsync(wt.path, base),
+						getDiffShortstatAsync(wt.path, base),
 					]);
 					let sessState = ticketId ? readSessionState(repoRoot, ticketId) : null;
 					if (sessState && ticketId && !isSessionAlive(ticketId)) {
@@ -328,6 +334,7 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 						gitStatus: gitStatusOutput,
 						sessionState: ss === "exited" ? null : ss,
 						sessionMessage: sessState?.message ?? null,
+						diffStats: shortstat,
 					};
 				}
 			}

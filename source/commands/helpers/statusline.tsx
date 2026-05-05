@@ -142,9 +142,17 @@ function getGitChanges(cwd: string): {
 	};
 }
 
-// Build a progress bar for context usage
+// Build a progress bar for context usage.
+//
+// We deliberately inflate the displayed percentage by 20% (clamped to 100) so
+// the bar fills up faster than the model's actual context window. The point is
+// to nudge toward more-frequent /compact: the color thresholds (60%/80%) trip
+// earlier, so the yellow/red warnings show up while there's still real headroom
+// left to compact gracefully instead of after the model has already started
+// dropping content.
+const CONTEXT_DISPLAY_MULTIPLIER = 1.2;
 function formatContextUsage(usedPercentage: number): string {
-	const used = Math.round(usedPercentage);
+	const used = Math.min(100, Math.round(usedPercentage * CONTEXT_DISPLAY_MULTIPLIER));
 	const color = used >= 80 ? c.red : used >= 60 ? c.yellow : c.green;
 	const width = 20;
 	const filled = Math.round((used * width) / 100);

@@ -27,12 +27,13 @@ source/
 │   ├── prompts.ts       # Nunjucks template renderer for AI prompts
 │   └── dashboard/       # Dashboard UI components
 │       ├── types.ts     # State types, action types, phase enums
-│       ├── IssueList.tsx # Left pane — issue list with priority, session, PR, CI columns
-│       └── DetailPanel.tsx # Right pane — issue detail, git status, context-aware actions
+│       ├── IssueList.tsx # Left pane — issue list with nested detail sub-rows (diff/pr/session) below issues with worktrees
+│       ├── DetailPanel.tsx # Right pane — issue detail, git status, context-aware actions
+│       └── DiffOverlay.tsx # Inline diff overlay — file tree + diff content (full-area)
 └── commands/            # One React component per CLI command
-    ├── doctor.tsx        # Top-level: system requirements check
+    ├── doctor.tsx        # Top-level: system requirements check (also reports git-delta as optional)
     ├── dashboard.tsx     # Top-level: interactive dashboard (alt screen, mouse, inline flows)
-    ├── worktree/         # santree worktree {create,list,switch,remove,clean,sync,work,open,setup,commit}
+    ├── worktree/         # santree worktree {create,list,switch,remove,clean,sync,work,open,setup,commit,diff}
     ├── pr/               # santree pr {create,open,fix,review}
     ├── linear/           # santree linear {auth,switch,open}
     └── helpers/          # santree helpers {shell-init,statusline}
@@ -112,6 +113,8 @@ The `Multiplexer` interface (`lib/multiplexer/types.ts`) exposes: `isActive()`, 
 
 **cmux caveat**: cmux is macOS-only and requires the cmux.app GUI running. Upstream issue [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472) — programmatically created workspaces have dead PTYs, so `sendCommand` is unimplemented (returns `unsupported`) and post-creation flows degrade. tmux remains the recommended backend until #1472 lands. `santree doctor` surfaces the warning when cmux is active.
 
+**cmux-bundled Claude**: cmux ships its own Claude CLI at `/Applications/cmux.app/Contents/Resources/bin/claude`, wired to the active cmux workspace ([cmux#2048](https://github.com/manaflow-ai/cmux/issues/2048)). When `getMultiplexer().kind === "cmux"`, `resolveClaudeBinary()` in `lib/ai.ts` returns the bundled path first; otherwise it falls back to `which claude` then `~/.claude/local/claude`. This single resolver feeds `resolveAgentBinary()` (interactive launches), `getInstalledClaudeVersion()` (header + update checks), and `checkClaude()` (doctor row labelled "Claude Code CLI (cmux-bundled)"). Use `resolveClaudeBinary()` for any new code that needs the binary path.
+
 ### Statusline (`commands/helpers/statusline.tsx`)
 
 Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hook), writes ANSI-colored text to stdout, then `process.exit(0)`. Detects santree worktrees via path (`/.santree/worktrees/`).
@@ -120,21 +123,22 @@ Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hoo
 
 Full-screen interactive dashboard showing all Linear issues assigned to the user. Runs in the terminal alternate screen with mouse support (click-to-select, drag-to-resize panes, scroll wheel).
 
-**Layout**: Two-pane split — left pane (`IssueList`) shows issues grouped by project with columns for priority, session, PR, and CI status; right pane (`DetailPanel`) shows issue detail with description, git status, PR info, checks, reviews, and context-aware actions.
+**Layout**: Two-pane split — left pane (`IssueList`) shows issues grouped by project. Each issue with a worktree expands into one or more nested **detail sub-rows** below its title (`· diff`, `· pr`, `· session`); issues without worktrees stay as a single row. The shared row builder `buildIssueListRows()` is exported from `IssueList.tsx` and used by both the renderer and the dashboard's mouse-click row→issue mapper, so click coordinates always resolve to the correct parent issue (sub-rows resolve to the parent's `flatIndex`). Right pane (`DetailPanel`) shows issue detail with description, git status, PR info, checks, reviews, and context-aware actions.
 
-**State management**: `useReducer` with `DashboardState`/`DashboardAction` (defined in `lib/dashboard/types.ts`). Overlay states (`mode-select`, `confirm-delete`, `commit`, `pr-create`) replace the right pane with inline flows.
+**State management**: `useReducer` with `DashboardState`/`DashboardAction` (defined in `lib/dashboard/types.ts`). Right-pane overlays (`mode-select`, `confirm-delete`, `commit`, `pr-create`) replace just the right pane; full-area overlays (`context-input`, `diff`, `base-select`, `confirm-setup`) replace the entire content area below the tab bar.
 
 **Inline flows** (never leave the dashboard):
 
 - **Commit & push** (`C` key): stage confirm → message input via `TextInput` → commit → push. Uses `{ cwd: worktreePath }` for all git operations (not `git -C`).
 - **PR creation** (`c` key): choose fill/web → push → create via `gh pr create`. Fill mode uses `--fill --base --head` flags.
+- **Diff overlay** (`v` key): full-area split — file tree (left) + colored diff content (right). Uses `git merge-base <base> HEAD` so upstream-only commits are excluded (matches GitHub PR diff). `computeDiffLayout()` in `DiffOverlay.tsx` is shared between rendering and the dashboard's mouse handler so click coordinates map to the same row→file mapping the renderer uses. When `SANTREE_DIFF_TOOL` is set, file content is piped through that tool and rendered with raw ANSI passthrough (Ink supports ANSI in `<Text>` content); otherwise lines are colorized manually based on `+`/`-`/`@@` prefixes.
 
 **Multiplexer-launched flows** (open new windows/workspaces in the active multiplexer — see [Multiplexer abstraction](#multiplexer-abstraction-libmultiplexer)):
 
 - **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a new window
 - **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in a new window
 
-**Data fetching**: `loadDashboardData()` fetches Linear issues and enriches each with worktree info (git status, commits ahead, session ID), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 30s.
+**Data fetching**: `loadDashboardData()` fetches Linear issues and enriches each with worktree info (git status, commits ahead, session ID, **diff shortstat vs merge-base**), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 30s. `getDiffShortstatAsync()` in `lib/git.ts` runs `git diff --shortstat $(git merge-base <base> HEAD)`.
 
 **Alt screen lifecycle**: `ensureAltScreen()` enters alt screen before first render. Cleanup in `useEffect` return exits alt screen — `exit()` triggers unmount which triggers cleanup (do not write escape sequences before `exit()` or Ink's final render leaks to normal buffer).
 
@@ -150,13 +154,18 @@ Full-screen interactive dashboard showing all Linear issues assigned to the user
 | Variable | Effect |
 |---|---|
 | `SANTREE_MULTIPLEXER` | Select the terminal multiplexer used by the dashboard and worktree-create flows: `tmux`, `cmux`, or `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. |
+| `SANTREE_DIFF_TOOL` | Pager/renderer for `worktree diff` (CLI) and the dashboard diff overlay. CLI passes `-c core.pager=<tool>` to git; overlay pipes `git diff --color=always` output through the tool and renders the ANSI result. Validated against `[A-Za-z0-9_\-/.+]` in `getDiffTool()` to keep the spawn arg surface tight. |
+| `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In auto mode, `detectTerminalTheme()` in `lib/dashboard/theme.ts` queries the terminal background via OSC 11 (`\x1b]11;?\x07`), parses the RGB response, and picks light/dark by Rec. 709 luminance. Re-runs alongside `loadDashboardData()` on every refresh so theme switches propagate within ~30s. Falls back to `dark` on non-TTY or 150ms timeout. Affects `selectionBg` (only theme-sensitive style — terminal-native foreground colors render correctly on either background). |
+| `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. |
 
 Santree always launches Claude with `--permission-mode auto` (or `plan` for plan mode), Claude Code's auto mode. There is no opt-in env var — worktree-scoped automation is the default. Set `--permission-mode default` upstream if you ever need stricter prompting.
 
 ## External Dependencies
 
 Required: Node.js >= 20, Git, GitHub CLI (`gh`), Claude Code CLI (`claude`)
-Optional: a terminal multiplexer for new-window flows — tmux (default, all platforms) or cmux (experimental, macOS-only; limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472))
+Optional:
+- A terminal multiplexer for new-window flows — tmux (default, all platforms) or cmux (experimental, macOS-only; limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472))
+- `git-delta` (or any unified-diff pager) — used by `worktree diff` and the dashboard `v` overlay when `SANTREE_DIFF_TOOL` is set. `santree doctor` reports its presence.
 
 ### Linear Integration
 

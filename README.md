@@ -101,6 +101,7 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 | `santree worktree open`            | Open workspace in VSCode or Cursor                  |
 | `santree worktree setup`           | Run the init script (`.santree/init.sh`)            |
 | `santree worktree commit`          | Stage and commit changes                            |
+| `santree worktree diff`            | View branch-only diff (uses merge-base, like a GitHub PR) |
 
 ### Pull Requests (`santree pr`)
 
@@ -147,7 +148,7 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 
 `santree dashboard` opens a full-screen TUI to manage all your work in one place. It shows your Linear issues grouped by project, with live status for worktrees, PRs, CI checks, and reviews.
 
-**Left pane** — issue list with columns for priority, session ID, PR number, and CI status. Click to select, scroll wheel to navigate, drag the divider to resize panes.
+**Left pane** — issue list. Issues without worktrees show as a single row (priority + ID + title). Issues with worktrees expand into nested sub-rows below the title showing `· diff` (files/adds/deletes/commits-ahead), `· pr` (number, state, CI, review count), and `· session` (state + Claude session ID). Click any row (main or sub) to select; scroll wheel navigates; drag the divider to resize panes.
 
 **Right pane** — issue detail with description, file-level git status (staged/unstaged/untracked), PR info, checks, reviews, and context-aware keyboard actions.
 
@@ -159,11 +160,14 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 | `e` | Open worktree in editor |
 | `C` | Inline commit & push flow |
 | `c` | Create PR (fill from commits or open in browser) |
+| `v` | Inline diff overlay — file tree + diff content (mouse + keyboard) |
 | `f` / `r` | Fix PR / Review PR (launches in tmux) |
 | `o` / `p` | Open Linear ticket / PR in browser |
 | `d` | Remove worktree |
 
-Commit and PR creation happen inline without leaving the dashboard. Work, fix, and review open in new tmux windows.
+Commit, PR creation, and diff review happen inline without leaving the dashboard. Work, fix, and review open in new tmux windows.
+
+**Diff overlay** (`v`) — branch-only diff vs the base branch's merge-base (matches GitHub PR semantics — upstream changes you haven't pulled don't leak in). Left pane shows changed files in a tree, right pane shows the diff. `j/k` navigate files, `J/K` (or shift+arrows) scroll the diff, `g/G` jump to top/bottom, `q`/`esc` close. Mouse: click a file to select, scroll wheel over the file pane changes selection, scroll wheel over the diff scrolls content. Set `SANTREE_DIFF_TOOL` to pipe through delta, diff-so-fancy, or any pager that takes a unified diff.
 
 ### Worktree Management
 
@@ -323,6 +327,8 @@ Make it executable: `chmod +x .santree/hooks/on-waiting.sh`
 |---|---|
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. Examples: `cursor`, `zed`, `code`, `nvim`. |
 | `SANTREE_MULTIPLEXER` | Terminal multiplexer used by the dashboard and `worktree create --window`. One of `tmux`, `cmux`, `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. cmux is macOS-only and limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472). |
+| `SANTREE_DIFF_TOOL` | Pager used by `worktree diff` (CLI) and the dashboard diff overlay. Passed to git as `-c core.pager=<tool>` for the CLI, and used to pipe content for the overlay. Examples: `delta`, `diff-so-fancy`. Must accept a unified diff on stdin. Names are restricted to `[A-Za-z0-9_\-/.+]`. |
+| `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In `auto` mode, santree queries the terminal's background via OSC 11 and re-detects on each refresh cycle (≤30s) so theme switches propagate automatically. Set explicitly when your terminal doesn't respond to OSC 11. |
 
 Santree always launches Claude with `--permission-mode auto` (Claude Code's auto mode), or `plan` when invoked in plan mode. Worktree-scoped automation is the default — there is no opt-in flag.
 
@@ -361,6 +367,17 @@ Shows worktrees with merged/closed PRs and prompts for confirmation before remov
 | ---------------- | --------------------------------------------------------------------------------------- |
 | `--editor <cmd>` | Editor command to use (default: `code`). Also configurable via `SANTREE_EDITOR` env var |
 
+### worktree diff
+
+Shows a branch-only unified diff against the base branch's merge-base — same scope as a GitHub PR diff (upstream commits you haven't pulled don't leak in). Includes both committed and uncommitted work by default. Honors `SANTREE_DIFF_TOOL` (e.g. `delta`).
+
+| Option       | Description                                       |
+| ------------ | ------------------------------------------------- |
+| `--commits`  | Show only committed changes (`merge-base..HEAD`)  |
+| `--staged`   | Show only staged changes                          |
+| `--unstaged` | Show only unstaged (working tree vs index)       |
+| `--base <branch>` | Override the base branch                     |
+
 ### worktree work
 
 | Option   | Description                     |
@@ -397,6 +414,33 @@ Automatically pushes, detects existing PRs, and uses the first commit message as
 | Claude Code (`claude`)               | AI agent for `work`, `fix`, `review` |
 | tmux                                 | Optional: new window support         |
 | VSCode (`code`) or Cursor (`cursor`) | Optional: workspace editor           |
+| delta (`git-delta`)                  | Optional: syntax-highlighted diffs (used by `worktree diff` and the dashboard `v` overlay when `SANTREE_DIFF_TOOL=delta` is set) |
+
+---
+
+## Provider Support
+
+Santree currently locks in to specific providers for some integrations and is interchangeable for others. The list below is a snapshot of what's supported today — contributions welcome.
+
+### Single-provider (no swap-out today)
+
+| Area | Supported | Not yet supported |
+| --- | --- | --- |
+| **Ticket system** | Linear (via `santree linear auth`) | Jira, GitHub Issues, Shortcut, Asana, Linear-equivalents |
+| **Source control / forge** | GitHub (via `gh` CLI) | GitLab, Bitbucket, Gitea, Codeberg, self-hosted Forgejo |
+| **Coding agent** | Claude Code (`claude` CLI) | OpenAI Codex, OpenCode, Cursor agent, Aider, others |
+
+These are hardwired in `lib/linear.ts`, `lib/github.ts`, and `lib/ai.ts` respectively. Adding a second provider means abstracting an interface (similar to `lib/multiplexer/`) and wiring a selection mechanism.
+
+### Multi-provider (already interchangeable)
+
+| Area | How to switch | Examples |
+| --- | --- | --- |
+| **Editor** | `SANTREE_EDITOR` env var (or `--editor` flag on `worktree open`) | `code`, `cursor`, `zed`, `nvim`, `subl`, `webstorm` — any executable that takes a path argument |
+| **Terminal multiplexer** | `SANTREE_MULTIPLEXER` env var | `tmux` (default, all platforms), `cmux` (macOS only — see [#1472](https://github.com/manaflow-ai/cmux/issues/1472)), `none`. Zellij is planned but not implemented. |
+| **Diff renderer** | `SANTREE_DIFF_TOOL` env var | `delta`, `diff-so-fancy`, or any pager that accepts a unified diff. Falls back to plain `git diff` colorization when unset. |
+| **Color theme** | `SANTREE_THEME` env var (`light`/`dark`/`auto`) | Auto-detects via OSC 11; manual override available. Re-detects every refresh so theme switches show up within 30s. |
+| **Shell integration** | `santree helpers shell-init` detects the shell | `zsh`, `bash` (templates in `shell/init.{zsh,bash}.njk`) |
 
 ---
 

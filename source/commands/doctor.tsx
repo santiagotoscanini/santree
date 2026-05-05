@@ -12,6 +12,16 @@ const { version } = require("../../package.json");
 import { findMainRepoRoot, getSantreeDir, getInitScriptPath } from "../lib/git.js";
 import { getAuthStatus, getValidTokens } from "../lib/linear.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
+import { resolveClaudeBinary } from "../lib/ai.js";
+import {
+	CURRENT_VERSION,
+	CLAUDE_CODE_PACKAGE,
+	SANTREE_PACKAGE,
+	getLatestVersionFor,
+	isUpdateAvailable,
+	detectPackageManager,
+	getInstallCommandFor,
+} from "../lib/version.js";
 
 const execAsync = promisify(exec);
 
@@ -26,6 +36,8 @@ type ToolStatus = {
 	path?: string;
 	authStatus?: string;
 	hint?: string;
+	latestVersion?: string;
+	updateHint?: string;
 };
 
 type LinearAuthCheckStatus = {
@@ -180,9 +192,12 @@ async function checkMultiplexer(): Promise<ToolStatus> {
 	}
 	const version = await tryExec("cmux --version 2>/dev/null");
 	const ping = await tryExec("cmux ping 2>/dev/null");
-	const hint = !ping
-		? "cmux app not reachable — open cmux.app or set SANTREE_MULTIPLEXER=tmux. NOTE: cmux #1472 — programmatic workspaces may have dead PTYs (https://github.com/manaflow-ai/cmux/issues/1472)."
-		: "NOTE: cmux #1472 — programmatic workspaces may have dead PTYs (https://github.com/manaflow-ai/cmux/issues/1472).";
+	// Note: cmux #1472 (programmatic workspaces with dead PTYs) is a real
+	// limitation but only surfaces when a specific dashboard flow tries to
+	// auto-execute a command in a freshly-created workspace. Showing it on
+	// every doctor run made cmux look broken when it isn't — the limitation
+	// is documented in CLAUDE.md and the README. We only flag a hint here
+	// when cmux is actually unreachable.
 	return {
 		name: "cmux",
 		description,
@@ -190,7 +205,43 @@ async function checkMultiplexer(): Promise<ToolStatus> {
 		installed: !!ping,
 		version: version || "unknown",
 		path,
-		hint,
+		hint: !ping
+			? "cmux app not reachable — open cmux.app or set SANTREE_MULTIPLEXER=tmux."
+			: undefined,
+	};
+}
+
+/**
+ * Checks the Claude CLI, preferring cmux's bundled binary when running inside
+ * cmux. The standard `checkTool` uses `which claude` which can't locate the
+ * cmux shim at /Applications/cmux.app/Contents/Resources/bin/claude — that
+ * binary isn't on PATH. See manaflow-ai/cmux#2048.
+ */
+async function checkClaude(): Promise<ToolStatus> {
+	const resolved = resolveClaudeBinary();
+	const inCmux = getMultiplexer().kind === "cmux";
+	const description = inCmux ? "Claude Code CLI (cmux-bundled)" : "Claude Code CLI";
+
+	if (!resolved) {
+		return {
+			name: "claude",
+			description,
+			required: true,
+			installed: false,
+			hint: inCmux
+				? "Open cmux.app to install its bundled Claude, or install standalone: npm install -g @anthropic-ai/claude-code"
+				: "Install: npm install -g @anthropic-ai/claude-code",
+		};
+	}
+
+	const version = await tryExec(`"${resolved}" --version 2>/dev/null | head -1`);
+	return {
+		name: "claude",
+		description,
+		required: true,
+		installed: true,
+		version: version || "unknown",
+		path: resolved,
 	};
 }
 
@@ -533,8 +584,18 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
 			{tool.installed ? (
 				<Box marginLeft={2} flexDirection="column">
 					<Text dimColor>Version: {tool.version}</Text>
-					<Text dimColor>Path: {tool.path}</Text>
+					{tool.latestVersion && tool.version && (
+						<Text
+							color={isUpdateAvailable(tool.version, tool.latestVersion) ? "yellow" : undefined}
+							dimColor={!isUpdateAvailable(tool.version, tool.latestVersion)}
+						>
+							Latest: {tool.latestVersion}
+							{isUpdateAvailable(tool.version, tool.latestVersion) ? " ⬆ update available" : ""}
+						</Text>
+					)}
+					{tool.path && <Text dimColor>Path: {tool.path}</Text>}
 					{tool.authStatus && <Text dimColor>Auth: {tool.authStatus}</Text>}
+					{tool.updateHint && <Text color="yellow">↳ {tool.updateHint}</Text>}
 					{tool.hint && <Text color="yellow">↳ {tool.hint}</Text>}
 				</Box>
 			) : (
@@ -762,41 +823,93 @@ export default function Doctor() {
 
 	useEffect(() => {
 		async function runChecks() {
-			const results = await Promise.all([
-				checkTool(
-					"git",
-					"Version control",
-					true,
-					"git --version | head -1",
-					"Install: brew install git",
-				),
-				checkGhAuth(),
-				checkMultiplexer(),
-				checkTool(
-					"claude",
-					"Claude Code CLI",
-					true,
-					"claude --version 2>/dev/null | head -1",
-					"Install: npm install -g @anthropic-ai/claude-code",
-				),
+			const pm = detectPackageManager();
+
+			const [results, latestSantree, latestClaude] = await Promise.all([
+				Promise.all([
+					checkTool(
+						"git",
+						"Version control",
+						true,
+						"git --version | head -1",
+						"Install: brew install git",
+					),
+					checkGhAuth(),
+					checkMultiplexer(),
+					checkClaude(),
+				]),
+				getLatestVersionFor(SANTREE_PACKAGE),
+				getLatestVersionFor(CLAUDE_CODE_PACKAGE),
 			]);
 
-			// Check for either code or cursor (only need one)
+			// Synthetic row for santree itself — surfaces update status.
+			const santreeRow: ToolStatus = {
+				name: "santree",
+				description: "Santree CLI (this app)",
+				required: true,
+				installed: true,
+				version: CURRENT_VERSION,
+				latestVersion: latestSantree ?? undefined,
+				updateHint:
+					latestSantree && isUpdateAvailable(CURRENT_VERSION, latestSantree)
+						? "Run: santree update"
+						: undefined,
+			};
+			results.unshift(santreeRow);
+
+			// Augment the claude row with latest-version info from npm registry.
+			// When the resolved binary is the cmux-bundled one, npm install can't
+			// update it — the bundled binary is shipped inside cmux.app. Show a
+			// cmux-aware hint instead of the generic npm command.
+			const claudeRow = results.find((r) => r.name === "claude");
+			if (claudeRow && claudeRow.installed && latestClaude) {
+				claudeRow.latestVersion = latestClaude;
+				if (claudeRow.version && isUpdateAvailable(claudeRow.version, latestClaude)) {
+					const isCmuxBundled = !!claudeRow.path?.includes("/cmux.app/");
+					if (isCmuxBundled) {
+						claudeRow.updateHint = "Bundled with cmux — update cmux.app to get the latest Claude.";
+					} else {
+						const cmd = getInstallCommandFor(pm, `${CLAUDE_CODE_PACKAGE}@latest`);
+						claudeRow.updateHint = `Run: ${cmd.display}`;
+					}
+				}
+			}
+
+			// Optional: a syntax-highlighted diff pager — used by `st worktree diff`
+			// and the dashboard `v` overlay when SANTREE_DIFF_TOOL is set. Any
+			// pager works (delta, diff-so-fancy, …); without one set, git's
+			// default pager runs. Delta is the most popular choice so we check
+			// for it as a convenience, but it is never a hard dependency.
+			const deltaCheck = await checkTool(
+				"delta",
+				"Recommended diff pager — any pager works",
+				false,
+				"delta --version | head -1",
+				"Optional — git's default pager works too. Set SANTREE_DIFF_TOOL or `git config core.pager <tool>`. To install delta: brew install git-delta",
+			);
+			results.push(deltaCheck);
+
+			// Optional: a `.code-workspace`-aware editor (VSCode or Cursor).
+			// Santree itself works with any editor via $SANTREE_EDITOR — this
+			// check exists only because the dashboard's `E workspace` shortcut
+			// needs an editor that understands `.code-workspace` files. Missing
+			// here just means the shortcut is hidden; everything else still works.
+			const workspaceEditorDesc = "Workspace editor (`E workspace` shortcut)";
 			const [codeCheck, cursorCheck] = await Promise.all([
-				checkTool("code", "VSCode editor", false, "code --version | head -1", ""),
-				checkTool("cursor", "Cursor editor", false, "cursor --version | head -1", ""),
+				checkTool("code", workspaceEditorDesc, false, "code --version | head -1", ""),
+				checkTool("cursor", workspaceEditorDesc, false, "cursor --version | head -1", ""),
 			]);
 			if (codeCheck.installed) {
-				results.push({ ...codeCheck, description: "Editor (VSCode)" });
+				results.push(codeCheck);
 			} else if (cursorCheck.installed) {
-				results.push({ ...cursorCheck, description: "Editor (Cursor)" });
+				results.push(cursorCheck);
 			} else {
 				results.push({
 					name: "code/cursor",
-					description: "Editor (VSCode or Cursor)",
+					description: workspaceEditorDesc,
 					required: false,
 					installed: false,
-					hint: "Install VSCode (https://code.visualstudio.com) or Cursor (https://cursor.sh)",
+					hint: "Optional — santree works with any $SANTREE_EDITOR. Only needed for the dashboard's `.code-workspace` shortcut.",
 				});
 			}
 

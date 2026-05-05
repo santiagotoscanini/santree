@@ -10,9 +10,15 @@ interface Props {
 	creationLogs: string;
 }
 
-type LineData = { text: string; color?: string; bold?: boolean; dim?: boolean };
-type ActionItem = { key: string; label: string; color: string };
-type ActionRow = ActionItem[];
+type Segment = { text: string; color?: string; bold?: boolean; dim?: boolean };
+type LineData = {
+	text: string;
+	color?: string;
+	bold?: boolean;
+	dim?: boolean;
+	segments?: Segment[];
+};
+export type IssueActionItem = { key: string; label: string; color: string };
 
 function stateColor(type: string): string {
 	switch (type) {
@@ -67,11 +73,13 @@ function fileColor(xy: string): string | undefined {
 	return "yellow";
 }
 
-function buildActions(di: DashboardIssue): ActionRow[] {
+/** Returns the context-sensitive action key list for the selected issue.
+ * Lifted out of the panel so the dashboard can render it on the same row as
+ * the global command bar (so left- and right-pane key hints align). */
+export function buildIssueActions(di: DashboardIssue): IssueActionItem[] {
 	const { worktree, pr, issue } = di;
-	const items: ActionItem[] = [];
+	const items: IssueActionItem[] = [];
 
-	// Work/Resume
 	if (worktree?.sessionId) {
 		items.push({ key: "↵", label: "Resume", color: "cyan" });
 	} else if (worktree) {
@@ -81,17 +89,18 @@ function buildActions(di: DashboardIssue): ActionRow[] {
 		items.push({ key: "w", label: "Work", color: "cyan" });
 	}
 
-	// Editor
 	if (worktree) {
 		items.push({ key: "e", label: "Editor", color: "cyan" });
 	}
 
-	// Commit
 	if (worktree?.dirty) {
 		items.push({ key: "C", label: "Commit", color: "cyan" });
 	}
 
-	// PR actions
+	if (worktree) {
+		items.push({ key: "v", label: "View diff", color: "cyan" });
+	}
+
 	if (worktree && !pr) {
 		items.push({ key: "c", label: "Create PR", color: "cyan" });
 	}
@@ -100,18 +109,28 @@ function buildActions(di: DashboardIssue): ActionRow[] {
 		items.push({ key: "r", label: "Review", color: "cyan" });
 	}
 
-	// Links
 	if (issue.url) {
 		items.push({ key: "o", label: "Linear", color: "gray" });
 	}
 	if (pr) items.push({ key: "p", label: "Open PR", color: "gray" });
 
-	// Destructive
 	if (worktree) {
 		items.push({ key: "d", label: "Remove", color: "red" });
 	}
 
-	return [items];
+	return items;
+}
+
+/** Section title with a colored leading icon and a bold name. Kept consistent
+ * across all sections so the eye can immediately find the next block. */
+function sectionHeader(icon: string, label: string, iconColor = "cyan"): LineData {
+	return {
+		text: "",
+		segments: [
+			{ text: `${icon} `, color: iconColor, bold: true },
+			{ text: label, bold: true },
+		],
+	};
 }
 
 export default function DetailPanel({
@@ -154,114 +173,227 @@ export default function DetailPanel({
 	const { issue: li, worktree, pr } = issue;
 	const lines: LineData[] = [];
 	const rule = "─".repeat(width);
+	const ruleLine: LineData = { text: rule, dim: true };
 
-	// ── Hero: identifier + title ──────────────────────────────────────
+	// ── Hero: identifier + title, then a status pill row ───────────────
 	lines.push({ text: `${li.identifier}  ${li.title}`, bold: true });
-	const meta: string[] = [];
-	meta.push(li.state.name);
-	meta.push(li.priorityLabel);
-	if (li.labels.length > 0) meta.push(li.labels.join(", "));
-	lines.push({ text: meta.join(" · "), color: stateColor(li.state.type) });
+	const sc = stateColor(li.state.type);
+	const heroSegs: Segment[] = [
+		{ text: "● ", color: sc },
+		{ text: li.state.name, color: sc },
+		{ text: "  ·  ", dim: true },
+		{ text: li.priorityLabel },
+	];
+	if (li.labels.length > 0) {
+		heroSegs.push({ text: "  ·  ", dim: true });
+		heroSegs.push({ text: li.labels.join(", "), dim: true });
+	}
+	lines.push({ text: "", segments: heroSegs });
 
 	// ── Description ───────────────────────────────────────────────────
 	if (li.description) {
-		lines.push({ text: rule, dim: true });
 		lines.push({ text: "" });
 		for (const dLine of li.description.trimEnd().split("\n")) {
 			lines.push({ text: dLine });
 		}
-		lines.push({ text: "" });
 	}
 
-	// ── Worktree (enhanced) ───────────────────────────────────────────
-	lines.push({ text: rule, dim: true });
-	lines.push({ text: "WORKTREE", dim: true });
+	// ── Worktree ──────────────────────────────────────────────────────
+	lines.push(ruleLine);
 	if (worktree) {
+		// Header carries a quick status badge (clean / dirty) so the user can tell
+		// at a glance without reading further.
+		const dirty = worktree.dirty;
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "⎇ ", color: "cyan", bold: true },
+				{ text: "Worktree", bold: true },
+				{ text: "   " },
+				{
+					text: dirty ? "● dirty" : "✓ clean",
+					color: dirty ? "yellow" : "green",
+				},
+			],
+		});
 		lines.push({ text: `  ${worktree.branch}` });
 		lines.push({ text: `  ${worktree.path}`, dim: true });
 
+		// Single metric row: files / +ins / -dels / commits ahead.
+		const ds = worktree.diffStats;
+		if (ds && (ds.insertions > 0 || ds.deletions > 0 || ds.filesChanged > 0)) {
+			const segs: Segment[] = [{ text: "  " }];
+			if (ds.filesChanged > 0) {
+				segs.push({
+					text: `${ds.filesChanged} file${ds.filesChanged === 1 ? "" : "s"}`,
+				});
+			}
+			if (ds.insertions > 0) {
+				if (segs.length > 1) segs.push({ text: "   " });
+				segs.push({ text: `+${ds.insertions}`, color: "green" });
+			}
+			if (ds.deletions > 0) {
+				if (segs.length > 1) segs.push({ text: "   " });
+				segs.push({ text: `−${ds.deletions}`, color: "red" });
+			}
+			if (worktree.commitsAhead > 0) {
+				if (segs.length > 1) segs.push({ text: "   " });
+				segs.push({ text: `↑ ${worktree.commitsAhead}`, color: "cyan" });
+			}
+			lines.push({ text: "", segments: segs });
+		}
+
+		// Per-status counts only when there's something dirty — when the tree is
+		// clean the badge in the section header already says so.
 		const gs = parseGitStatus(worktree.gitStatus);
-		const statusParts: string[] = [];
-		if (gs.staged > 0) statusParts.push(`+${gs.staged} staged`);
-		if (gs.unstaged > 0) statusParts.push(`~${gs.unstaged} unstaged`);
-		if (gs.untracked > 0) statusParts.push(`?${gs.untracked} untracked`);
-		if (worktree.commitsAhead > 0) statusParts.push(`+${worktree.commitsAhead} ahead`);
+		if (dirty) {
+			const statusSegs: Segment[] = [{ text: "  " }];
+			if (gs.staged > 0) {
+				if (statusSegs.length > 1) statusSegs.push({ text: "   " });
+				statusSegs.push({ text: `+${gs.staged} staged`, color: "green" });
+			}
+			if (gs.unstaged > 0) {
+				if (statusSegs.length > 1) statusSegs.push({ text: "   " });
+				statusSegs.push({ text: `~${gs.unstaged} unstaged`, color: "yellow" });
+			}
+			if (gs.untracked > 0) {
+				if (statusSegs.length > 1) statusSegs.push({ text: "   " });
+				statusSegs.push({ text: `?${gs.untracked} untracked`, color: "gray" });
+			}
+			if (statusSegs.length > 1) {
+				lines.push({ text: "", segments: statusSegs });
+			}
 
-		if (statusParts.length > 0) {
-			lines.push({
-				text: `  ${statusParts.join("  ")}`,
-				color: worktree.dirty ? "yellow" : "green",
-			});
-		} else {
-			lines.push({ text: "  ✓ clean", color: "green" });
+			// Show individual files (up to 8)
+			const maxFiles = 8;
+			for (let i = 0; i < Math.min(gs.files.length, maxFiles); i++) {
+				const f = gs.files[i]!;
+				lines.push({ text: `    ${f.xy} ${f.file}`, color: fileColor(f.xy) });
+			}
+			if (gs.files.length > maxFiles) {
+				lines.push({ text: `    +${gs.files.length - maxFiles} more`, dim: true });
+			}
 		}
 
-		// Show individual files (up to 8)
-		const maxFiles = 8;
-		for (let i = 0; i < Math.min(gs.files.length, maxFiles); i++) {
-			const f = gs.files[i]!;
-			lines.push({ text: `    ${f.xy} ${f.file}`, color: fileColor(f.xy) });
-		}
-		if (gs.files.length > maxFiles) {
-			lines.push({ text: `    +${gs.files.length - maxFiles} more`, dim: true });
-		}
-
-		if (worktree.sessionId) {
-			lines.push({ text: `  session: ${worktree.sessionId}`, color: "cyan" });
-		} else {
-			lines.push({ text: "  session: none", color: "red" });
-		}
-
+		// Session state — single line, color reflects state.
 		if (worktree.sessionState === "waiting") {
 			const msg = worktree.sessionMessage
 				? `NEEDS INPUT: ${worktree.sessionMessage}`
 				: "NEEDS INPUT";
-			lines.push({ text: `  ${msg}`, color: "red" });
-		} else if (worktree.sessionState === "idle") {
-			lines.push({ text: "  session idle (waiting for prompt)", color: "yellow" });
+			lines.push({
+				text: "",
+				segments: [
+					{ text: "  ◆ ", color: "red" },
+					{ text: msg, color: "red", bold: true },
+				],
+			});
 		} else if (worktree.sessionState === "active") {
-			lines.push({ text: "  session active (working)", color: "green" });
+			lines.push({
+				text: "",
+				segments: [
+					{ text: "  ◆ ", color: "green" },
+					{ text: "session active", color: "green" },
+				],
+			});
+		} else if (worktree.sessionState === "idle") {
+			lines.push({
+				text: "",
+				segments: [
+					{ text: "  ◆ ", color: "yellow" },
+					{ text: "session idle", color: "yellow" },
+					{ text: "  (waiting for prompt)", dim: true },
+				],
+			});
+		} else if (worktree.sessionId) {
+			lines.push({
+				text: "",
+				segments: [
+					{ text: "  ◇ ", color: "cyan" },
+					{ text: "session ", dim: true },
+					{ text: worktree.sessionId.slice(0, 8), color: "cyan" },
+				],
+			});
+		} else {
+			lines.push({
+				text: "",
+				segments: [
+					{ text: "  ◇ ", dim: true },
+					{ text: "no session", dim: true },
+				],
+			});
 		}
 	} else {
-		lines.push({ text: "  –", dim: true });
+		lines.push(sectionHeader("⎇", "Worktree"));
+		lines.push({ text: "  no worktree for this ticket", dim: true });
 	}
 
 	// ── Pull Request ──────────────────────────────────────────────────
 	const { checks, reviews } = issue;
-	lines.push({ text: rule, dim: true });
-	lines.push({ text: "PULL REQUEST", dim: true });
+	lines.push(ruleLine);
 	if (pr) {
-		const sc = pr.state === "MERGED" ? "magenta" : pr.state === "OPEN" ? "green" : "red";
-		const draft = pr.isDraft ? " draft" : "";
-		lines.push({ text: `  #${pr.number} ${pr.state}${draft}`, color: sc });
+		const prColor = pr.state === "MERGED" ? "magenta" : pr.state === "OPEN" ? "green" : "red";
+		const draft = pr.isDraft ? " · draft" : "";
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "◉ ", color: "cyan", bold: true },
+				{ text: "Pull Request", bold: true },
+				{ text: "   " },
+				{ text: `#${pr.number}`, color: prColor, bold: true },
+				{ text: "  " },
+				{ text: pr.state, color: prColor },
+				{ text: draft, dim: true },
+			],
+		});
 		if (pr.url) {
 			lines.push({ text: `  ${pr.url}`, dim: true });
 		}
 	} else {
-		lines.push({ text: "  –", dim: true });
+		lines.push(sectionHeader("◉", "Pull Request"));
+		lines.push({ text: "  no PR yet", dim: true });
 	}
 
 	// ── Checks ────────────────────────────────────────────────────────
 	if (checks && checks.length > 0) {
-		const passCount = checks.filter((c) => c.bucket === "pass").length;
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: `CHECKS  ${passCount}/${checks.length} passing`, dim: true });
-		for (const check of checks) {
-			if (check.bucket === "pass") {
-				lines.push({ text: `  ✓ ${check.name}`, color: "green" });
-			} else if (check.bucket === "fail") {
-				const desc = check.description ? ` — ${check.description}` : "";
-				lines.push({ text: `  ✗ ${check.name}${desc}`, color: "red" });
-			} else {
-				lines.push({ text: `  ● ${check.name} (pending)`, color: "yellow" });
-			}
+		const passing = checks.filter((c) => c.bucket === "pass");
+		const failing = checks.filter((c) => c.bucket === "fail");
+		const pending = checks.filter((c) => c.bucket !== "pass" && c.bucket !== "fail");
+		const headerColor = failing.length > 0 ? "red" : pending.length > 0 ? "yellow" : "green";
+
+		lines.push(ruleLine);
+		const headerSegs: Segment[] = [
+			{ text: "✓ ", color: "cyan", bold: true },
+			{ text: "Checks", bold: true },
+			{ text: "   " },
+			{ text: `${passing.length}/${checks.length} passing`, color: headerColor },
+		];
+		if (failing.length > 0) {
+			headerSegs.push({ text: "  ·  ", dim: true });
+			headerSegs.push({ text: `${failing.length} failing`, color: "red" });
+		}
+		if (pending.length > 0) {
+			headerSegs.push({ text: "  ·  ", dim: true });
+			headerSegs.push({ text: `${pending.length} pending`, color: "yellow" });
+		}
+		lines.push({ text: "", segments: headerSegs });
+
+		// Order: failing first (most important), then pending, then passing.
+		for (const check of failing) {
+			const desc = check.description ? ` — ${check.description}` : "";
+			lines.push({ text: `  ✗ ${check.name}${desc}`, color: "red" });
+		}
+		for (const check of pending) {
+			lines.push({ text: `  ● ${check.name}`, color: "yellow" });
+		}
+		for (const check of passing) {
+			lines.push({ text: `  ✓ ${check.name}`, color: "green" });
 		}
 	}
 
 	// ── Reviews ───────────────────────────────────────────────────────
 	if (reviews && reviews.length > 0) {
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: "REVIEWS", dim: true });
+		lines.push(ruleLine);
+		lines.push(sectionHeader("★", "Reviews"));
 		for (const review of reviews) {
 			const author = review.author.login;
 			const rc =
@@ -270,20 +402,19 @@ export default function DetailPanel({
 					: review.state === "CHANGES_REQUESTED"
 						? "red"
 						: "yellow";
-			lines.push({ text: `  ${author}  ${review.state}`, color: rc });
+			lines.push({
+				text: "",
+				segments: [{ text: `  ${author}` }, { text: "   " }, { text: review.state, color: rc }],
+			});
 		}
 	}
 
-	// ── Build actions footer ──────────────────────────────────────────
-	const actionRows = buildActions(issue);
-	// +1 for the separator line
-	const actionsHeight = actionRows.length + 1;
-	const scrollableHeight = height - actionsHeight;
-
-	// ── Render scrollable content ─────────────────────────────────────
+	// Action footer is rendered by the dashboard one row outside the panel,
+	// alongside the global command bar, so left- and right-pane key hints sit
+	// on the same row. The panel itself uses its full height for content.
 	const totalLines = lines.length;
-	const canScroll = totalLines > scrollableHeight;
-	const contentRows = canScroll ? scrollableHeight - 2 : scrollableHeight;
+	const canScroll = totalLines > height;
+	const contentRows = canScroll ? height - 2 : height;
 	const clampedOffset = Math.min(scrollOffset, Math.max(0, totalLines - contentRows));
 	const visible = lines.slice(clampedOffset, clampedOffset + contentRows);
 
@@ -294,14 +425,47 @@ export default function DetailPanel({
 		scrollArrow = atTop ? "↓ scroll" : atBottom ? "↑ scroll" : "↑↓ scroll";
 	}
 
+	// Pre-truncate to keep long URLs/paths/descriptions from wrapping into the
+	// row below — Ink's Text wrap is unreliable at the box's right edge and was
+	// causing content to bleed into the next line and shift everything down.
+	const clamp = (s: string) => (s.length > width ? s.slice(0, Math.max(0, width - 1)) + "…" : s);
+	const clampSegments = (segs: Segment[]): Segment[] => {
+		let remaining = width;
+		const out: Segment[] = [];
+		for (const seg of segs) {
+			if (remaining <= 0) break;
+			if (seg.text.length <= remaining) {
+				out.push(seg);
+				remaining -= seg.text.length;
+			} else {
+				out.push({
+					...seg,
+					text: seg.text.slice(0, Math.max(0, remaining - 1)) + "…",
+				});
+				remaining = 0;
+			}
+		}
+		return out;
+	};
+
 	return (
 		<Box flexDirection="column" width={width} height={height}>
 			{/* Scrollable content */}
 			{visible.map((line, i) => (
 				<Box key={i}>
-					<Text color={line.color as any} bold={line.bold} dimColor={line.dim}>
-						{line.text || " "}
-					</Text>
+					{line.segments ? (
+						<Text>
+							{clampSegments(line.segments).map((seg, j) => (
+								<Text key={j} color={seg.color as any} bold={seg.bold} dimColor={seg.dim}>
+									{seg.text}
+								</Text>
+							))}
+						</Text>
+					) : (
+						<Text color={line.color as any} bold={line.bold} dimColor={line.dim}>
+							{line.text ? clamp(line.text) : " "}
+						</Text>
+					)}
 				</Box>
 			))}
 			{scrollArrow && (
@@ -314,27 +478,6 @@ export default function DetailPanel({
 					<Text dimColor>{scrollArrow}</Text>
 				</Box>
 			)}
-
-			{/* Spacer pushes actions to bottom */}
-			<Box flexGrow={1} />
-
-			{/* Fixed actions footer */}
-			<Box>
-				<Text dimColor>{rule}</Text>
-			</Box>
-			{actionRows.map((row, i) => (
-				<Box key={`a-${i}`}>
-					{row.map((item, j) => (
-						<Text key={j}>
-							{"  "}
-							<Text color={item.color} bold>
-								{item.key}
-							</Text>
-							<Text color={item.color === "gray" ? "gray" : "white"}> {item.label}</Text>
-						</Text>
-					))}
-				</Box>
-			))}
 		</Box>
 	);
 }

@@ -22,6 +22,7 @@ export interface WorktreeInfo {
 	gitStatus: string;
 	sessionState: "waiting" | "idle" | "active" | null;
 	sessionMessage: string | null;
+	diffStats: { filesChanged: number; insertions: number; deletions: number } | null;
 }
 
 export interface DashboardIssue {
@@ -72,7 +73,16 @@ export type ActionOverlay =
 	| "confirm-setup"
 	| "commit"
 	| "pr-create"
+	| "diff"
 	| null;
+
+export type DiffFileStatus = "M" | "A" | "D" | "R" | "C" | "U" | "?";
+
+export interface DiffFile {
+	path: string;
+	status: DiffFileStatus;
+	oldPath?: string; // for renames
+}
 
 export type CommitPhase =
 	| "idle"
@@ -136,6 +146,19 @@ export interface DashboardState {
 	contextInputValue: string;
 	contextInputMode: "plan" | "implement" | null;
 	contextInputPhase: "editing" | "review";
+	// Diff overlay
+	diffTicketId: string | null;
+	diffWorktreePath: string | null;
+	diffBaseBranch: string | null;
+	diffMergeBase: string | null;
+	diffFiles: DiffFile[];
+	diffFileIndex: number;
+	diffFileScrollOffset: number;
+	diffContent: string | null;
+	diffContentScrollOffset: number;
+	diffLoadingFiles: boolean;
+	diffLoadingContent: boolean;
+	diffError: string | null;
 }
 
 export type DashboardAction =
@@ -191,7 +214,21 @@ export type DashboardAction =
 	| { type: "CONTEXT_INPUT_CHANGE"; value: string }
 	| { type: "CONTEXT_INPUT_REVIEW" }
 	| { type: "CONTEXT_INPUT_EDIT" }
-	| { type: "CONTEXT_INPUT_DONE" };
+	| { type: "CONTEXT_INPUT_DONE" }
+	| {
+			type: "DIFF_OPEN";
+			ticketId: string;
+			worktreePath: string;
+			baseBranch: string;
+	  }
+	| { type: "DIFF_FILES_LOADED"; files: DiffFile[]; mergeBase: string }
+	| { type: "DIFF_FILES_ERROR"; error: string }
+	| { type: "DIFF_FILE_SELECT"; index: number }
+	| { type: "DIFF_FILE_SCROLL"; offset: number }
+	| { type: "DIFF_CONTENT_LOADING" }
+	| { type: "DIFF_CONTENT_LOADED"; content: string }
+	| { type: "DIFF_CONTENT_SCROLL"; offset: number }
+	| { type: "DIFF_CLOSE" };
 
 // ── State management ──────────────────────────────────────────────────
 
@@ -237,6 +274,18 @@ export const initialState: DashboardState = {
 	contextInputValue: "",
 	contextInputMode: null,
 	contextInputPhase: "editing",
+	diffTicketId: null,
+	diffWorktreePath: null,
+	diffBaseBranch: null,
+	diffMergeBase: null,
+	diffFiles: [],
+	diffFileIndex: 0,
+	diffFileScrollOffset: 0,
+	diffContent: null,
+	diffContentScrollOffset: 0,
+	diffLoadingFiles: false,
+	diffLoadingContent: false,
+	diffError: null,
 };
 
 export function reducer(state: DashboardState, action: DashboardAction): DashboardState {
@@ -467,6 +516,75 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				contextInputMode: null,
 				contextInputValue: "",
 				contextInputPhase: "editing",
+			};
+		case "DIFF_OPEN":
+			return {
+				...state,
+				overlay: "diff",
+				diffTicketId: action.ticketId,
+				diffWorktreePath: action.worktreePath,
+				diffBaseBranch: action.baseBranch,
+				diffMergeBase: null,
+				diffFiles: [],
+				diffFileIndex: 0,
+				diffFileScrollOffset: 0,
+				diffContent: null,
+				diffContentScrollOffset: 0,
+				diffLoadingFiles: true,
+				diffLoadingContent: false,
+				diffError: null,
+			};
+		case "DIFF_FILES_LOADED":
+			return {
+				...state,
+				diffFiles: action.files,
+				diffMergeBase: action.mergeBase,
+				diffFileIndex: 0,
+				diffFileScrollOffset: 0,
+				diffLoadingFiles: false,
+				diffError: null,
+			};
+		case "DIFF_FILES_ERROR":
+			return {
+				...state,
+				diffLoadingFiles: false,
+				diffError: action.error,
+			};
+		case "DIFF_FILE_SELECT":
+			return {
+				...state,
+				diffFileIndex: action.index,
+				diffContentScrollOffset: 0,
+			};
+		case "DIFF_FILE_SCROLL":
+			return { ...state, diffFileScrollOffset: action.offset };
+		case "DIFF_CONTENT_LOADING":
+			return { ...state, diffLoadingContent: true, diffContent: null };
+		case "DIFF_CONTENT_LOADED":
+			return {
+				...state,
+				diffContent: action.content,
+				diffLoadingContent: false,
+				diffContentScrollOffset: 0,
+			};
+		case "DIFF_CONTENT_SCROLL":
+			return { ...state, diffContentScrollOffset: action.offset };
+		case "DIFF_CLOSE":
+			return {
+				...state,
+				overlay: null,
+				diffTicketId: null,
+				diffWorktreePath: null,
+				diffBaseBranch: null,
+				diffMergeBase: null,
+				diffFiles: [],
+				diffFileIndex: 0,
+				diffFileScrollOffset: 0,
+				diffContent: null,
+				diffContentScrollOffset: 0,
+				diffLoadingFiles: false,
+				diffLoadingContent: false,
+				diffError: null,
 			};
 		default:
 			return state;

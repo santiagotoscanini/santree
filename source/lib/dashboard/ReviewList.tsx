@@ -9,6 +9,8 @@ interface Props {
 	scrollOffset: number;
 	height: number;
 	width: number;
+	/** Theme-adapted selection background. Falls back to dark navy. */
+	selectionBg?: string;
 }
 
 function checksIndicator(checks: PRCheck[] | null): { text: string; color: string } {
@@ -31,6 +33,7 @@ export default function ReviewList({
 	scrollOffset,
 	height,
 	width,
+	selectionBg = "#1e3a5f",
 }: Props) {
 	const listHeight = height - FOOTER_HEIGHT;
 
@@ -83,18 +86,18 @@ export default function ReviewList({
 				: pr.author.login;
 		const changes = `+${item.additions} -${item.deletions}`;
 		const ci = checksIndicator(item.checks);
-		const bg = selected ? "#1e3a5f" : undefined;
+		const bg = selected ? selectionBg : undefined;
 
 		rows.push(
 			<Box key={`${pr.number}`} width={width}>
-				<Text backgroundColor={bg} color={selected ? "cyan" : undefined} bold={selected}>
+				<Text backgroundColor={bg} bold={selected}>
 					{cursor}{" "}
 				</Text>
 				<Text backgroundColor={bg} color={pr.isDraft ? "gray" : "green"}>
 					{num.padEnd(numColWidth)}
 				</Text>
 				<Text backgroundColor={bg}> </Text>
-				<Text backgroundColor={bg} color={selected ? "white" : undefined} bold={selected}>
+				<Text backgroundColor={bg} bold={selected}>
 					{title.padEnd(titleMaxWidth)}
 				</Text>
 				<Text backgroundColor={bg} dimColor>

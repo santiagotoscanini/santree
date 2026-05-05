@@ -9,7 +9,7 @@ interface Props {
 }
 
 type LineData = { text: string; color?: string; bold?: boolean; dim?: boolean };
-type ActionItem = { key: string; label: string; color: string };
+export type ReviewActionItem = { key: string; label: string; color: string };
 
 function relativeTime(dateStr: string): string {
 	const now = Date.now();
@@ -26,8 +26,8 @@ function relativeTime(dateStr: string): string {
 	return `${months}mo ago`;
 }
 
-function buildActions(item: EnrichedReviewPR): ActionItem[] {
-	const items: ActionItem[] = [];
+export function buildReviewActions(item: EnrichedReviewPR): ReviewActionItem[] {
+	const items: ReviewActionItem[] = [];
 
 	if (item.worktree) {
 		items.push({ key: "r", label: "AI Review", color: "cyan" });
@@ -167,13 +167,9 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 	}
 
 	// ── Build actions footer ─────────────────────────────────────────
-	const actionItems = buildActions(item);
-	const actionsHeight = 2; // separator + action row
-	const scrollableHeight = height - actionsHeight;
-
 	const totalLines = lines.length;
-	const canScroll = totalLines > scrollableHeight;
-	const contentRows = canScroll ? scrollableHeight - 2 : scrollableHeight;
+	const canScroll = totalLines > height;
+	const contentRows = canScroll ? height - 2 : height;
 	const clampedOffset = Math.min(scrollOffset, Math.max(0, totalLines - contentRows));
 	const visible = lines.slice(clampedOffset, clampedOffset + contentRows);
 
@@ -207,23 +203,6 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 					<Text dimColor>{scrollArrow}</Text>
 				</Box>
 			)}
-
-			<Box flexGrow={1} />
-
-			<Box>
-				<Text dimColor>{rule}</Text>
-			</Box>
-			<Box>
-				{actionItems.map((item, j) => (
-					<Text key={j}>
-						{"  "}
-						<Text color={item.color} bold>
-							{item.key}
-						</Text>
-						<Text color={item.color === "gray" ? "gray" : "white"}> {item.label}</Text>
-					</Text>
-				))}
-			</Box>
 		</Box>
 	);
 }

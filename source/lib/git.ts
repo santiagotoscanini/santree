@@ -521,6 +521,51 @@ export async function getCommitsAheadAsync(cwd: string, baseBranch: string): Pro
 }
 
 /**
+ * Read the SANTREE_DIFF_TOOL env var, returning the configured pager command
+ * (e.g. "delta", "diff-so-fancy") or null if unset/invalid.
+ *
+ * The value is restricted to a safe shell-token character set since it ends
+ * up in arguments passed to spawn() — even though we never use shell:true,
+ * keeping the surface tight defends against accidental misconfigurations.
+ */
+export function getDiffTool(): string | null {
+	const raw = process.env["SANTREE_DIFF_TOOL"];
+	if (!raw || !raw.trim()) return null;
+	const tool = raw.trim();
+	if (!/^[a-zA-Z0-9_\-/.+]+$/.test(tool)) return null;
+	return tool;
+}
+
+export interface DiffShortstat {
+	filesChanged: number;
+	insertions: number;
+	deletions: number;
+}
+
+/**
+ * Compute branch-only diff stats vs base (uses merge-base, like a GitHub PR
+ * diff). Includes both committed and uncommitted changes. Returns zeros on
+ * failure or when there are no changes.
+ */
+export async function getDiffShortstatAsync(
+	cwd: string,
+	baseBranch: string,
+): Promise<DiffShortstat> {
+	const mergeBase = await runAsync(`git -C "${cwd}" merge-base "${baseBranch}" HEAD`);
+	const ref = mergeBase ?? baseBranch;
+	const out = await runAsync(`git -C "${cwd}" diff --shortstat "${ref}"`);
+	if (!out) return { filesChanged: 0, insertions: 0, deletions: 0 };
+	const fm = out.match(/(\d+) files? changed/);
+	const im = out.match(/(\d+) insertions?\(\+\)/);
+	const dm = out.match(/(\d+) deletions?\(-\)/);
+	return {
+		filesChanged: fm ? parseInt(fm[1]!, 10) : 0,
+		insertions: im ? parseInt(im[1]!, 10) : 0,
+		deletions: dm ? parseInt(dm[1]!, 10) : 0,
+	};
+}
+
+/**
  * Check if a branch exists on the remote (origin).
  * Runs: `git ls-remote --heads origin <branchName>`
  * Returns false on failure.

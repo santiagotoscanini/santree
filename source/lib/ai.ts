@@ -1,7 +1,8 @@
 import { execSync, spawn, spawnSync, type ChildProcess } from "child_process";
-import { writeFileSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
+import { getMultiplexer } from "./multiplexer/index.js";
 import {
 	getCurrentBranch,
 	extractTicketId,
@@ -156,16 +157,50 @@ export async function fetchAndRenderDiff(branch: string): Promise<string> {
 }
 
 /**
- * Check if claude CLI is available on PATH.
- * Returns "claude" or null if not installed.
+ * cmux ships its own Claude CLI shim wired to the active cmux workspace. When
+ * we run inside cmux, the system `claude` (if any) talks to a different
+ * session — confusing for the user. See manaflow-ai/cmux#2048.
  */
-export function resolveAgentBinary(): string | null {
+const CMUX_CLAUDE_PATH = "/Applications/cmux.app/Contents/Resources/bin/claude";
+
+/**
+ * Resolve the path to the Claude CLI binary, preferring cmux's bundled copy
+ * when running inside cmux. Falls back to PATH lookup, then to Anthropic's
+ * standard installer location (`~/.claude/local/claude`). Returns null if
+ * none of those resolve.
+ *
+ * Used by every santree code path that needs to invoke or report the Claude
+ * binary — version display, doctor checks, and interactive launches.
+ */
+export function resolveClaudeBinary(): string | null {
+	// Inside cmux, the bundled binary is the only one wired to the active
+	// workspace. Always prefer it when present.
+	if (getMultiplexer().kind === "cmux" && existsSync(CMUX_CLAUDE_PATH)) {
+		return CMUX_CLAUDE_PATH;
+	}
+
+	// PATH lookup
 	try {
 		execSync("which claude", { stdio: "ignore" });
 		return "claude";
 	} catch {
-		return null;
+		// fall through
 	}
+
+	// Anthropic installer location — Ink renders may not inherit the user's
+	// shell PATH, so check this explicitly.
+	const localClaude = join(homedir(), ".claude", "local", "claude");
+	if (existsSync(localClaude)) return localClaude;
+
+	return null;
+}
+
+/**
+ * @deprecated Use `resolveClaudeBinary()` directly. Kept as an alias because
+ * existing call sites pass the return value straight to spawn args.
+ */
+export function resolveAgentBinary(): string | null {
+	return resolveClaudeBinary();
 }
 
 // Conservative limit: 200KB leaves room for env vars within macOS 256KB ARG_MAX

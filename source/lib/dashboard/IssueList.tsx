@@ -9,8 +9,8 @@ interface Props {
 	scrollOffset: number;
 	height: number;
 	width: number;
-	creatingForTicket: string | null;
-	deletingForTicket: string | null;
+	/** Theme-adapted selection background (light/dark). Falls back to dark navy. */
+	selectionBg?: string;
 }
 
 function stateColor(type: string, name?: string): string {
@@ -32,72 +32,45 @@ function stateColor(type: string, name?: string): string {
 	}
 }
 
-function priorityIndicator(priority: number): { text: string; color: string } {
-	switch (priority) {
-		case 1:
-			return { text: "!!!", color: "red" };
-		case 2:
-			return { text: "!! ", color: "yellow" };
-		case 3:
-			return { text: "!  ", color: "blue" };
-		case 4:
-			return { text: "·  ", color: "gray" };
-		default:
-			return { text: "   ", color: "gray" };
-	}
+/**
+ * One-character priority marker, only rendered for urgent (P1) and high (P2)
+ * — everything else is a single space so columns still align. This is one of
+ * the few places we use color, so it stands out without shouting.
+ */
+function priorityMarker(priority: number): { glyph: string; color: string } {
+	if (priority === 1) return { glyph: "▎", color: "red" };
+	if (priority === 2) return { glyph: "▎", color: "yellow" };
+	return { glyph: " ", color: "gray" };
 }
 
-function checksIndicator(checks: PRCheck[] | null): { text: string; color: string } {
-	if (!checks || checks.length === 0) return { text: "-", color: "gray" };
-	if (checks.some((c) => c.bucket === "fail")) return { text: "✗", color: "red" };
-	if (checks.every((c) => c.bucket === "pass")) return { text: "✓", color: "green" };
-	return { text: "●", color: "yellow" };
+function workIndicator(wt: DashboardIssue["worktree"]): { glyph: string; color: string } {
+	if (!wt) return { glyph: "·", color: "gray" };
+	return { glyph: "✓", color: "green" };
 }
 
-function prIndicator(pr: DashboardIssue["pr"]): { text: string; color: string } {
-	if (!pr) return { text: "-", color: "gray" };
-	const label = `#${pr.number}`;
-	if (pr.state === "MERGED") return { text: label, color: "magenta" };
-	if (pr.state === "CLOSED") return { text: label, color: "red" };
-	if (pr.isDraft) return { text: label, color: "gray" };
-	return { text: label, color: "green" };
+function ciIndicator(checks: PRCheck[] | null): { glyph: string; color: string } {
+	if (!checks || checks.length === 0) return { glyph: "·", color: "gray" };
+	if (checks.some((c) => c.bucket === "fail")) return { glyph: "✗", color: "red" };
+	if (checks.every((c) => c.bucket === "pass")) return { glyph: "✓", color: "green" };
+	return { glyph: "●", color: "yellow" };
 }
 
-function sessionIndicator(
-	wt: DashboardIssue["worktree"],
-	isCreating: boolean,
-	isDeleting: boolean,
-): { text: string; color: string } {
-	if (isDeleting) return { text: " deleting", color: "red" };
-	if (isCreating) return { text: " creating", color: "yellow" };
-	if (!wt) return { text: " -", color: "gray" };
-	// Session state takes priority over session ID
-	if (wt.sessionState === "waiting") return { text: " waiting!", color: "red" };
-	if (wt.sessionState === "active") return { text: " active", color: "green" };
-	if (wt.sessionState === "idle") return { text: " idle", color: "yellow" };
-	if (wt.sessionId) return { text: " " + wt.sessionId.slice(0, 8), color: "cyan" };
-	return { text: " none", color: "red" };
-}
-
-type ListRow =
-	| { kind: "columns" }
-	| { kind: "header"; name: string; count: number }
+export type ListRow =
+	| { kind: "header"; name: string; count: number; isFirst: boolean }
 	| { kind: "status-header"; name: string; type: string; count: number }
 	| { kind: "issue"; issue: DashboardIssue; flatIndex: number; depth: number };
 
-function buildRows(groups: ProjectGroup[], flatIssues: DashboardIssue[]): ListRow[] {
-	const rows: ListRow[] = [{ kind: "columns" }];
-	// Build a map from issue identifier to flat index
+export function buildIssueListRows(
+	groups: ProjectGroup[],
+	flatIssues: DashboardIssue[],
+): ListRow[] {
+	const rows: ListRow[] = [];
 	const indexMap = new Map<string, number>();
 	flatIssues.forEach((di, i) => indexMap.set(di.issue.identifier, i));
 
 	function pushIssueWithChildren(di: DashboardIssue, depth: number) {
-		rows.push({
-			kind: "issue",
-			issue: di,
-			flatIndex: indexMap.get(di.issue.identifier) ?? -1,
-			depth,
-		});
+		const flatIndex = indexMap.get(di.issue.identifier) ?? -1;
+		rows.push({ kind: "issue", issue: di, flatIndex, depth });
 		if (di.children) {
 			for (const child of di.children) {
 				pushIssueWithChildren(child, depth + 1);
@@ -105,20 +78,26 @@ function buildRows(groups: ProjectGroup[], flatIssues: DashboardIssue[]): ListRo
 		}
 	}
 
-	for (const group of groups) {
+	groups.forEach((group, gi) => {
 		const totalIssues = group.statusGroups.reduce((sum, sg) => sum + sg.issues.length, 0);
-		rows.push({ kind: "header", name: group.name, count: totalIssues });
+		rows.push({ kind: "header", name: group.name, count: totalIssues, isFirst: gi === 0 });
 		for (const sg of group.statusGroups) {
 			rows.push({ kind: "status-header", name: sg.name, type: sg.type, count: sg.issues.length });
 			for (const di of sg.issues) {
 				pushIssueWithChildren(di, 0);
 			}
 		}
-	}
+	});
 	return rows;
 }
 
-const FOOTER_HEIGHT = 2;
+// Issue row anatomy:
+//   priority(1) │ space(1) │ dot(1) │ space(2) │ id(11) │ space(1) │ title(rest) │ pad │ WT(2) │ space(2) │ CI(2)
+// Each right-side column is 2 chars wide (matching the 2-char header label).
+// Glyphs are 1 char and rendered right-aligned within their column.
+const LEFT_FIXED = 1 + 1 + 1 + 2 + 11; // 16 — left-aligned columns
+const RIGHT_FIXED = 2 + 2 + 2; // 6 — WT + 2 spaces + CI
+const TITLE_GAP = 2; // minimum spacing between title and the right columns
 
 export default function IssueList({
 	groups,
@@ -127,48 +106,39 @@ export default function IssueList({
 	scrollOffset,
 	height,
 	width,
-	creatingForTicket,
-	deletingForTicket,
+	selectionBg = "#1e3a5f",
 }: Props) {
-	const rows = buildRows(groups, flatIssues);
-	const listHeight = height - FOOTER_HEIGHT;
-	const visible = rows.slice(scrollOffset, scrollOffset + listHeight);
-	// 2 cursor + 2 dot + 4 priority + 11 id + title + 9 session + 1 space + 6 pr + 1 space + 2 checks
-	const prColWidth = 6;
-	const checksColWidth = 2;
-	const sessionColWidth = 9;
-	const priorityColWidth = 4;
-	const fixedWidth =
-		2 + 2 + priorityColWidth + 11 + sessionColWidth + 1 + prColWidth + 1 + checksColWidth;
-	const titleMaxWidth = Math.max(width - fixedWidth, 10);
-	const footerRule = "─".repeat(width);
+	const rows = buildIssueListRows(groups, flatIssues);
+	const visible = rows.slice(scrollOffset, scrollOffset + height);
+	const titleMaxWidth = Math.max(
+		width - LEFT_FIXED - 1 /* leading space */ - RIGHT_FIXED - TITLE_GAP,
+		10,
+	);
 
 	return (
 		<Box flexDirection="column" width={width} height={height}>
 			{/* List content */}
-			<Box flexDirection="column" height={listHeight}>
+			<Box flexDirection="column" height={height}>
 				{visible.map((row, i) => {
-					if (row.kind === "columns") {
-						const labelPad = 14 + priorityColWidth + titleMaxWidth;
-						return (
-							<Box key="col-header">
-								<Text dimColor>{"".padEnd(labelPad)}</Text>
-								<Text dimColor>{"session".padStart(sessionColWidth)}</Text>
-								<Text dimColor> </Text>
-								<Text dimColor>{"pr".padStart(prColWidth)}</Text>
-								<Text dimColor> </Text>
-								<Text dimColor>{"ci".padStart(checksColWidth)}</Text>
-							</Box>
-						);
-					}
-
 					if (row.kind === "header") {
+						// On the first project header, also render the WT/CI column
+						// labels right-aligned to the worktree/CI glyph columns —
+						// keeps the labels discoverable without burning a row.
+						// Label "WT CI" is 5 chars; the "W" lines up with the WT
+						// glyph at column (width - RIGHT_FIXED + 1).
+						const namePart = `${row.name}  ${row.count}`;
+						const labelText = "WT CI";
+						const labelPad = row.isFirst
+							? Math.max(2, width - namePart.length - labelText.length)
+							: 0;
 						return (
-							<Box key={`h-${i}`}>
-								<Text dimColor bold>
-									{"── "}
-									{row.name} ({row.count}){" ──"}
+							<Box key={`h-${i}`} marginTop={i === 0 ? 0 : 1}>
+								<Text bold>{row.name}</Text>
+								<Text dimColor>
+									{"  "}
+									{row.count}
 								</Text>
+								{row.isFirst && <Text dimColor>{`${" ".repeat(labelPad)}${labelText}`}</Text>}
 							</Box>
 						);
 					}
@@ -176,9 +146,13 @@ export default function IssueList({
 					if (row.kind === "status-header") {
 						return (
 							<Box key={`sh-${i}`}>
-								<Text color={stateColor(row.type, row.name)} dimColor>
-									{"   "}
-									{row.name} ({row.count})
+								<Text color={stateColor(row.type, row.name)}>
+									{"  "}
+									{row.name}
+								</Text>
+								<Text dimColor>
+									{"  "}
+									{row.count}
 								</Text>
 							</Box>
 						);
@@ -188,13 +162,9 @@ export default function IssueList({
 					const selected = flatIndex === selectedIndex;
 					const di = issue;
 					const sc = stateColor(di.issue.state.type, di.issue.state.name);
-					const isCreating = di.issue.identifier === creatingForTicket;
-					const isDeleting = di.issue.identifier === deletingForTicket;
-					const sess = sessionIndicator(di.worktree, isCreating, isDeleting);
-					const ci = checksIndicator(di.checks);
-					const pr = prIndicator(di.pr);
-					const prio = priorityIndicator(di.issue.priority);
-					const cursor = selected ? ">" : " ";
+					const prio = priorityMarker(di.issue.priority);
+					const work = workIndicator(di.worktree);
+					const ci = ciIndicator(di.checks);
 					const nestPrefix = depth > 0 ? "  ".repeat(depth - 1) + "└ " : "";
 					const adjustedTitleWidth = Math.max(titleMaxWidth - nestPrefix.length, 5);
 					const title =
@@ -202,82 +172,46 @@ export default function IssueList({
 							? di.issue.title.slice(0, adjustedTitleWidth - 1) + "…"
 							: di.issue.title;
 
-					const bg = selected ? "#1e3a5f" : undefined;
+					const bg = selected ? selectionBg : undefined;
+
+					// Pad between title and the right columns so the W/CI markers stay
+					// pinned to the right edge regardless of title length.
+					const trailingPad = Math.max(
+						0,
+						width - LEFT_FIXED - 1 - nestPrefix.length - title.length - RIGHT_FIXED,
+					);
 
 					return (
 						<Box key={di.issue.identifier} width={width}>
-							<Text backgroundColor={bg} color={selected ? "cyan" : undefined} bold={selected}>
-								{cursor}{" "}
+							<Text backgroundColor={bg} color={prio.color}>
+								{prio.glyph}
 							</Text>
+							<Text backgroundColor={bg}> </Text>
 							<Text backgroundColor={bg} color={sc}>
 								●
 							</Text>
-							<Text backgroundColor={bg} color={prio.color}>
-								{" "}
-								{prio.text}
-							</Text>
-							<Text backgroundColor={bg} color={selected ? "cyan" : undefined} bold={selected}>
+							<Text backgroundColor={bg}>{"  "}</Text>
+							<Text backgroundColor={bg} dimColor>
 								{nestPrefix}
 								{di.issue.identifier.padEnd(10)}
 							</Text>
-							<Text backgroundColor={bg} color={selected ? "white" : undefined} bold={selected}>
-								{title.padEnd(adjustedTitleWidth)}
+							<Text backgroundColor={bg} bold={selected}>
+								{" "}
+								{title}
 							</Text>
-							<Text
-								backgroundColor={bg}
-								color={selected ? (sess.color === "gray" ? "gray" : sess.color) : sess.color}
-							>
-								{sess.text.padStart(sessionColWidth)}
-							</Text>
+							<Text backgroundColor={bg}>{" ".repeat(trailingPad)}</Text>
 							<Text backgroundColor={bg}> </Text>
-							<Text
-								backgroundColor={bg}
-								color={selected ? (pr.color === "gray" ? "gray" : pr.color) : pr.color}
-							>
-								{pr.text.padStart(prColWidth)}
+							<Text backgroundColor={bg} color={work.color}>
+								{work.glyph}
 							</Text>
+							<Text backgroundColor={bg}>{"  "}</Text>
 							<Text backgroundColor={bg}> </Text>
-							<Text
-								backgroundColor={bg}
-								color={selected ? (ci.color === "gray" ? "gray" : ci.color) : ci.color}
-							>
-								{ci.text.padStart(checksColWidth)}
+							<Text backgroundColor={bg} color={ci.color}>
+								{ci.glyph}
 							</Text>
 						</Box>
 					);
 				})}
-			</Box>
-
-			{/* Fixed footer */}
-			<Box flexDirection="column">
-				<Text dimColor>{footerRule}</Text>
-				<Text>
-					{"  "}
-					<Text color="cyan" bold>
-						j/k
-					</Text>
-					<Text color="white"> Navigate</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						Shift + ↑↓
-					</Text>
-					<Text color="white"> Scroll detail</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						E
-					</Text>
-					<Text color="white"> Workspace</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						R
-					</Text>
-					<Text color="white"> Refresh</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						q
-					</Text>
-					<Text color="white"> Quit</Text>
-				</Text>
 			</Box>
 		</Box>
 	);

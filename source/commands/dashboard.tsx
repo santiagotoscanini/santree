@@ -17,9 +17,11 @@ import {
 	hasInitScript,
 	getInitScriptPath,
 	removeWorktree,
+	getDiffTool,
 } from "../lib/git.js";
 import { run, spawnAsync } from "../lib/exec.js";
 import { resolveAgentBinary } from "../lib/ai.js";
+import { getInstalledClaudeVersion } from "../lib/version.js";
 import { extractTicketId } from "../lib/git.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
 import { getPRTemplate } from "../lib/github.js";
@@ -29,31 +31,104 @@ import * as os from "os";
 import type { DashboardIssue, ProjectGroup } from "../lib/dashboard/types.js";
 import { initialState, reducer } from "../lib/dashboard/types.js";
 import { loadDashboardData, loadReviewsData } from "../lib/dashboard/data.js";
-import IssueList from "../lib/dashboard/IssueList.js";
-import DetailPanel from "../lib/dashboard/DetailPanel.js";
+import IssueList, { buildIssueListRows } from "../lib/dashboard/IssueList.js";
+import {
+	detectTerminalTheme,
+	getThemeForMode,
+	type DashboardTheme,
+} from "../lib/dashboard/theme.js";
+import DetailPanel, { buildIssueActions } from "../lib/dashboard/DetailPanel.js";
 import ReviewList from "../lib/dashboard/ReviewList.js";
-import ReviewDetailPanel from "../lib/dashboard/ReviewDetailPanel.js";
+import ReviewDetailPanel, { buildReviewActions } from "../lib/dashboard/ReviewDetailPanel.js";
 import { CommitOverlay, PrCreateOverlay } from "../lib/dashboard/Overlays.js";
 import { MultilineTextArea } from "../lib/dashboard/MultilineTextArea.js";
+import DiffOverlay, { flattenTreeFiles, computeDiffLayout } from "../lib/dashboard/DiffOverlay.js";
+import type { DiffFile, DiffFileStatus } from "../lib/dashboard/types.js";
+import {
+	CURRENT_VERSION,
+	CLAUDE_CODE_PACKAGE,
+	getLatestVersion,
+	getCachedLatestVersion,
+	getLatestVersionFor,
+	getCachedLatestVersionFor,
+	isUpdateAvailable,
+} from "../lib/version.js";
 
 export const description = "Interactive dashboard of your Linear issues";
 
 const execAsync = promisify(exec);
 
-const CLAUDE_VERSION = (() => {
-	const bin = path.join(os.homedir(), ".claude", "local", "claude");
-	try {
-		return (
-			execSync(`${bin} --version`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] })
-				.trim()
-				.split(" ")[0] ?? ""
-		);
-	} catch {
-		return "";
-	}
-})();
+// Resolved at module load — cheap. Honors cmux's bundled binary when running
+// inside cmux so the header reflects the binary santree will actually use.
+const CLAUDE_VERSION = getInstalledClaudeVersion() ?? "";
 
 // ── Helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Parse `git diff --name-status` output. Each line is a tab-separated record:
+ *   M\tpath/to/file.ts
+ *   R100\told/path\tnew/path
+ * For renames/copies, the status code has a similarity suffix we strip.
+ */
+/**
+ * Pipe `git diff` output through an external tool (e.g. delta) and return the
+ * combined ANSI output. Uses spawn pipes — no shell — so the tool name is safe
+ * even though we already validate it in getDiffTool().
+ */
+function runPipedDiff(
+	cwd: string,
+	mergeBase: string,
+	filePath: string,
+	tool: string,
+): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const git = spawn("git", ["-C", cwd, "diff", "--color=always", mergeBase, "--", filePath], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const pager = spawn(tool, [], { stdio: ["pipe", "pipe", "pipe"] });
+		let out = "";
+		let err = "";
+		git.stdout.pipe(pager.stdin);
+		git.stderr.on("data", (d) => {
+			err += d.toString();
+		});
+		pager.stdout.on("data", (d) => {
+			out += d.toString();
+		});
+		pager.stderr.on("data", (d) => {
+			err += d.toString();
+		});
+		pager.on("error", reject);
+		git.on("error", reject);
+		pager.on("close", (code) => {
+			if (code !== 0 && !out) {
+				reject(new Error(err || `${tool} exited with code ${code}`));
+			} else {
+				resolve(out);
+			}
+		});
+	});
+}
+
+function parseNameStatus(raw: string): DiffFile[] {
+	const files: DiffFile[] = [];
+	for (const line of raw.split("\n")) {
+		if (!line.trim()) continue;
+		const parts = line.split("\t");
+		if (parts.length < 2) continue;
+		const code = parts[0]!.charAt(0).toUpperCase();
+		const status: DiffFileStatus =
+			code === "M" || code === "A" || code === "D" || code === "R" || code === "C" || code === "U"
+				? code
+				: "?";
+		if ((status === "R" || status === "C") && parts.length >= 3) {
+			files.push({ status, path: parts[2]!, oldPath: parts[1] });
+		} else {
+			files.push({ status, path: parts[1]! });
+		}
+	}
+	return files;
+}
 
 function slugify(title: string): string {
 	return title
@@ -65,57 +140,36 @@ function slugify(title: string): string {
 
 // ── Scroll helpers ────────────────────────────────────────────────────
 
-function countWithChildren(di: { children?: { children?: any[] }[] }): number {
-	let count = 1;
-	if (di.children) {
-		for (const child of di.children) {
-			count += countWithChildren(child);
-		}
-	}
-	return count;
-}
-
-function getRowIndexForFlatIndex(groups: ProjectGroup[], flatIndex: number): number {
-	let row = 1; // skip column header row
-	let issuesSeen = 0;
-	for (const g of groups) {
-		row++; // project header
-		for (const sg of g.statusGroups) {
-			row++; // status header
-			for (const di of sg.issues) {
-				const total = countWithChildren(di);
-				if (flatIndex >= issuesSeen && flatIndex < issuesSeen + total) {
-					// The target is within this issue or its children
-					return row + (flatIndex - issuesSeen);
-				}
-				row += total;
-				issuesSeen += total;
-			}
-		}
+/**
+ * Walk the rendered list rows and return the absolute row index of the
+ * issue's main row (not its detail sub-rows). Used to keep the selected
+ * issue scrolled into view as `j`/`k` moves selection.
+ */
+function getRowIndexForFlatIndex(
+	groups: ProjectGroup[],
+	flatIssues: DashboardIssue[],
+	flatIndex: number,
+): number {
+	const rows = buildIssueListRows(groups, flatIssues);
+	for (let i = 0; i < rows.length; i++) {
+		const r = rows[i]!;
+		if (r.kind === "issue" && r.flatIndex === flatIndex) return i;
 	}
 	return 0;
 }
 
-function getFlatIndexForListRow(groups: ProjectGroup[], listRow: number): number | null {
-	if (listRow === 0) return null; // column header row
-	let row = 1; // skip column header row
-	let issuesSeen = 0;
-	for (const g of groups) {
-		if (row === listRow) return null; // project header row
-		row++;
-		for (const sg of g.statusGroups) {
-			if (row === listRow) return null; // status header row
-			row++;
-			for (const di of sg.issues) {
-				const total = countWithChildren(di);
-				if (listRow >= row && listRow < row + total) {
-					return issuesSeen + (listRow - row);
-				}
-				row += total;
-				issuesSeen += total;
-			}
-		}
-	}
+/**
+ * Map a clicked list row back to its parent issue's flat index, if any.
+ */
+function getFlatIndexForListRow(
+	groups: ProjectGroup[],
+	flatIssues: DashboardIssue[],
+	listRow: number,
+): number | null {
+	const rows = buildIssueListRows(groups, flatIssues);
+	const row = rows[listRow];
+	if (!row) return null;
+	if (row.kind === "issue") return row.flatIndex;
 	return null;
 }
 
@@ -163,6 +217,66 @@ function leaveAltScreen() {
 	process.stdout.write("\x1b[?25h"); // Show cursor
 }
 
+/**
+ * Tab pill — active tab uses an explicit hex bg + fg so contrast doesn't
+ * depend on the user's ANSI palette interpretation (terminal "cyan" can be a
+ * pale teal in light themes that doesn't read against ANSI "black"). Light
+ * mode gets a darker teal pill with white text; dark mode keeps a bright
+ * cyan pill with black text. Inactive tabs use default foreground.
+ */
+function Tab({ active, label, mode }: { active: boolean; label: string; mode: "light" | "dark" }) {
+	if (active) {
+		const bg = mode === "light" ? "#0e7490" : "#22d3ee";
+		const fg = mode === "light" ? "white" : "black";
+		return (
+			<Text backgroundColor={bg} color={fg} bold>
+				{` ${label} `}
+			</Text>
+		);
+	}
+	return <Text>{` ${label} `}</Text>;
+}
+
+/**
+ * Single-line global keymap shown at the bottom-left of the dashboard. The
+ * `E workspace` hint only appears when the action is meaningful
+ * (`SANTREE_EDITOR` is `code`/`cursor` and a `.code-workspace` file exists in
+ * the repo root).
+ */
+function CommandBar({ showWorkspace }: { showWorkspace: boolean }) {
+	const dot = <Text dimColor>{"  ·  "}</Text>;
+	const Key = ({ k }: { k: string }) => (
+		<Text color="cyan" bold>
+			{k}
+		</Text>
+	);
+	return (
+		<Text>
+			<Key k="j/k" />
+			<Text dimColor> nav</Text>
+			{dot}
+			<Key k="⇧↑↓" />
+			<Text dimColor> scroll</Text>
+			{dot}
+			<Key k="1/2" />
+			<Text dimColor> tabs</Text>
+			{showWorkspace ? (
+				<>
+					{dot}
+					<Key k="E" />
+					<Text dimColor> workspace</Text>
+				</>
+			) : null}
+			{dot}
+			<Key k="R" />
+			<Text dimColor> refresh</Text>
+			{dot}
+			<Key k="q" />
+			<Text dimColor> quit</Text>
+		</Text>
+	);
+}
+
 // ── Component ─────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -170,6 +284,14 @@ export default function Dashboard() {
 	const { exit } = useApp();
 	const { stdout } = useStdout();
 	const [state, dispatch] = useReducer(reducer, initialState);
+	// Theme is a visual concern only — kept outside the reducer so re-detection
+	// on refresh doesn't churn data flow. Defaults to dark; replaced by OSC 11
+	// detection on mount and on every refresh.
+	const [theme, setTheme] = useState<DashboardTheme>(getThemeForMode("dark"));
+	// `E workspace` is only meaningful when the user's editor accepts a
+	// `.code-workspace` file (VSCode/Cursor) AND such a file exists in the
+	// repo root. Recomputed alongside the data refresh.
+	const [hasWorkspaceFile, setHasWorkspaceFile] = useState(false);
 	const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const repoRootRef = useRef<string | null>(null);
 	const stateRef = useRef(state);
@@ -180,6 +302,32 @@ export default function Dashboard() {
 		columns: stdout?.columns ?? 80,
 		rows: stdout?.rows ?? 24,
 	});
+
+	// Show cached values immediately so the banner appears on first paint when
+	// known-stale; refresh in the background without blocking dashboard load.
+	const [latestVersion, setLatestVersion] = useState<string | null>(getCachedLatestVersion);
+	const [latestClaudeVersion, setLatestClaudeVersion] = useState<string | null>(() =>
+		getCachedLatestVersionFor(CLAUDE_CODE_PACKAGE),
+	);
+
+	useEffect(() => {
+		let cancelled = false;
+		getLatestVersion().then((v) => {
+			if (!cancelled && v) setLatestVersion(v);
+		});
+		getLatestVersionFor(CLAUDE_CODE_PACKAGE).then((v) => {
+			if (!cancelled && v) setLatestClaudeVersion(v);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	const updateAvailable = latestVersion ? isUpdateAvailable(CURRENT_VERSION, latestVersion) : false;
+	const claudeUpdateAvailable =
+		!!CLAUDE_VERSION &&
+		!!latestClaudeVersion &&
+		isUpdateAvailable(CLAUDE_VERSION, latestClaudeVersion);
 
 	useEffect(() => {
 		const onResize = () => {
@@ -196,12 +344,14 @@ export default function Dashboard() {
 
 	const { columns, rows } = termSize;
 	const separatorWidth = 3;
-	const [leftWidth, setLeftWidth] = useState(Math.floor(columns * 0.42));
+	const innerWidth = Math.max(40, columns - 2); // outer border consumes 1 col on each side
+	const [leftWidth, setLeftWidth] = useState(Math.floor(innerWidth * 0.42));
 	const leftWidthRef = useRef(leftWidth);
 	leftWidthRef.current = leftWidth;
-	const rightWidth = columns - leftWidth - separatorWidth;
-	const contentHeight = rows - 2; // 2 header rows (tabs + version)
-	const LIST_FOOTER_HEIGHT = 2;
+	const rightWidth = innerWidth - leftWidth - separatorWidth;
+	// Header (1) + tab strip (1) + 2 borders + command bar (1, inside box) = 5 rows
+	const contentHeight = Math.max(3, rows - 5);
+	const LIST_FOOTER_HEIGHT = 0;
 
 	// ── Data loading ──────────────────────────────────────────────────
 
@@ -216,10 +366,28 @@ export default function Dashboard() {
 		repoRootRef.current = repoRoot;
 
 		try {
-			const [data, reviewData] = await Promise.all([
+			// Re-detect terminal theme alongside data fetch so light↔dark switches
+			// propagate within one refresh cycle (≤30s).
+			const [data, reviewData, themeMode] = await Promise.all([
 				loadDashboardData(repoRoot),
 				loadReviewsData(repoRoot),
+				detectTerminalTheme(),
 			]);
+			setTheme(getThemeForMode(themeMode));
+			// Workspace file presence — only meaningful when the editor consumes
+			// `.code-workspace` files. Cheap directory read; recomputed each cycle
+			// in case the user adds/removes one.
+			const editor = (process.env.SANTREE_EDITOR ?? "code").toLowerCase();
+			const editorAcceptsWorkspace = editor === "code" || editor === "cursor";
+			let hasWs = false;
+			if (editorAcceptsWorkspace) {
+				try {
+					hasWs = fs.readdirSync(repoRoot).some((f) => f.endsWith(".code-workspace"));
+				} catch {
+					hasWs = false;
+				}
+			}
+			setHasWorkspaceFile(hasWs);
 			dispatch({ type: "SET_DATA", ...data });
 			dispatch({ type: "SET_REVIEWS_DATA", flatReviews: reviewData.flatReviews });
 		} catch (e) {
@@ -260,8 +428,9 @@ export default function Dashboard() {
 
 			// Drag — resize if actively dragging
 			if (isDrag && draggingRef.current) {
-				// col is 1-based; place divider center at mouse position
-				const newLeft = Math.max(minW, Math.min(col - 1, cols - sepW - minW));
+				// col is 1-based; outer border consumes col 1, so left pane spans cols 2..(lw+1).
+				// Setting newLeft = col - 1 keeps the divider at the user's cursor.
+				const newLeft = Math.max(minW, Math.min(col - 1, cols - 2 - sepW - minW));
 				setLeftWidth(newLeft);
 				return;
 			}
@@ -272,8 +441,42 @@ export default function Dashboard() {
 				const lw = leftWidthRef.current;
 				const delta = button === 65 ? 3 : -3;
 
+				// Diff overlay: file navigation (left pane) or content scroll (right pane)
+				if (s.overlay === "diff") {
+					const cols = stdout?.columns ?? 80;
+					const rowsRem = stdout?.rows ?? 24;
+					// contentHeight = total - dashboard header (1) - tab bar (1) - bottom margin (0)
+					const contentHeight = Math.max(3, rowsRem - 5);
+					const layout = computeDiffLayout({
+						width: Math.max(40, cols - 2), // outer box border eats 1 col on each side
+						height: contentHeight,
+						files: s.diffFiles,
+						fileIndex: s.diffFileIndex,
+						fileScrollOffset: s.diffFileScrollOffset,
+					});
+					// Body's first line is at absolute row 6 (title + tab + top border + overlay title + rule)
+					const bodyRow = row - 6;
+					if (bodyRow < 0 || bodyRow >= layout.bodyHeight) return;
+
+					if (col <= layout.leftWidth) {
+						const maxIdx = s.diffFiles.length - 1;
+						if (maxIdx < 0) return;
+						const next = Math.max(0, Math.min(s.diffFileIndex + delta, maxIdx));
+						dispatch({ type: "DIFF_FILE_SELECT", index: next });
+					} else {
+						const totalLines = s.diffContent ? s.diffContent.split("\n").length : 0;
+						const maxScroll = Math.max(0, totalLines - layout.bodyHeight);
+						const next = Math.max(0, Math.min(maxScroll, s.diffContentScrollOffset + delta));
+						dispatch({ type: "DIFF_CONTENT_SCROLL", offset: next });
+					}
+					return;
+				}
+
+				// Outer border at col 1; left pane spans cols 2..(lw+1).
+				const inLeftPane = col >= 2 && col <= lw + 1;
+
 				if (s.activeTab === "reviews") {
-					if (col <= lw) {
+					if (inLeftPane) {
 						const maxIdx = s.flatReviews.length - 1;
 						if (maxIdx < 0) return;
 						const next = Math.max(0, Math.min(s.reviewSelectedIndex + delta, maxIdx));
@@ -285,7 +488,7 @@ export default function Dashboard() {
 					return;
 				}
 
-				if (col <= lw) {
+				if (inLeftPane) {
 					// Scroll left pane (issue list)
 					const maxIdx = s.flatIssues.length - 1;
 					if (maxIdx < 0) return;
@@ -301,22 +504,49 @@ export default function Dashboard() {
 
 			if (!isPress) return;
 
+			// Diff overlay click: select file row in left pane
+			{
+				const s = stateRef.current;
+				if (s.overlay === "diff") {
+					const cols = stdout?.columns ?? 80;
+					const rowsRem = stdout?.rows ?? 24;
+					const contentHeight = Math.max(3, rowsRem - 5);
+					const layout = computeDiffLayout({
+						width: Math.max(40, cols - 2), // outer box border eats 1 col on each side
+						height: contentHeight,
+						files: s.diffFiles,
+						fileIndex: s.diffFileIndex,
+						fileScrollOffset: s.diffFileScrollOffset,
+					});
+					if (col > layout.leftWidth) return;
+					const bodyRow = row - 6;
+					if (bodyRow < 0 || bodyRow >= layout.bodyHeight) return;
+					const absRowIdx = layout.effectiveScroll + bodyRow;
+					const clickedRow = layout.rows[absRowIdx];
+					if (clickedRow && clickedRow.fileIndex !== null) {
+						dispatch({ type: "DIFF_FILE_SELECT", index: clickedRow.fileIndex });
+					}
+					return;
+				}
+			}
+
 			// Left-click press: check if on divider to start drag
+			// Outer border is at col 1; left pane spans cols 2..(lw+1); divider spans (lw+2)..(lw+1+sepW).
 			const lw = leftWidthRef.current;
-			const divStart = lw + 1; // 1-based start of separator
-			const divEnd = lw + sepW; // 1-based end of separator
+			const divStart = lw + 2;
+			const divEnd = lw + 1 + sepW;
 			if (col >= divStart && col <= divEnd) {
 				draggingRef.current = true;
 				return;
 			}
 
-			// Left-click press: select item in left pane
+			// Left-click press: select item in left pane (cols 2..lw+1)
 			const s = stateRef.current;
 			if (s.loading || s.error) return;
-			if (col > lw) return;
+			if (col < 2 || col > lw + 1) return;
 
-			// Row 1 is the header line, content starts at row 2 (1-based)
-			const contentRow = row - 2; // 0-based row within content area
+			// Row 1 = title, row 2 = tab strip, row 3 = top border, content starts at row 4 (1-based)
+			const contentRow = row - 4; // 0-based row within content area
 			if (contentRow < 0) return;
 
 			if (s.activeTab === "reviews") {
@@ -332,7 +562,7 @@ export default function Dashboard() {
 
 			if (s.flatIssues.length === 0) return;
 			const listRow = s.listScrollOffset + contentRow;
-			const flatIdx = getFlatIndexForListRow(s.groups, listRow);
+			const flatIdx = getFlatIndexForListRow(s.groups, s.flatIssues, listRow);
 			if (flatIdx !== null && flatIdx >= 0 && flatIdx < s.flatIssues.length) {
 				dispatch({ type: "SELECT", index: flatIdx });
 			}
@@ -365,7 +595,7 @@ export default function Dashboard() {
 	// ── List scroll tracking ──────────────────────────────────────────
 
 	useEffect(() => {
-		const rowIdx = getRowIndexForFlatIndex(state.groups, state.selectedIndex);
+		const rowIdx = getRowIndexForFlatIndex(state.groups, state.flatIssues, state.selectedIndex);
 		const maxVisible = contentHeight - LIST_FOOTER_HEIGHT;
 		let offset = state.listScrollOffset;
 
@@ -415,6 +645,73 @@ export default function Dashboard() {
 			process.stdout.write("\x1b[?1002h\x1b[?1006h");
 		};
 	}, [state.overlay, state.contextInputPhase, state.prCreatePhase]);
+
+	// ── Diff overlay: load file list when opened ──────────────────────
+	// Resolves merge-base against the configured base branch so upstream-only
+	// changes (commits on master we haven't pulled) are excluded — same semantics
+	// as a GitHub PR diff.
+	useEffect(() => {
+		if (state.overlay !== "diff" || !state.diffWorktreePath || !state.diffBaseBranch) return;
+		if (!state.diffLoadingFiles) return;
+		const cwd = state.diffWorktreePath;
+		const base = state.diffBaseBranch;
+		void (async () => {
+			try {
+				const { stdout: mergeBaseOut } = await execAsync(
+					`git -C "${cwd}" merge-base "${base}" HEAD`,
+				);
+				const mergeBase = mergeBaseOut.trim() || base;
+				const { stdout } = await execAsync(`git -C "${cwd}" diff --name-status "${mergeBase}"`);
+				const files = parseNameStatus(stdout);
+				const ordered = flattenTreeFiles(files);
+				dispatch({ type: "DIFF_FILES_LOADED", files: ordered, mergeBase });
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				dispatch({ type: "DIFF_FILES_ERROR", error: msg });
+			}
+		})();
+	}, [state.overlay, state.diffWorktreePath, state.diffBaseBranch, state.diffLoadingFiles]);
+
+	// ── Diff overlay: load content for selected file ──────────────────
+	// If SANTREE_DIFF_TOOL is set, pipe `git diff` output through the tool so
+	// the user's preferred renderer (delta, diff-so-fancy, etc.) handles
+	// colorization. The tool's ANSI output is then rendered as-is by Ink.
+	useEffect(() => {
+		if (state.overlay !== "diff" || !state.diffWorktreePath || !state.diffMergeBase) return;
+		const file = state.diffFiles[state.diffFileIndex];
+		if (!file) return;
+		const cwd = state.diffWorktreePath;
+		const mergeBase = state.diffMergeBase;
+		const tool = getDiffTool();
+		dispatch({ type: "DIFF_CONTENT_LOADING" });
+		void (async () => {
+			try {
+				if (tool) {
+					// Pipe git diff (with colors enabled so the tool can pass them
+					// through if desired) into the configured tool. Use spawn pipes
+					// rather than shell to avoid quoting concerns.
+					const content = await runPipedDiff(cwd, mergeBase, file.path, tool);
+					dispatch({ type: "DIFF_CONTENT_LOADED", content });
+				} else {
+					// No external tool — get raw unified diff and render colors ourselves.
+					const { stdout } = await execAsync(
+						`git -C "${cwd}" diff --no-color "${mergeBase}" -- "${file.path}"`,
+						{ maxBuffer: 32 * 1024 * 1024 },
+					);
+					dispatch({ type: "DIFF_CONTENT_LOADED", content: stdout });
+				}
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				dispatch({ type: "DIFF_CONTENT_LOADED", content: `Error loading diff: ${msg}` });
+			}
+		})();
+	}, [
+		state.overlay,
+		state.diffWorktreePath,
+		state.diffMergeBase,
+		state.diffFileIndex,
+		state.diffFiles,
+	]);
 
 	// ── Actions ───────────────────────────────────────────────────────
 
@@ -1150,6 +1447,66 @@ export default function Dashboard() {
 				return;
 			}
 
+			// Diff overlay
+			if (state.overlay === "diff") {
+				if (key.escape || input === "q") {
+					dispatch({ type: "DIFF_CLOSE" });
+					return;
+				}
+				const fileCount = state.diffFiles.length;
+				if (fileCount === 0) return;
+
+				// Compute max scroll so we never scroll past the end of the diff.
+				const cols = stdout?.columns ?? 80;
+				const rowsRem = stdout?.rows ?? 24;
+				const contentHeight = Math.max(3, rowsRem - 2);
+				const layout = computeDiffLayout({
+					width: Math.max(40, cols - 2), // outer box border eats 1 col on each side
+					height: contentHeight,
+					files: state.diffFiles,
+					fileIndex: state.diffFileIndex,
+					fileScrollOffset: state.diffFileScrollOffset,
+				});
+				const totalLines = state.diffContent ? state.diffContent.split("\n").length : 0;
+				const maxScroll = Math.max(0, totalLines - layout.bodyHeight);
+
+				// Scroll diff content (J/K or shift+arrows)
+				if ((key.shift && key.downArrow) || input === "J") {
+					dispatch({
+						type: "DIFF_CONTENT_SCROLL",
+						offset: Math.min(maxScroll, state.diffContentScrollOffset + 5),
+					});
+					return;
+				}
+				if ((key.shift && key.upArrow) || input === "K") {
+					dispatch({
+						type: "DIFF_CONTENT_SCROLL",
+						offset: Math.max(0, state.diffContentScrollOffset - 5),
+					});
+					return;
+				}
+				if (input === "g") {
+					dispatch({ type: "DIFF_CONTENT_SCROLL", offset: 0 });
+					return;
+				}
+				if (input === "G") {
+					dispatch({ type: "DIFF_CONTENT_SCROLL", offset: maxScroll });
+					return;
+				}
+				// Navigate file list (j/k or arrows)
+				if (input === "j" || (key.downArrow && !key.shift)) {
+					const next = Math.min(state.diffFileIndex + 1, fileCount - 1);
+					dispatch({ type: "DIFF_FILE_SELECT", index: next });
+					return;
+				}
+				if (input === "k" || (key.upArrow && !key.shift)) {
+					const prev = Math.max(state.diffFileIndex - 1, 0);
+					dispatch({ type: "DIFF_FILE_SELECT", index: prev });
+					return;
+				}
+				return;
+			}
+
 			// Confirm delete overlay
 			if (state.overlay === "confirm-delete") {
 				if (input === "y") {
@@ -1586,9 +1943,11 @@ export default function Dashboard() {
 				return;
 			}
 
-			// Open workspace
+			// Open workspace — no-op unless the editor accepts a .code-workspace
+			// file and one exists. Keeps the keybinding from firing surprises on
+			// editors like zed/nvim that don't have the concept.
 			if (input === "E") {
-				openWorkspace();
+				if (hasWorkspaceFile) openWorkspace();
 				return;
 			}
 
@@ -1643,6 +2002,22 @@ export default function Dashboard() {
 				return;
 			}
 
+			// View diff (inline overlay)
+			if (input === "v") {
+				if (!di.worktree) {
+					dispatch({ type: "SET_ACTION_MESSAGE", message: "No worktree to diff" });
+					return;
+				}
+				const baseBranch = getBaseBranch(di.worktree.branch);
+				dispatch({
+					type: "DIFF_OPEN",
+					ticketId: di.issue.identifier,
+					worktreePath: di.worktree.path,
+					baseBranch,
+				});
+				return;
+			}
+
 			// Delete worktree
 			if (input === "d") {
 				if (!di.worktree) {
@@ -1694,353 +2069,442 @@ export default function Dashboard() {
 
 	return (
 		<Box width={columns} height={rows} flexDirection="column">
-			{/* Header */}
-			<Box>
+			{/* Header — single line: brand + meta */}
+			<Box paddingX={1}>
 				<Text bold color="cyan">
-					Santree Dashboard
+					santree
 				</Text>
 				<Text dimColor>
 					{"  "}v{version}
 				</Text>
-				{CLAUDE_VERSION ? (
-					<Text dimColor>
-						{"  "}claude {CLAUDE_VERSION}
+				{updateAvailable && latestVersion ? (
+					<Text color="yellow">
+						{"  ⬆ v"}
+						{latestVersion}
+						{" available — `santree update`"}
 					</Text>
 				) : null}
-				<Text dimColor>{state.refreshing ? "  refreshing..." : ""}</Text>
-				{state.actionMessage && (
+				{CLAUDE_VERSION ? (
+					<Text dimColor>
+						{"  ·  claude "}
+						{CLAUDE_VERSION}
+					</Text>
+				) : null}
+				{claudeUpdateAvailable && latestClaudeVersion ? (
 					<Text color="yellow">
-						{"  "}
+						{"  ⬆ "}
+						{latestClaudeVersion}
+					</Text>
+				) : null}
+				{state.refreshing ? <Text dimColor>{"  ·  refreshing…"}</Text> : null}
+				{state.actionMessage ? (
+					<Text color="yellow">
+						{"  ·  "}
 						{state.actionMessage}
 					</Text>
-				)}
+				) : null}
 			</Box>
 
-			{/* Tab bar */}
-			<Box>
-				<Text
-					bold={state.activeTab === "issues"}
-					color={state.activeTab === "issues" ? "cyan" : undefined}
-					dimColor={state.activeTab !== "issues"}
-				>
-					{state.activeTab === "issues" ? "\u25b8 " : "  "}1 Issues ({state.flatIssues.length})
-				</Text>
-				<Text>{"   "}</Text>
-				<Text
-					bold={state.activeTab === "reviews"}
-					color={state.activeTab === "reviews" ? "cyan" : undefined}
-					dimColor={state.activeTab !== "reviews"}
-				>
-					{state.activeTab === "reviews" ? "\u25b8 " : "  "}2 Reviews ({state.flatReviews.length})
-				</Text>
+			{/* Tab strip \u2014 pill-style; active tab highlighted with cyan background.
+			    Count in parens disambiguates the trailing number from the tab keybind. */}
+			<Box paddingX={1}>
+				<Tab
+					active={state.activeTab === "issues"}
+					label={`1 Issues (${state.flatIssues.length})`}
+					mode={theme.mode}
+				/>
+				<Text> </Text>
+				<Tab
+					active={state.activeTab === "reviews"}
+					label={`2 Reviews (${state.flatReviews.length})`}
+					mode={theme.mode}
+				/>
 			</Box>
 
-			{/* Main content */}
-			{state.overlay === "mode-select" ? (
-				<Box flexGrow={1} justifyContent="center" alignItems="center">
-					<Box
-						flexDirection="column"
-						borderStyle="round"
-						borderColor="cyan"
-						paddingX={3}
-						paddingY={1}
-					>
-						<Text bold>Select mode:</Text>
-						<Text> </Text>
-						<Text>
-							<Text color="cyan" bold>
-								p
-							</Text>
-							{"  Plan"}
-						</Text>
-						<Text>
-							<Text color="cyan" bold>
-								i
-							</Text>
-							{"  Implement"}
-						</Text>
-						<Text> </Text>
-						<Text dimColor>ESC to cancel</Text>
-					</Box>
-				</Box>
-			) : state.overlay === "context-input" ? (
-				<Box flexGrow={1} justifyContent="center" alignItems="center">
-					<Box flexDirection="column" paddingX={2} width={Math.min(columns - 8, 100)}>
-						<Text bold color="cyan">
-							Extra context for {state.contextInputMode}
-						</Text>
-						<Text dimColor>Optional — appended to the prompt before launching Claude</Text>
-						<Text> </Text>
-						{state.contextInputPhase === "editing" ? (
-							<>
-								<MultilineTextArea
-									value={state.contextInputValue}
-									onChange={(v) => dispatch({ type: "CONTEXT_INPUT_CHANGE", value: v })}
-									onSubmit={() => dispatch({ type: "CONTEXT_INPUT_REVIEW" })}
-									onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
-									width={Math.min(columns - 8, 100)}
-									height={10}
-									placeholder="Type or paste extra context…"
-								/>
-								<Text> </Text>
-								<Text dimColor>
-									<Text color="cyan" bold>
-										Ctrl+D
-									</Text>
-									{" send  ·  "}
-									<Text color="cyan" bold>
-										Ctrl+O
-									</Text>
-									{" editor  ·  "}
-									<Text color="cyan" bold>
-										Ctrl+C
-									</Text>
-									{" cancel"}
+			{/* Bordered content area — wraps tab content for a real "panel" feel */}
+			<Box flexGrow={1} borderStyle="round" borderColor="cyan" flexDirection="column">
+				{/* Main content */}
+				{state.overlay === "mode-select" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box
+							flexDirection="column"
+							borderStyle="round"
+							borderColor="cyan"
+							paddingX={3}
+							paddingY={1}
+						>
+							<Text bold>Select mode:</Text>
+							<Text> </Text>
+							<Text>
+								<Text color="cyan" bold>
+									p
 								</Text>
-							</>
-						) : (
-							<>
-								<Box
-									flexDirection="column"
-									borderStyle="round"
-									borderColor="green"
-									paddingX={1}
-									minHeight={6}
-								>
-									{(state.contextInputValue || "(no extra context)")
-										.split("\n")
-										.slice(0, 12)
-										.map((line, i) => (
-											<Text key={i}>{line || " "}</Text>
-										))}
-									{state.contextInputValue.split("\n").length > 12 && (
-										<Text dimColor>
-											…+{state.contextInputValue.split("\n").length - 12} more lines
+								{"  Plan"}
+							</Text>
+							<Text>
+								<Text color="cyan" bold>
+									i
+								</Text>
+								{"  Implement"}
+							</Text>
+							<Text> </Text>
+							<Text dimColor>ESC to cancel</Text>
+						</Box>
+					</Box>
+				) : state.overlay === "context-input" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box flexDirection="column" paddingX={2} width={Math.min(columns - 8, 100)}>
+							<Text bold color="cyan">
+								Extra context for {state.contextInputMode}
+							</Text>
+							<Text dimColor>Optional — appended to the prompt before launching Claude</Text>
+							<Text> </Text>
+							{state.contextInputPhase === "editing" ? (
+								<>
+									<MultilineTextArea
+										value={state.contextInputValue}
+										onChange={(v) => dispatch({ type: "CONTEXT_INPUT_CHANGE", value: v })}
+										onSubmit={() => dispatch({ type: "CONTEXT_INPUT_REVIEW" })}
+										onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
+										width={Math.min(columns - 8, 100)}
+										height={10}
+										placeholder="Type or paste extra context…"
+									/>
+									<Text> </Text>
+									<Text dimColor>
+										<Text color="cyan" bold>
+											Ctrl+D
 										</Text>
-									)}
-								</Box>
-								<Text> </Text>
-								<Text bold>Anything else to add?</Text>
-								<Text> </Text>
-								<Text>
-									<Text color="green" bold>
-										y
+										{" send  ·  "}
+										<Text color="cyan" bold>
+											Ctrl+O
+										</Text>
+										{" editor  ·  "}
+										<Text color="cyan" bold>
+											Ctrl+C
+										</Text>
+										{" cancel"}
 									</Text>
-									{" / "}
-									<Text color="green" bold>
-										Enter
+								</>
+							) : (
+								<>
+									<Box
+										flexDirection="column"
+										borderStyle="round"
+										borderColor="green"
+										paddingX={1}
+										minHeight={6}
+									>
+										{(state.contextInputValue || "(no extra context)")
+											.split("\n")
+											.slice(0, 12)
+											.map((line, i) => (
+												<Text key={i}>{line || " "}</Text>
+											))}
+										{state.contextInputValue.split("\n").length > 12 && (
+											<Text dimColor>
+												…+{state.contextInputValue.split("\n").length - 12} more lines
+											</Text>
+										)}
+									</Box>
+									<Text> </Text>
+									<Text bold>Anything else to add?</Text>
+									<Text> </Text>
+									<Text>
+										<Text color="green" bold>
+											y
+										</Text>
+										{" / "}
+										<Text color="green" bold>
+											Enter
+										</Text>
+										{"  launch   "}
+										<Text color="yellow" bold>
+											n
+										</Text>
+										{" / "}
+										<Text color="yellow" bold>
+											e
+										</Text>
+										{"  keep editing   "}
+										<Text color="red" bold>
+											ESC
+										</Text>
+										{"  cancel"}
 									</Text>
-									{"  launch   "}
-									<Text color="yellow" bold>
-										n
+								</>
+							)}
+						</Box>
+					</Box>
+				) : state.overlay === "base-select" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box
+							flexDirection="column"
+							borderStyle="round"
+							borderColor="cyan"
+							paddingX={3}
+							paddingY={1}
+						>
+							<Text bold>Select base branch:</Text>
+							<Text> </Text>
+							{state.baseSelectOptions.map((branch, idx) => {
+								const selected = idx === state.baseSelectIndex;
+								const defaultBranch = getDefaultBranch();
+								const label = branch === defaultBranch ? `${branch} (default)` : branch;
+								return (
+									<Text key={branch}>
+										<Text color={selected ? "cyan" : undefined} bold={selected}>
+											{selected ? "> " : "  "}
+											{label}
+										</Text>
 									</Text>
-									{" / "}
-									<Text color="yellow" bold>
-										e
-									</Text>
-									{"  keep editing   "}
-									<Text color="red" bold>
-										ESC
-									</Text>
-									{"  cancel"}
+								);
+							})}
+							<Text> </Text>
+							<Text dimColor>j/k to navigate, Enter to select, ESC to cancel</Text>
+						</Box>
+					</Box>
+				) : state.overlay === "confirm-delete" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box
+							flexDirection="column"
+							borderStyle="round"
+							borderColor="red"
+							paddingX={3}
+							paddingY={1}
+						>
+							<Text bold color="red">
+								Remove worktree?
+							</Text>
+							<Text> </Text>
+							<Text>{selectedIssue?.worktree?.branch ?? ""}</Text>
+							{selectedIssue?.worktree?.dirty && (
+								<Text color="yellow">Warning: worktree has uncommitted changes</Text>
+							)}
+							<Text> </Text>
+							<Text>
+								<Text color="red" bold>
+									y
 								</Text>
-							</>
-						)}
-					</Box>
-				</Box>
-			) : state.overlay === "base-select" ? (
-				<Box flexGrow={1} justifyContent="center" alignItems="center">
-					<Box
-						flexDirection="column"
-						borderStyle="round"
-						borderColor="cyan"
-						paddingX={3}
-						paddingY={1}
-					>
-						<Text bold>Select base branch:</Text>
-						<Text> </Text>
-						{state.baseSelectOptions.map((branch, idx) => {
-							const selected = idx === state.baseSelectIndex;
-							const defaultBranch = getDefaultBranch();
-							const label = branch === defaultBranch ? `${branch} (default)` : branch;
-							return (
-								<Text key={branch}>
-									<Text color={selected ? "cyan" : undefined} bold={selected}>
-										{selected ? "> " : "  "}
-										{label}
-									</Text>
+								{"  Confirm"}
+							</Text>
+							<Text>
+								<Text color="cyan" bold>
+									n
 								</Text>
-							);
-						})}
-						<Text> </Text>
-						<Text dimColor>j/k to navigate, Enter to select, ESC to cancel</Text>
-					</Box>
-				</Box>
-			) : state.overlay === "confirm-delete" ? (
-				<Box flexGrow={1} justifyContent="center" alignItems="center">
-					<Box
-						flexDirection="column"
-						borderStyle="round"
-						borderColor="red"
-						paddingX={3}
-						paddingY={1}
-					>
-						<Text bold color="red">
-							Remove worktree?
-						</Text>
-						<Text> </Text>
-						<Text>{selectedIssue?.worktree?.branch ?? ""}</Text>
-						{selectedIssue?.worktree?.dirty && (
-							<Text color="yellow">Warning: worktree has uncommitted changes</Text>
-						)}
-						<Text> </Text>
-						<Text>
-							<Text color="red" bold>
-								y
+								{"  Cancel"}
 							</Text>
-							{"  Confirm"}
-						</Text>
-						<Text>
-							<Text color="cyan" bold>
-								n
-							</Text>
-							{"  Cancel"}
-						</Text>
+						</Box>
 					</Box>
-				</Box>
-			) : state.overlay === "confirm-setup" ? (
-				<Box flexGrow={1} justifyContent="center" alignItems="center">
-					<Box
-						flexDirection="column"
-						borderStyle="round"
-						borderColor="yellow"
-						paddingX={3}
-						paddingY={1}
-					>
-						<Text bold>Run setup script?</Text>
-						<Text> </Text>
-						<Text dimColor>.santree/init.sh</Text>
-						<Text> </Text>
-						<Text>
-							<Text color="green" bold>
-								y
+				) : state.overlay === "diff" ? (
+					<DiffOverlay
+						width={innerWidth}
+						height={contentHeight}
+						ticketId={state.diffTicketId ?? ""}
+						baseBranch={state.diffBaseBranch ?? ""}
+						files={state.diffFiles}
+						fileIndex={state.diffFileIndex}
+						fileScrollOffset={state.diffFileScrollOffset}
+						content={state.diffContent}
+						contentScrollOffset={state.diffContentScrollOffset}
+						loadingFiles={state.diffLoadingFiles}
+						loadingContent={state.diffLoadingContent}
+						error={state.diffError}
+						selectionBg={theme.selectionBg}
+					/>
+				) : state.overlay === "confirm-setup" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box
+							flexDirection="column"
+							borderStyle="round"
+							borderColor="yellow"
+							paddingX={3}
+							paddingY={1}
+						>
+							<Text bold>Run setup script?</Text>
+							<Text> </Text>
+							<Text dimColor>.santree/init.sh</Text>
+							<Text> </Text>
+							<Text>
+								<Text color="green" bold>
+									y
+								</Text>
+								{"  Run setup"}
 							</Text>
-							{"  Run setup"}
-						</Text>
-						<Text>
-							<Text color="yellow" bold>
-								n
-							</Text>
-							{"  Skip"}
-						</Text>
-					</Box>
-				</Box>
-			) : (
-				<Box flexGrow={1}>
-					{/* Left pane */}
-					<Box width={leftWidth}>
-						{state.activeTab === "reviews" ? (
-							<ReviewList
-								flatReviews={state.flatReviews}
-								selectedIndex={state.reviewSelectedIndex}
-								scrollOffset={state.reviewListScrollOffset}
-								height={contentHeight}
-								width={leftWidth}
-							/>
-						) : state.flatIssues.length === 0 ? (
-							<Box
-								width={leftWidth}
-								height={contentHeight}
-								justifyContent="center"
-								alignItems="center"
-							>
-								<Text color="yellow">No active issues</Text>
-							</Box>
-						) : (
-							<IssueList
-								groups={state.groups}
-								flatIssues={state.flatIssues}
-								selectedIndex={state.selectedIndex}
-								scrollOffset={state.listScrollOffset}
-								height={contentHeight}
-								width={leftWidth}
-								creatingForTicket={state.creatingForTicket}
-								deletingForTicket={state.deletingForTicket}
-							/>
-						)}
-					</Box>
-
-					{/* Separator */}
-					<Box flexDirection="column" width={3}>
-						{Array.from({ length: contentHeight }).map((_, i) => (
-							<Text key={i} dimColor>
-								{" │ "}
-							</Text>
-						))}
-					</Box>
-
-					{/* Right pane */}
-					<Box width={rightWidth}>
-						{state.activeTab === "reviews" && state.creatingForTicket ? (
-							<Box flexDirection="column" width={rightWidth} height={contentHeight}>
+							<Text>
 								<Text color="yellow" bold>
-									Setting up worktree for {state.creatingForTicket}...
+									n
 								</Text>
-								{state.creationLogs
-									.split("\n")
-									.slice(-(contentHeight - 1))
-									.map((line, i) => (
-										<Box key={i}>
-											<Text dimColor>{line}</Text>
-										</Box>
-									))}
-							</Box>
-						) : state.activeTab === "reviews" ? (
-							<ReviewDetailPanel
-								item={selectedReview}
-								scrollOffset={state.reviewDetailScrollOffset}
-								height={contentHeight}
-								width={rightWidth}
-							/>
-						) : state.overlay === "commit" ? (
-							<CommitOverlay
-								width={rightWidth}
-								height={contentHeight}
-								branch={state.commitBranch}
-								ticketId={state.commitTicketId}
-								gitStatus={state.commitGitStatus}
-								phase={state.commitPhase}
-								message={state.commitMessage}
-								error={state.commitError}
-								dispatch={dispatch}
-								onSubmit={handleCommitSubmit}
-							/>
-						) : state.overlay === "pr-create" ? (
-							<PrCreateOverlay
-								width={rightWidth}
-								height={contentHeight}
-								branch={state.prCreateBranch}
-								ticketId={state.prCreateTicketId}
-								phase={state.prCreatePhase}
-								error={state.prCreateError}
-								url={state.prCreateUrl}
-								body={state.prCreateBody}
-								title={state.prCreateTitle}
-								dispatch={dispatch}
-							/>
-						) : (
-							<DetailPanel
-								issue={selectedIssue}
-								scrollOffset={state.detailScrollOffset}
-								height={contentHeight}
-								width={rightWidth}
-								creatingForTicket={state.creatingForTicket}
-								creationLogs={state.creationLogs}
-							/>
-						)}
+								{"  Skip"}
+							</Text>
+						</Box>
+					</Box>
+				) : (
+					<Box flexGrow={1}>
+						{/* Left pane */}
+						<Box width={leftWidth}>
+							{state.activeTab === "reviews" ? (
+								<ReviewList
+									flatReviews={state.flatReviews}
+									selectedIndex={state.reviewSelectedIndex}
+									scrollOffset={state.reviewListScrollOffset}
+									height={contentHeight}
+									width={leftWidth}
+									selectionBg={theme.selectionBg}
+								/>
+							) : state.flatIssues.length === 0 ? (
+								<Box
+									width={leftWidth}
+									height={contentHeight}
+									justifyContent="center"
+									alignItems="center"
+								>
+									<Text color="yellow">No active issues</Text>
+								</Box>
+							) : (
+								<IssueList
+									groups={state.groups}
+									flatIssues={state.flatIssues}
+									selectedIndex={state.selectedIndex}
+									scrollOffset={state.listScrollOffset}
+									height={contentHeight}
+									width={leftWidth}
+									selectionBg={theme.selectionBg}
+								/>
+							)}
+						</Box>
+
+						{/* Separator */}
+						<Box flexDirection="column" width={3}>
+							{Array.from({ length: contentHeight }).map((_, i) => (
+								<Text key={i} dimColor>
+									{" │ "}
+								</Text>
+							))}
+						</Box>
+
+						{/* Right pane */}
+						<Box width={rightWidth}>
+							{state.activeTab === "reviews" && state.creatingForTicket ? (
+								<Box flexDirection="column" width={rightWidth} height={contentHeight}>
+									<Text color="yellow" bold>
+										Setting up worktree for {state.creatingForTicket}...
+									</Text>
+									{state.creationLogs
+										.split("\n")
+										.slice(-(contentHeight - 1))
+										.map((line, i) => (
+											<Box key={i}>
+												<Text dimColor>{line}</Text>
+											</Box>
+										))}
+								</Box>
+							) : state.activeTab === "reviews" ? (
+								<ReviewDetailPanel
+									item={selectedReview}
+									scrollOffset={state.reviewDetailScrollOffset}
+									height={contentHeight}
+									width={rightWidth}
+								/>
+							) : state.overlay === "commit" ? (
+								<CommitOverlay
+									width={rightWidth}
+									height={contentHeight}
+									branch={state.commitBranch}
+									ticketId={state.commitTicketId}
+									gitStatus={state.commitGitStatus}
+									phase={state.commitPhase}
+									message={state.commitMessage}
+									error={state.commitError}
+									dispatch={dispatch}
+									onSubmit={handleCommitSubmit}
+								/>
+							) : state.overlay === "pr-create" ? (
+								<PrCreateOverlay
+									width={rightWidth}
+									height={contentHeight}
+									branch={state.prCreateBranch}
+									ticketId={state.prCreateTicketId}
+									phase={state.prCreatePhase}
+									error={state.prCreateError}
+									url={state.prCreateUrl}
+									body={state.prCreateBody}
+									title={state.prCreateTitle}
+									dispatch={dispatch}
+								/>
+							) : (
+								<DetailPanel
+									issue={selectedIssue}
+									scrollOffset={state.detailScrollOffset}
+									height={contentHeight}
+									width={rightWidth}
+									creatingForTicket={state.creatingForTicket}
+									creationLogs={state.creationLogs}
+								/>
+							)}
+						</Box>
+					</Box>
+				)}
+
+				{/* Dashboard-wide footer row inside the bordered area: global
+				    command bar on the left, context-sensitive action keys on the
+				    right. Both panes' key hints sit on the same row. */}
+				<Box>
+					<Box width={leftWidth + separatorWidth} paddingX={1}>
+						<CommandBar showWorkspace={hasWorkspaceFile} />
+					</Box>
+					<Box width={rightWidth}>
+						<ActionRow
+							activeTab={state.activeTab}
+							selectedIssue={selectedIssue}
+							selectedReview={selectedReview}
+						/>
 					</Box>
 				</Box>
-			)}
+			</Box>
 		</Box>
 	);
 }
+
+/**
+ * Renders the per-issue action key hints (Resume / Editor / View diff / …)
+ * lifted out of the detail panels so they sit on the same row as the global
+ * command bar. Empty when nothing is selected.
+ */
+function ActionRow({
+	activeTab,
+	selectedIssue,
+	selectedReview,
+}: {
+	activeTab: "issues" | "reviews";
+	selectedIssue: DashboardIssue | null;
+	selectedReview: import("../lib/dashboard/types.js").EnrichedReviewPR | null;
+}) {
+	const items: Array<IssueActionItem | ReviewActionItem> =
+		activeTab === "reviews"
+			? selectedReview
+				? buildReviewActions(selectedReview)
+				: []
+			: selectedIssue
+				? buildIssueActions(selectedIssue)
+				: [];
+
+	if (items.length === 0) return <Text> </Text>;
+
+	return (
+		<Text>
+			{items.map((item, j) => (
+				<Text key={j}>
+					{"  "}
+					<Text color={item.color} bold>
+						{item.key}
+					</Text>
+					<Text color={item.color === "gray" ? "gray" : undefined}> {item.label}</Text>
+				</Text>
+			))}
+		</Text>
+	);
+}
+
+type IssueActionItem = ReturnType<typeof buildIssueActions>[number];
+type ReviewActionItem = ReturnType<typeof buildReviewActions>[number];

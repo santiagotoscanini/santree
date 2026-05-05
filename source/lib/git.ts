@@ -2,7 +2,7 @@ import { execSync, exec } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
-import { run, runAsync } from "./exec.js";
+import { run, runAsync, spawnAsync } from "./exec.js";
 import { getMultiplexer } from "./multiplexer/index.js";
 
 const execAsync = promisify(exec);
@@ -693,6 +693,121 @@ export function getDiffStat(baseBranch: string): string | null {
  */
 export function getDiffContent(baseBranch: string): string | null {
 	return run(`git diff ${baseBranch}..HEAD`, { maxBuffer: 10 * 1024 * 1024 }) || null;
+}
+
+/**
+ * One entry from `git status --porcelain=v1 -z`.
+ * `index` (X) = staged state; `working` (Y) = unstaged state. Each is a single
+ * char per the porcelain format: ' ', 'M', 'A', 'D', 'R', 'C', 'U', '?', '!'.
+ */
+export interface PorcelainEntry {
+	path: string;
+	index: string;
+	working: string;
+	oldPath?: string;
+}
+
+/**
+ * Read working-tree status as a list of porcelain entries. Uses NUL-delimited
+ * output so paths with spaces, quotes, or newlines parse unambiguously.
+ */
+export async function getWorktreeStatus(cwd: string): Promise<PorcelainEntry[]> {
+	const { code, output } = await spawnAsync("git", ["-C", cwd, "status", "--porcelain=v1", "-z"], {
+		cwd,
+	});
+	if (code !== 0) {
+		throw new Error(`git status failed: ${output.trim()}`);
+	}
+	const entries: PorcelainEntry[] = [];
+	const records = output.split("\0");
+	for (let i = 0; i < records.length; i++) {
+		const rec = records[i];
+		if (!rec) continue;
+		// Format: "XY <path>" — first 2 chars are status, then a space.
+		if (rec.length < 3) continue;
+		const index = rec.charAt(0);
+		const working = rec.charAt(1);
+		const main = rec.slice(3);
+		// Renames/copies are followed by a NUL-terminated oldPath in the next record.
+		if (index === "R" || index === "C" || working === "R" || working === "C") {
+			const oldPath = records[i + 1] ?? "";
+			i += 1;
+			entries.push({ index, working, path: main, oldPath });
+		} else {
+			entries.push({ index, working, path: main });
+		}
+	}
+	return entries;
+}
+
+/**
+ * Stage a single file. Works for new (untracked) and modified files.
+ */
+export async function stageFile(cwd: string, filePath: string): Promise<void> {
+	const { code, output } = await spawnAsync("git", ["-C", cwd, "add", "--", filePath], { cwd });
+	if (code !== 0) {
+		throw new Error(`git add failed: ${output.trim()}`);
+	}
+}
+
+/**
+ * Unstage a single file. Uses `git restore --staged` (porcelain command,
+ * available since git 2.23 — already required elsewhere in santree).
+ */
+export async function unstageFile(cwd: string, filePath: string): Promise<void> {
+	const { code, output } = await spawnAsync(
+		"git",
+		["-C", cwd, "restore", "--staged", "--", filePath],
+		{ cwd },
+	);
+	if (code !== 0) {
+		throw new Error(`git restore --staged failed: ${output.trim()}`);
+	}
+}
+
+/**
+ * Stage every uncommitted change in the worktree (new files, modifications, deletions).
+ */
+export async function stageAll(cwd: string): Promise<void> {
+	const { code, output } = await spawnAsync("git", ["-C", cwd, "add", "-A"], { cwd });
+	if (code !== 0) {
+		throw new Error(`git add -A failed: ${output.trim()}`);
+	}
+}
+
+/**
+ * Unstage everything in the index (mixed reset on HEAD; working tree untouched).
+ */
+export async function unstageAll(cwd: string): Promise<void> {
+	const { code, output } = await spawnAsync("git", ["-C", cwd, "reset"], { cwd });
+	if (code !== 0) {
+		throw new Error(`git reset failed: ${output.trim()}`);
+	}
+}
+
+/**
+ * Discard uncommitted changes for a single file.
+ * - Tracked: `git checkout HEAD -- <path>` restores both index and working tree.
+ * - Untracked: deletes the file from disk via fs.unlink.
+ */
+export async function discardFile(
+	cwd: string,
+	filePath: string,
+	isUntracked: boolean,
+): Promise<void> {
+	if (isUntracked) {
+		const absolute = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
+		await fs.promises.unlink(absolute);
+		return;
+	}
+	const { code, output } = await spawnAsync(
+		"git",
+		["-C", cwd, "checkout", "HEAD", "--", filePath],
+		{ cwd },
+	);
+	if (code !== 0) {
+		throw new Error(`git checkout HEAD failed: ${output.trim()}`);
+	}
 }
 
 /**

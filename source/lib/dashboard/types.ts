@@ -82,6 +82,12 @@ export interface DiffFile {
 	path: string;
 	status: DiffFileStatus;
 	oldPath?: string; // for renames
+	// Working-tree state from `git status --porcelain` — undefined when the file
+	// has only committed changes vs base. Used for lazygit-style XY indicator
+	// and to drive stage/unstage/discard actions.
+	indexStatus?: string;
+	workingStatus?: string;
+	isUntracked?: boolean;
 }
 
 export type CommitPhase =
@@ -159,6 +165,11 @@ export interface DashboardState {
 	diffLoadingFiles: boolean;
 	diffLoadingContent: boolean;
 	diffError: string | null;
+	diffPendingDiscard: { path: string; isUntracked: boolean } | null;
+	// Bumped on DIFF_REFRESH_FILES to trigger a silent reload (no spinner) —
+	// used by the periodic refresh tick and discard. Stage/unstage avoid this
+	// path entirely and patch XY in place via DIFF_STATUS_UPDATED.
+	diffRefreshTick: number;
 }
 
 export type DashboardAction =
@@ -228,6 +239,13 @@ export type DashboardAction =
 	| { type: "DIFF_CONTENT_LOADING" }
 	| { type: "DIFF_CONTENT_LOADED"; content: string }
 	| { type: "DIFF_CONTENT_SCROLL"; offset: number }
+	| { type: "DIFF_REFRESH_FILES" }
+	| {
+			type: "DIFF_STATUS_UPDATED";
+			porcelain: { path: string; index: string; working: string }[];
+	  }
+	| { type: "DIFF_DISCARD_OPEN"; path: string; isUntracked: boolean }
+	| { type: "DIFF_DISCARD_CANCEL" }
 	| { type: "DIFF_CLOSE" };
 
 // ── State management ──────────────────────────────────────────────────
@@ -286,6 +304,8 @@ export const initialState: DashboardState = {
 	diffLoadingFiles: false,
 	diffLoadingContent: false,
 	diffError: null,
+	diffPendingDiscard: null,
+	diffRefreshTick: 0,
 };
 
 export function reducer(state: DashboardState, action: DashboardAction): DashboardState {
@@ -533,17 +553,69 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				diffLoadingFiles: true,
 				diffLoadingContent: false,
 				diffError: null,
+				diffPendingDiscard: null,
+				diffRefreshTick: 0,
 			};
-		case "DIFF_FILES_LOADED":
+		case "DIFF_FILES_LOADED": {
+			// Preserve the user's selection across reloads (after stage/unstage/
+			// discard) by matching the previously-selected file's path. Falls back
+			// to the clamped index when the path is gone (e.g. file was discarded).
+			const prevPath = state.diffFiles[state.diffFileIndex]?.path;
+			let newIndex = 0;
+			if (prevPath) {
+				const found = action.files.findIndex((f) => f.path === prevPath);
+				if (found >= 0) newIndex = found;
+				else newIndex = Math.min(state.diffFileIndex, Math.max(0, action.files.length - 1));
+			}
 			return {
 				...state,
 				diffFiles: action.files,
 				diffMergeBase: action.mergeBase,
-				diffFileIndex: 0,
-				diffFileScrollOffset: 0,
+				diffFileIndex: newIndex,
 				diffLoadingFiles: false,
 				diffError: null,
 			};
+		}
+		case "DIFF_REFRESH_FILES":
+			// Silent re-fetch — bumps the tick the loader effect depends on,
+			// without flipping diffLoadingFiles. The current file list stays
+			// rendered until the new one arrives, so there's no spinner blink.
+			return { ...state, diffRefreshTick: state.diffRefreshTick + 1 };
+		case "DIFF_STATUS_UPDATED": {
+			// In-place XY patch — used by stage/unstage where the file SET
+			// doesn't change, only the per-file porcelain status. Avoids the
+			// full reload's network/git latency and the spinner that goes
+			// with it.
+			const byPath = new Map<string, { index: string; working: string }>();
+			for (const p of action.porcelain) byPath.set(p.path, p);
+			const next = state.diffFiles.map((f) => {
+				const p = byPath.get(f.path);
+				if (!p) {
+					// File no longer has any working-tree state — back to
+					// committed-only. Strip the XY fields.
+					if (f.indexStatus === undefined && f.workingStatus === undefined) return f;
+					const cleared: DiffFile = { ...f };
+					delete cleared.indexStatus;
+					delete cleared.workingStatus;
+					delete cleared.isUntracked;
+					return cleared;
+				}
+				return {
+					...f,
+					indexStatus: p.index,
+					workingStatus: p.working,
+					isUntracked: p.index === "?" && p.working === "?",
+				};
+			});
+			return { ...state, diffFiles: next };
+		}
+		case "DIFF_DISCARD_OPEN":
+			return {
+				...state,
+				diffPendingDiscard: { path: action.path, isUntracked: action.isUntracked },
+			};
+		case "DIFF_DISCARD_CANCEL":
+			return { ...state, diffPendingDiscard: null };
 		case "DIFF_FILES_ERROR":
 			return {
 				...state,
@@ -585,6 +657,7 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				diffLoadingFiles: false,
 				diffLoadingContent: false,
 				diffError: null,
+				diffPendingDiscard: null,
 			};
 		default:
 			return state;

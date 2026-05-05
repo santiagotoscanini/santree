@@ -22,6 +22,11 @@ interface Props {
 	 * formula when undefined. Always clamped against pane minimums.
 	 */
 	leftWidthOverride?: number;
+	/**
+	 * When non-null, render a confirmation modal over the body asking the user
+	 * to confirm discarding tracked changes or deleting an untracked file.
+	 */
+	pendingDiscard?: { path: string; isUntracked: boolean } | null;
 }
 
 // ── Tree building ─────────────────────────────────────────────────────
@@ -45,6 +50,11 @@ interface RenderedRow {
 	dim?: boolean;
 	bold?: boolean;
 	fileIndex: number | null; // index into the flat file list, null for directory rows
+	// Lazygit-style index/working status chars. When set, the row is rendered as
+	// `<X><Y> <name>` with X colored green and Y red (only for files with
+	// uncommitted state). Files with only committed changes vs base get the
+	// existing single-color status rendering instead.
+	xy?: { index: string; working: string };
 }
 
 function buildTree(files: DiffFile[]): TreeDir {
@@ -125,12 +135,36 @@ function renderTree(
 			renderTree(child, depth + 1, rows, fileCounter);
 		} else {
 			const idx = fileCounter.value++;
-			rows.push({
-				prefix: indent,
-				label: `${child.file.status} ${child.name}`,
-				color: statusColor(child.file.status),
-				fileIndex: idx,
-			});
+			const file = child.file;
+			const hasUncommitted = file.indexStatus !== undefined || file.workingStatus !== undefined;
+			if (hasUncommitted) {
+				// Lazygit-style XY display — XY conveys the staged/unstaged state,
+				// so we drop the merge-base status letter from the label to avoid
+				// redundant "M  M foo.ts"-style rows. The XY chars are colored at
+				// render time (green for index, red for working).
+				rows.push({
+					prefix: indent,
+					label: child.name,
+					fileIndex: idx,
+					xy: {
+						index: file.indexStatus ?? " ",
+						working: file.workingStatus ?? " ",
+					},
+				});
+			} else {
+				// Committed-only files (no working-tree state vs HEAD). Dimmed
+				// so the user can tell at a glance that stage/unstage/discard
+				// don't apply — only files showing a colored XY column are
+				// actionable. The merge-base status letter still tells the
+				// reviewer what changed vs base.
+				rows.push({
+					prefix: indent,
+					label: `${file.status} ${child.name}`,
+					color: statusColor(file.status),
+					dim: true,
+					fileIndex: idx,
+				});
+			}
 		}
 	}
 }
@@ -305,6 +339,7 @@ export default function DiffOverlay({
 	error,
 	selectionBg = "#1e3a5f",
 	leftWidthOverride,
+	pendingDiscard = null,
 }: Props) {
 	const layout = computeDiffLayout({
 		width,
@@ -365,93 +400,160 @@ export default function DiffOverlay({
 				</Text>
 			</Box>
 
-			{/* Body */}
-			<Box height={bodyHeight} flexShrink={0} overflow="hidden">
-				{/* Left pane: file tree */}
-				<Box
-					flexDirection="column"
-					width={leftWidth}
-					height={bodyHeight}
-					overflow="hidden"
-					paddingRight={1}
-				>
-					{loadingFiles ? (
-						<Box>
-							<Text color="cyan">
-								<Spinner type="dots" />
-							</Text>
-							<Text dimColor> Loading files...</Text>
-						</Box>
-					) : error ? (
-						<Text color="red">{error}</Text>
-					) : files.length === 0 ? (
-						<Text dimColor>No changes</Text>
-					) : (
-						visibleRows.map((row, i) => {
-							const absIdx = effectiveScroll + i;
-							const isSelected = absIdx === selectedRowIdx;
-							const text = `${row.prefix}${row.label}`;
-							// Selected row keeps its own color (file-status hue or directory
-							// blue) but gets the theme-aware selection bg + bold so it stays
-							// readable in light and dark modes alike.
-							return (
-								<Text
-									key={i}
-									color={row.color}
-									backgroundColor={isSelected ? selectionBg : undefined}
-									bold={row.bold || isSelected}
-									dimColor={row.dim}
-									wrap="truncate"
-								>
-									{text}
-								</Text>
-							);
-						})
-					)}
-				</Box>
-
-				{/* Vertical divider */}
-				<Box flexDirection="column" height={bodyHeight}>
-					{Array.from({ length: bodyHeight }).map((_, i) => (
-						<Text key={i} dimColor>
-							│
+			{/* Body — replaced by the discard-confirmation modal when one is
+			    pending. Ink doesn't have absolute positioning, so we swap the
+			    body for the modal rather than overlaying it. */}
+			{pendingDiscard ? (
+				<Box height={bodyHeight} flexShrink={0} justifyContent="center" alignItems="center">
+					<Box
+						flexDirection="column"
+						borderStyle="round"
+						borderColor="red"
+						paddingX={3}
+						paddingY={1}
+					>
+						<Text bold color="red">
+							{pendingDiscard.isUntracked ? "Delete file?" : "Discard changes?"}
 						</Text>
-					))}
-				</Box>
-
-				{/* Right pane: diff content */}
-				<Box
-					flexDirection="column"
-					width={rightWidth}
-					height={bodyHeight}
-					overflow="hidden"
-					paddingLeft={1}
-				>
-					{loadingContent ? (
-						<Box>
-							<Text color="cyan">
-								<Spinner type="dots" />
+						<Text> </Text>
+						<Text>{pendingDiscard.path}</Text>
+						{pendingDiscard.isUntracked && (
+							<Text color="yellow">Warning: untracked file will be permanently deleted</Text>
+						)}
+						{!pendingDiscard.isUntracked && (
+							<Text color="yellow">Warning: uncommitted changes will be lost</Text>
+						)}
+						<Text> </Text>
+						<Text>
+							<Text color="red" bold>
+								y
 							</Text>
-							<Text dimColor> Loading diff...</Text>
-						</Box>
-					) : !currentFile ? (
-						<Text dimColor>Select a file</Text>
-					) : visibleLines.length === 0 ? (
-						<Text dimColor>(empty diff)</Text>
-					) : (
-						visibleLines.map((line, i) => {
-							// rightWidth includes the paddingLeft={1} of the wrapper Box,
-							// so usable column count is rightWidth - 1.
-							const cell = truncateVisible(line.text || " ", Math.max(1, rightWidth - 1));
-							return (
-								<Text key={i} color={line.color} bold={line.bold} dimColor={line.dim}>
-									{cell}
-								</Text>
-							);
-						})
-					)}
+							{"  Confirm"}
+						</Text>
+						<Text>
+							<Text color="cyan" bold>
+								n
+							</Text>
+							{"  Cancel"}
+						</Text>
+					</Box>
 				</Box>
-			</Box>
+			) : (
+				<Box height={bodyHeight} flexShrink={0} overflow="hidden">
+					{/* Left pane: file tree */}
+					<Box
+						flexDirection="column"
+						width={leftWidth}
+						height={bodyHeight}
+						overflow="hidden"
+						paddingRight={1}
+					>
+						{loadingFiles ? (
+							<Box>
+								<Text color="cyan">
+									<Spinner type="dots" />
+								</Text>
+								<Text dimColor> Loading files...</Text>
+							</Box>
+						) : error ? (
+							<Text color="red">{error}</Text>
+						) : files.length === 0 ? (
+							<Text dimColor>No changes</Text>
+						) : (
+							visibleRows.map((row, i) => {
+								const absIdx = effectiveScroll + i;
+								const isSelected = absIdx === selectedRowIdx;
+								const bg = isSelected ? selectionBg : undefined;
+								// Lazygit-style XY rendering — index char (green) + working
+								// char (red), then a separator and the file name. Each
+								// nested <Text> gets the same backgroundColor so the
+								// selection highlight covers the whole row uniformly.
+								if (row.xy) {
+									const x = row.xy.index || " ";
+									const y = row.xy.working || " ";
+									const xColor = x.trim() ? "green" : "gray";
+									const yColor = y.trim() ? "red" : "gray";
+									return (
+										<Text
+											key={i}
+											backgroundColor={bg}
+											bold={row.bold || isSelected}
+											wrap="truncate"
+										>
+											<Text backgroundColor={bg}>{row.prefix}</Text>
+											<Text color={xColor} backgroundColor={bg} bold>
+												{x}
+											</Text>
+											<Text color={yColor} backgroundColor={bg} bold>
+												{y}
+											</Text>
+											<Text backgroundColor={bg}>{` ${row.label}`}</Text>
+										</Text>
+									);
+								}
+								const text = `${row.prefix}${row.label}`;
+								// Selected row keeps its own color (file-status hue or directory
+								// blue) but gets the theme-aware selection bg + bold so it stays
+								// readable in light and dark modes alike.
+								return (
+									<Text
+										key={i}
+										color={row.color}
+										backgroundColor={bg}
+										bold={row.bold || isSelected}
+										dimColor={row.dim}
+										wrap="truncate"
+									>
+										{text}
+									</Text>
+								);
+							})
+						)}
+					</Box>
+
+					{/* Vertical divider */}
+					<Box flexDirection="column" height={bodyHeight}>
+						{Array.from({ length: bodyHeight }).map((_, i) => (
+							<Text key={i} dimColor>
+								│
+							</Text>
+						))}
+					</Box>
+
+					{/* Right pane: diff content */}
+					<Box
+						flexDirection="column"
+						width={rightWidth}
+						height={bodyHeight}
+						overflow="hidden"
+						paddingLeft={1}
+					>
+						{loadingContent ? (
+							<Box>
+								<Text color="cyan">
+									<Spinner type="dots" />
+								</Text>
+								<Text dimColor> Loading diff...</Text>
+							</Box>
+						) : !currentFile ? (
+							<Text dimColor>Select a file</Text>
+						) : visibleLines.length === 0 ? (
+							<Text dimColor>(empty diff)</Text>
+						) : (
+							visibleLines.map((line, i) => {
+								// rightWidth includes the paddingLeft={1} of the wrapper Box,
+								// so usable column count is rightWidth - 1.
+								const cell = truncateVisible(line.text || " ", Math.max(1, rightWidth - 1));
+								return (
+									<Text key={i} color={line.color} bold={line.bold} dimColor={line.dim}>
+										{cell}
+									</Text>
+								);
+							})
+						)}
+					</Box>
+				</Box>
+			)}
 		</Box>
 	);
 }

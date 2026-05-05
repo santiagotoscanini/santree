@@ -18,6 +18,12 @@ import {
 	getInitScriptPath,
 	removeWorktree,
 	getDiffTool,
+	getWorktreeStatus,
+	stageFile,
+	unstageFile,
+	stageAll,
+	unstageAll,
+	discardFile,
 } from "../lib/git.js";
 import { run, spawnAsync } from "../lib/exec.js";
 import { resolveAgentBinary } from "../lib/ai.js";
@@ -271,8 +277,17 @@ function CommandBar({
 				<Key k="⇧↑↓" />
 				<Text dimColor> scroll</Text>
 				{dot}
-				<Key k="g/G" />
-				<Text dimColor> top/bot</Text>
+				<Key k="␣" />
+				<Text dimColor> stage</Text>
+				{dot}
+				<Key k="a" />
+				<Text dimColor> all</Text>
+				{dot}
+				<Key k="d" />
+				<Text dimColor> discard</Text>
+				{dot}
+				<Key k="e" />
+				<Text dimColor> edit</Text>
 				{dot}
 				<Key k="q" />
 				<Text dimColor> close</Text>
@@ -635,8 +650,16 @@ export default function Dashboard() {
 		};
 		init();
 
-		// Auto-refresh every 30s
-		refreshTimerRef.current = setInterval(() => refresh(), 30_000);
+		// Auto-refresh every 30s. While the diff overlay is open, also bump
+		// the diff refresh tick so new/removed files (created or deleted
+		// outside the dashboard) eventually show up. Stage/unstage already
+		// patch XY in place, so this is purely about file-set drift.
+		refreshTimerRef.current = setInterval(() => {
+			refresh();
+			if (stateRef.current.overlay === "diff") {
+				dispatch({ type: "DIFF_REFRESH_FILES" });
+			}
+		}, 30_000);
 
 		return () => {
 			if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
@@ -709,7 +732,6 @@ export default function Dashboard() {
 	// as a GitHub PR diff.
 	useEffect(() => {
 		if (state.overlay !== "diff" || !state.diffWorktreePath || !state.diffBaseBranch) return;
-		if (!state.diffLoadingFiles) return;
 		const cwd = state.diffWorktreePath;
 		const base = state.diffBaseBranch;
 		void (async () => {
@@ -718,16 +740,48 @@ export default function Dashboard() {
 					`git -C "${cwd}" merge-base "${base}" HEAD`,
 				);
 				const mergeBase = mergeBaseOut.trim() || base;
-				const { stdout } = await execAsync(`git -C "${cwd}" diff --name-status "${mergeBase}"`);
+				const [{ stdout }, porcelain] = await Promise.all([
+					execAsync(`git -C "${cwd}" diff --name-status "${mergeBase}"`),
+					getWorktreeStatus(cwd).catch(() => []),
+				]);
 				const files = parseNameStatus(stdout);
-				const ordered = flattenTreeFiles(files);
+				// Merge porcelain (working-tree state) into the merge-base file list.
+				// XY status drives stage/unstage UX; untracked files (`??`) only show
+				// up here since `git diff` ignores them.
+				const porcelainByPath = new Map<string, (typeof porcelain)[number]>();
+				for (const p of porcelain) porcelainByPath.set(p.path, p);
+				const enriched: DiffFile[] = files.map((f) => {
+					const p = porcelainByPath.get(f.path);
+					if (!p) return f;
+					porcelainByPath.delete(f.path);
+					return {
+						...f,
+						indexStatus: p.index,
+						workingStatus: p.working,
+						isUntracked: p.index === "?" && p.working === "?",
+					};
+				});
+				// Untracked entries left over → add as new DiffFile rows so they
+				// appear in the tree and can be staged.
+				for (const p of porcelainByPath.values()) {
+					if (p.index === "?" && p.working === "?") {
+						enriched.push({
+							path: p.path,
+							status: "?",
+							indexStatus: p.index,
+							workingStatus: p.working,
+							isUntracked: true,
+						});
+					}
+				}
+				const ordered = flattenTreeFiles(enriched);
 				dispatch({ type: "DIFF_FILES_LOADED", files: ordered, mergeBase });
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : String(err);
 				dispatch({ type: "DIFF_FILES_ERROR", error: msg });
 			}
 		})();
-	}, [state.overlay, state.diffWorktreePath, state.diffBaseBranch, state.diffLoadingFiles]);
+	}, [state.overlay, state.diffWorktreePath, state.diffBaseBranch, state.diffRefreshTick]);
 
 	// ── Diff overlay: load content for selected file ──────────────────
 	// If SANTREE_DIFF_TOOL is set, pipe `git diff` output through the tool so
@@ -743,7 +797,18 @@ export default function Dashboard() {
 		dispatch({ type: "DIFF_CONTENT_LOADING" });
 		void (async () => {
 			try {
-				if (tool) {
+				if (file.isUntracked) {
+					// Untracked files aren't in `git diff` output — fake a "full
+					// addition" diff via --no-index against /dev/null. git exits 1
+					// when files differ; that's expected, so capture stdout via
+					// spawnAsync rather than execAsync (which throws on non-zero).
+					const { output } = await spawnAsync(
+						"git",
+						["-C", cwd, "diff", "--no-color", "--no-index", "--", "/dev/null", file.path],
+						{ cwd },
+					);
+					dispatch({ type: "DIFF_CONTENT_LOADED", content: output });
+				} else if (tool) {
 					// Pipe git diff (with colors enabled so the tool can pass them
 					// through if desired) into the configured tool. Use spawn pipes
 					// rather than shell to avoid quoting concerns.
@@ -1506,6 +1571,42 @@ export default function Dashboard() {
 
 			// Diff overlay
 			if (state.overlay === "diff") {
+				// Pending discard modal — intercepts y/n/ESC/q so they don't
+				// also close the diff overlay.
+				if (state.diffPendingDiscard) {
+					const pd = state.diffPendingDiscard;
+					if (input === "y") {
+						const cwd = state.diffWorktreePath;
+						if (!cwd) {
+							dispatch({ type: "DIFF_DISCARD_CANCEL" });
+							return;
+						}
+						(async () => {
+							try {
+								await discardFile(cwd, pd.path, pd.isUntracked);
+								dispatch({ type: "DIFF_DISCARD_CANCEL" });
+								dispatch({ type: "DIFF_REFRESH_FILES" });
+								dispatch({
+									type: "SET_ACTION_MESSAGE",
+									message: pd.isUntracked
+										? `Deleted ${pd.path}`
+										: `Discarded changes in ${pd.path}`,
+								});
+							} catch (err: unknown) {
+								const msg = err instanceof Error ? err.message : String(err);
+								dispatch({ type: "DIFF_DISCARD_CANCEL" });
+								dispatch({ type: "SET_ACTION_MESSAGE", message: `Discard failed: ${msg}` });
+							}
+						})();
+						return;
+					}
+					if (input === "n" || key.escape || input === "q") {
+						dispatch({ type: "DIFF_DISCARD_CANCEL" });
+						return;
+					}
+					return;
+				}
+
 				if (key.escape || input === "q") {
 					dispatch({ type: "DIFF_CLOSE" });
 					return;
@@ -1560,6 +1661,93 @@ export default function Dashboard() {
 				if (input === "k" || (key.upArrow && !key.shift)) {
 					const prev = Math.max(state.diffFileIndex - 1, 0);
 					dispatch({ type: "DIFF_FILE_SELECT", index: prev });
+					return;
+				}
+
+				// Stage / unstage / discard — only meaningful when the worktree
+				// path is known. All ops dispatch DIFF_REFRESH_FILES so the
+				// porcelain status (and selection) updates immediately.
+				const cwd = state.diffWorktreePath;
+				const currentFile = state.diffFiles[state.diffFileIndex];
+				if (input === " " && cwd && currentFile) {
+					// Toggle: if anything is staged for this file, unstage it;
+					// otherwise stage. Files with no uncommitted state (only
+					// committed changes vs base) have no XY → no-op. Updates XY
+					// in place via porcelain re-fetch — no full reload, no spinner.
+					const xRaw = currentFile.indexStatus;
+					const yRaw = currentFile.workingStatus;
+					if (xRaw === undefined && yRaw === undefined) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: "No uncommitted changes to stage on this file",
+						});
+						return;
+					}
+					const x = xRaw ?? " ";
+					const isStaged = x !== " " && x !== "?";
+					const path = currentFile.path;
+					(async () => {
+						try {
+							if (isStaged) await unstageFile(cwd, path);
+							else await stageFile(cwd, path);
+							const porcelain = await getWorktreeStatus(cwd);
+							dispatch({ type: "DIFF_STATUS_UPDATED", porcelain });
+						} catch (err: unknown) {
+							const msg = err instanceof Error ? err.message : String(err);
+							dispatch({
+								type: "SET_ACTION_MESSAGE",
+								message: `${isStaged ? "Unstage" : "Stage"} failed: ${msg}`,
+							});
+						}
+					})();
+					return;
+				}
+				if (input === "a" && cwd) {
+					// Stage-all if anything is unstaged or untracked; otherwise
+					// unstage everything. Untracked files have Y === "?" so they
+					// fall under "unstaged" — staging them adds them to the index.
+					// Same in-place porcelain refresh as `space`.
+					const anyUnstaged = state.diffFiles.some((f) => {
+						const y = f.workingStatus;
+						return y !== undefined && y !== " ";
+					});
+					(async () => {
+						try {
+							if (anyUnstaged) await stageAll(cwd);
+							else await unstageAll(cwd);
+							const porcelain = await getWorktreeStatus(cwd);
+							dispatch({ type: "DIFF_STATUS_UPDATED", porcelain });
+							dispatch({
+								type: "SET_ACTION_MESSAGE",
+								message: anyUnstaged ? "Staged all changes" : "Unstaged all changes",
+							});
+						} catch (err: unknown) {
+							const msg = err instanceof Error ? err.message : String(err);
+							dispatch({ type: "SET_ACTION_MESSAGE", message: `Failed: ${msg}` });
+						}
+					})();
+					return;
+				}
+				if (input === "d" && currentFile) {
+					if (currentFile.indexStatus === undefined && currentFile.workingStatus === undefined) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: "No uncommitted changes to discard",
+						});
+						return;
+					}
+					dispatch({
+						type: "DIFF_DISCARD_OPEN",
+						path: currentFile.path,
+						isUntracked: !!currentFile.isUntracked,
+					});
+					return;
+				}
+				// Open the selected file in the user's editor — useful when
+				// the diff alone isn't enough context. Editor resolution
+				// matches the rest of santree (SANTREE_EDITOR > "code").
+				if (input === "e" && cwd && currentFile) {
+					openInEditor(path.join(cwd, currentFile.path));
 					return;
 				}
 				return;
@@ -2370,6 +2558,7 @@ export default function Dashboard() {
 						error={state.diffError}
 						selectionBg={theme.selectionBg}
 						leftWidthOverride={diffLeftWidth ?? undefined}
+						pendingDiscard={state.diffPendingDiscard}
 					/>
 				) : state.overlay === "confirm-setup" ? (
 					<Box flexGrow={1} justifyContent="center" alignItems="center">
@@ -2507,22 +2696,29 @@ export default function Dashboard() {
 
 				{/* Dashboard-wide footer row inside the bordered area: global
 				    command bar on the left, context-sensitive action keys on the
-				    right. Both panes' key hints sit on the same row. */}
+				    right. Both panes' key hints sit on the same row. In diff
+				    mode the ActionRow is blank, so the keymap claims the full
+				    width to avoid wrapping. */}
 				<Box>
-					<Box width={leftWidth + separatorWidth} paddingX={1}>
-						<CommandBar
-							showWorkspace={hasWorkspaceFile}
-							mode={state.overlay === "diff" ? "diff" : "default"}
-						/>
-					</Box>
-					<Box width={rightWidth}>
-						<ActionRow
-							activeTab={state.activeTab}
-							selectedIssue={selectedIssue}
-							selectedReview={selectedReview}
-							overlay={state.overlay}
-						/>
-					</Box>
+					{state.overlay === "diff" ? (
+						<Box width={innerWidth} paddingX={1}>
+							<CommandBar showWorkspace={hasWorkspaceFile} mode="diff" />
+						</Box>
+					) : (
+						<>
+							<Box width={leftWidth + separatorWidth} paddingX={1}>
+								<CommandBar showWorkspace={hasWorkspaceFile} mode="default" />
+							</Box>
+							<Box width={rightWidth}>
+								<ActionRow
+									activeTab={state.activeTab}
+									selectedIssue={selectedIssue}
+									selectedReview={selectedReview}
+									overlay={state.overlay}
+								/>
+							</Box>
+						</>
+					)}
 				</Box>
 			</Box>
 		</Box>

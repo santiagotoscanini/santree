@@ -544,8 +544,21 @@ export default function DiffOverlay({
 								// rightWidth includes the paddingLeft={1} of the wrapper Box,
 								// so usable column count is rightWidth - 1.
 								const cell = truncateVisible(line.text || " ", Math.max(1, rightWidth - 1));
+								// wrap="truncate" prevents Ink from soft-wrapping. Default
+								// `wrap` mode measures byte length (counting ANSI escape
+								// bytes as visible chars), which makes color-heavy lines
+								// like syntax-highlighted code wrap *very* early — visible
+								// content gets clobbered by the next row. truncateVisible
+								// has already sized the cell, so `truncate` is a no-op for
+								// already-fitting lines.
 								return (
-									<Text key={i} color={line.color} bold={line.bold} dimColor={line.dim}>
+									<Text
+										key={i}
+										color={line.color}
+										bold={line.bold}
+										dimColor={line.dim}
+										wrap="truncate"
+									>
 										{cell}
 									</Text>
 								);

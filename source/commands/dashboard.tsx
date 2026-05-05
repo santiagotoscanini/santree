@@ -42,6 +42,7 @@ import {
 	detectTerminalTheme,
 	getThemeForMode,
 	type DashboardTheme,
+	type ThemeMode,
 } from "../lib/dashboard/theme.js";
 import DetailPanel, { buildIssueActions } from "../lib/dashboard/DetailPanel.js";
 import ReviewList from "../lib/dashboard/ReviewList.js";
@@ -82,21 +83,75 @@ const CLAUDE_VERSION = getInstalledClaudeVersion() ?? "";
  * For renames/copies, the status code has a similarity suffix we strip.
  */
 /**
+ * Split combined-parameter SGR sequences (e.g. `\x1b[48;2;R;G;B;38;2;R;G;B m`)
+ * into separate single-attribute SGRs (`\x1b[48;2;...m\x1b[38;2;...m`).
+ *
+ * Why: Ink uses `slice-ansi` to clip text horizontally, and `slice-ansi`
+ * miscounts visible width on combined RGB bg+fg SGRs — it cuts the line at
+ * roughly half the requested visible width. Delta emits exactly this combined
+ * form on every styled token, so the diff pane was rendering content cut at
+ * arbitrary points (e.g. `from datetime i` instead of `from datetime import
+ * timedelta`). Splitting them sidesteps the slice-ansi bug without losing any
+ * styling — the terminal renders the two SGRs identically to the combined one.
+ */
+function splitCombinedSgr(s: string): string {
+	return s.replace(/\x1b\[([0-9;]+)m/g, (_match, params: string) => {
+		const tokens = params.split(";");
+		const groups: string[] = [];
+		for (let i = 0; i < tokens.length; i++) {
+			const t = tokens[i]!;
+			if ((t === "38" || t === "48") && tokens[i + 1] === "2") {
+				groups.push([t, "2", tokens[i + 2], tokens[i + 3], tokens[i + 4]].join(";"));
+				i += 4;
+			} else if ((t === "38" || t === "48") && tokens[i + 1] === "5") {
+				groups.push([t, "5", tokens[i + 2]].join(";"));
+				i += 2;
+			} else {
+				groups.push(t);
+			}
+		}
+		if (groups.length <= 1) return `\x1b[${params}m`;
+		return groups.map((g) => `\x1b[${g}m`).join("");
+	});
+}
+
+/**
  * Pipe `git diff` output through an external tool (e.g. delta) and return the
  * combined ANSI output. Uses spawn pipes — no shell — so the tool name is safe
  * even though we already validate it in getDiffTool().
  */
 function runPipedDiff(
 	cwd: string,
-	mergeBase: string,
-	filePath: string,
+	gitArgs: string[],
 	tool: string,
+	themeMode: ThemeMode,
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const git = spawn("git", ["-C", cwd, "diff", "--color=always", mergeBase, "--", filePath], {
+		const git = spawn("git", ["-C", cwd, ...gitArgs], {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
-		const pager = spawn(tool, [], { stdio: ["pipe", "pipe", "pipe"] });
+		// Delta's syntax theme defaults are tuned for dark backgrounds — pale
+		// Monokai foreground on a light terminal becomes invisible. Force the
+		// theme flag matching santree's detected mode so colors stay readable.
+		const pagerArgs = tool === "delta" ? [themeMode === "light" ? "--light" : "--dark"] : [];
+		// Disable hyperlinks for delta: OSC 8 sequences (`\x1b]8;...`) are not
+		// handled by truncateVisible() — its CSI-only regex counts the URL
+		// bytes as visible characters, mangling line truncation and breaking
+		// terminal rendering of the wrapped text. Delta's CLI rejects an
+		// inline `--hyperlinks=false`, so override via GIT_CONFIG_PARAMETERS
+		// (delta reads its config from git). Also drop line-numbers — they
+		// eat ~6 cols of an already-narrow right pane.
+		const pagerEnv =
+			tool === "delta"
+				? {
+						...process.env,
+						GIT_CONFIG_PARAMETERS: "'delta.hyperlinks=false' 'delta.line-numbers=false'",
+					}
+				: process.env;
+		const pager = spawn(tool, pagerArgs, {
+			stdio: ["pipe", "pipe", "pipe"],
+			env: pagerEnv,
+		});
 		let out = "";
 		let err = "";
 		git.stdout.pipe(pager.stdin);
@@ -115,7 +170,7 @@ function runPipedDiff(
 			if (code !== 0 && !out) {
 				reject(new Error(err || `${tool} exited with code ${code}`));
 			} else {
-				resolve(out);
+				resolve(splitCombinedSgr(out));
 			}
 		});
 	});
@@ -800,19 +855,36 @@ export default function Dashboard() {
 				if (file.isUntracked) {
 					// Untracked files aren't in `git diff` output — fake a "full
 					// addition" diff via --no-index against /dev/null. git exits 1
-					// when files differ; that's expected, so capture stdout via
-					// spawnAsync rather than execAsync (which throws on non-zero).
-					const { output } = await spawnAsync(
-						"git",
-						["-C", cwd, "diff", "--no-color", "--no-index", "--", "/dev/null", file.path],
-						{ cwd },
-					);
-					dispatch({ type: "DIFF_CONTENT_LOADED", content: output });
+					// when files differ; that's expected, so we capture stdout
+					// regardless. Pipe through the configured tool when set so
+					// untracked files get the same syntax highlighting as tracked
+					// ones; otherwise fall back to spawnAsync + manual colorize.
+					if (tool) {
+						const content = await runPipedDiff(
+							cwd,
+							["diff", "--color=always", "--no-index", "--", "/dev/null", file.path],
+							tool,
+							theme.mode,
+						);
+						dispatch({ type: "DIFF_CONTENT_LOADED", content });
+					} else {
+						const { output } = await spawnAsync(
+							"git",
+							["-C", cwd, "diff", "--no-color", "--no-index", "--", "/dev/null", file.path],
+							{ cwd },
+						);
+						dispatch({ type: "DIFF_CONTENT_LOADED", content: output });
+					}
 				} else if (tool) {
 					// Pipe git diff (with colors enabled so the tool can pass them
 					// through if desired) into the configured tool. Use spawn pipes
 					// rather than shell to avoid quoting concerns.
-					const content = await runPipedDiff(cwd, mergeBase, file.path, tool);
+					const content = await runPipedDiff(
+						cwd,
+						["diff", "--color=always", mergeBase, "--", file.path],
+						tool,
+						theme.mode,
+					);
 					dispatch({ type: "DIFF_CONTENT_LOADED", content });
 				} else {
 					// No external tool — get raw unified diff and render colors ourselves.
@@ -833,6 +905,7 @@ export default function Dashboard() {
 		state.diffMergeBase,
 		state.diffFileIndex,
 		state.diffFiles,
+		theme.mode,
 	]);
 
 	// ── Actions ───────────────────────────────────────────────────────

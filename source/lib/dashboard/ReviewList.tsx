@@ -20,7 +20,6 @@ function checksIndicator(checks: PRCheck[] | null): { text: string; color: strin
 	return { text: "\u25cf", color: "yellow" };
 }
 
-const FOOTER_HEIGHT = 2;
 const HEADER_ROWS = 1;
 
 export function getReviewListRowCount(flatReviews: EnrichedReviewPR[]): number {
@@ -35,7 +34,9 @@ export default function ReviewList({
 	width,
 	selectionBg = "#1e3a5f",
 }: Props) {
-	const listHeight = height - FOOTER_HEIGHT;
+	// Keymap footer lives in the dashboard's global CommandBar \u2014 use the full
+	// pane height for the list so we don't render two stacked keymap rows.
+	const listHeight = height;
 
 	const numColWidth = 6;
 	const authorColWidth = 12;
@@ -44,7 +45,6 @@ export default function ReviewList({
 	const fixedWidth =
 		2 + numColWidth + 1 + authorColWidth + 1 + changesColWidth + 1 + checksColWidth;
 	const titleMaxWidth = Math.max(width - fixedWidth, 10);
-	const footerRule = "\u2500".repeat(width);
 
 	const totalRows = HEADER_ROWS + flatReviews.length;
 	const visibleStart = scrollOffset;
@@ -125,37 +125,6 @@ export default function ReviewList({
 		<Box flexDirection="column" width={width} height={height}>
 			<Box flexDirection="column" height={listHeight}>
 				{rows}
-			</Box>
-
-			<Box flexDirection="column">
-				<Text dimColor>{footerRule}</Text>
-				<Text>
-					{"  "}
-					<Text color="cyan" bold>
-						j/k
-					</Text>
-					<Text color="white"> Navigate</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						Shift + {"\u2191\u2193"}
-					</Text>
-					<Text color="white"> Scroll detail</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						o
-					</Text>
-					<Text color="white"> Open PR</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						Tab
-					</Text>
-					<Text color="white"> Issues</Text>
-					{"   "}
-					<Text color="cyan" bold>
-						q
-					</Text>
-					<Text color="white"> Quit</Text>
-				</Text>
 			</Box>
 		</Box>
 	);

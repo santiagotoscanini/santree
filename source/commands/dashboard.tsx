@@ -42,7 +42,12 @@ import ReviewList from "../lib/dashboard/ReviewList.js";
 import ReviewDetailPanel, { buildReviewActions } from "../lib/dashboard/ReviewDetailPanel.js";
 import { CommitOverlay, PrCreateOverlay } from "../lib/dashboard/Overlays.js";
 import { MultilineTextArea } from "../lib/dashboard/MultilineTextArea.js";
-import DiffOverlay, { flattenTreeFiles, computeDiffLayout } from "../lib/dashboard/DiffOverlay.js";
+import DiffOverlay, {
+	flattenTreeFiles,
+	computeDiffLayout,
+	clampDiffLeftWidth,
+	DIFF_DIVIDER_WIDTH,
+} from "../lib/dashboard/DiffOverlay.js";
 import type { DiffFile, DiffFileStatus } from "../lib/dashboard/types.js";
 import {
 	CURRENT_VERSION,
@@ -241,15 +246,39 @@ function Tab({ active, label, mode }: { active: boolean; label: string; mode: "l
  * Single-line global keymap shown at the bottom-left of the dashboard. The
  * `E workspace` hint only appears when the action is meaningful
  * (`SANTREE_EDITOR` is `code`/`cursor` and a `.code-workspace` file exists in
- * the repo root).
+ * the repo root). When the diff overlay is active, the keymap switches to
+ * diff-specific bindings since the global ones don't apply.
  */
-function CommandBar({ showWorkspace }: { showWorkspace: boolean }) {
+function CommandBar({
+	showWorkspace,
+	mode = "default",
+}: {
+	showWorkspace: boolean;
+	mode?: "default" | "diff";
+}) {
 	const dot = <Text dimColor>{"  ·  "}</Text>;
 	const Key = ({ k }: { k: string }) => (
 		<Text color="cyan" bold>
 			{k}
 		</Text>
 	);
+	if (mode === "diff") {
+		return (
+			<Text>
+				<Key k="j/k" />
+				<Text dimColor> file</Text>
+				{dot}
+				<Key k="⇧↑↓" />
+				<Text dimColor> scroll</Text>
+				{dot}
+				<Key k="g/G" />
+				<Text dimColor> top/bot</Text>
+				{dot}
+				<Key k="q" />
+				<Text dimColor> close</Text>
+			</Text>
+		);
+	}
 	return (
 		<Text>
 			<Key k="j/k" />
@@ -296,7 +325,7 @@ export default function Dashboard() {
 	const repoRootRef = useRef<string | null>(null);
 	const stateRef = useRef(state);
 	stateRef.current = state;
-	const draggingRef = useRef(false);
+	const draggingRef = useRef<"main" | "diff" | null>(null);
 
 	const [termSize, setTermSize] = useState({
 		columns: stdout?.columns ?? 80,
@@ -349,6 +378,13 @@ export default function Dashboard() {
 	const leftWidthRef = useRef(leftWidth);
 	leftWidthRef.current = leftWidth;
 	const rightWidth = innerWidth - leftWidth - separatorWidth;
+	// Diff overlay's left pane width — null means "use the default formula"
+	// (computed inside computeDiffLayout). Becomes a number once the user drags
+	// the divider, and persists across overlay open/close while the dashboard
+	// session is alive.
+	const [diffLeftWidth, setDiffLeftWidth] = useState<number | null>(null);
+	const diffLeftWidthRef = useRef<number | null>(diffLeftWidth);
+	diffLeftWidthRef.current = diffLeftWidth;
 	// Header (1) + tab strip (1) + 2 borders + command bar (1, inside box) = 5 rows
 	const contentHeight = Math.max(3, rows - 5);
 	const LIST_FOOTER_HEIGHT = 0;
@@ -422,12 +458,21 @@ export default function Dashboard() {
 
 			// Release — stop dragging
 			if (isRelease && draggingRef.current) {
-				draggingRef.current = false;
+				draggingRef.current = null;
 				return;
 			}
 
 			// Drag — resize if actively dragging
 			if (isDrag && draggingRef.current) {
+				if (draggingRef.current === "diff") {
+					// DiffOverlay starts at abs col 2 with width=innerWidth; its
+					// 1-col divider sits at relative col (leftWidth+1) → abs col
+					// (leftWidth+2). Setting newLeft = col - 2 keeps it under the
+					// cursor; clampDiffLeftWidth enforces pane minimums.
+					const innerW = Math.max(40, cols - 2);
+					setDiffLeftWidth(clampDiffLeftWidth(col - 2, innerW));
+					return;
+				}
 				// col is 1-based; outer border consumes col 1, so left pane spans cols 2..(lw+1).
 				// Setting newLeft = col - 1 keeps the divider at the user's cursor.
 				const newLeft = Math.max(minW, Math.min(col - 1, cols - 2 - sepW - minW));
@@ -453,12 +498,15 @@ export default function Dashboard() {
 						files: s.diffFiles,
 						fileIndex: s.diffFileIndex,
 						fileScrollOffset: s.diffFileScrollOffset,
+						leftWidthOverride: diffLeftWidthRef.current ?? undefined,
 					});
 					// Body's first line is at absolute row 6 (title + tab + top border + overlay title + rule)
 					const bodyRow = row - 6;
 					if (bodyRow < 0 || bodyRow >= layout.bodyHeight) return;
 
-					if (col <= layout.leftWidth) {
+					// DiffOverlay starts at abs col 2; left pane occupies abs cols
+					// 2..(leftWidth+1).
+					if (col <= layout.leftWidth + 1) {
 						const maxIdx = s.diffFiles.length - 1;
 						if (maxIdx < 0) return;
 						const next = Math.max(0, Math.min(s.diffFileIndex + delta, maxIdx));
@@ -504,7 +552,7 @@ export default function Dashboard() {
 
 			if (!isPress) return;
 
-			// Diff overlay click: select file row in left pane
+			// Diff overlay click: drag divider, or select file row in left pane
 			{
 				const s = stateRef.current;
 				if (s.overlay === "diff") {
@@ -517,8 +565,17 @@ export default function Dashboard() {
 						files: s.diffFiles,
 						fileIndex: s.diffFileIndex,
 						fileScrollOffset: s.diffFileScrollOffset,
+						leftWidthOverride: diffLeftWidthRef.current ?? undefined,
 					});
-					if (col > layout.leftWidth) return;
+					// Divider sits at abs col leftWidth+2 (DiffOverlay starts at
+					// abs col 2; divider at relative col leftWidth+1). Allow ±1
+					// tolerance — a 1-col target is hard to hit precisely.
+					const diffDivAbsCol = layout.leftWidth + 2;
+					if (col >= diffDivAbsCol - 1 && col <= diffDivAbsCol - 1 + DIFF_DIVIDER_WIDTH + 1) {
+						draggingRef.current = "diff";
+						return;
+					}
+					if (col > layout.leftWidth + 1) return;
 					const bodyRow = row - 6;
 					if (bodyRow < 0 || bodyRow >= layout.bodyHeight) return;
 					const absRowIdx = layout.effectiveScroll + bodyRow;
@@ -536,7 +593,7 @@ export default function Dashboard() {
 			const divStart = lw + 2;
 			const divEnd = lw + 1 + sepW;
 			if (col >= divStart && col <= divEnd) {
-				draggingRef.current = true;
+				draggingRef.current = "main";
 				return;
 			}
 
@@ -1466,6 +1523,7 @@ export default function Dashboard() {
 					files: state.diffFiles,
 					fileIndex: state.diffFileIndex,
 					fileScrollOffset: state.diffFileScrollOffset,
+					leftWidthOverride: diffLeftWidth ?? undefined,
 				});
 				const totalLines = state.diffContent ? state.diffContent.split("\n").length : 0;
 				const maxScroll = Math.max(0, totalLines - layout.bodyHeight);
@@ -2311,6 +2369,7 @@ export default function Dashboard() {
 						loadingContent={state.diffLoadingContent}
 						error={state.diffError}
 						selectionBg={theme.selectionBg}
+						leftWidthOverride={diffLeftWidth ?? undefined}
 					/>
 				) : state.overlay === "confirm-setup" ? (
 					<Box flexGrow={1} justifyContent="center" alignItems="center">
@@ -2451,13 +2510,17 @@ export default function Dashboard() {
 				    right. Both panes' key hints sit on the same row. */}
 				<Box>
 					<Box width={leftWidth + separatorWidth} paddingX={1}>
-						<CommandBar showWorkspace={hasWorkspaceFile} />
+						<CommandBar
+							showWorkspace={hasWorkspaceFile}
+							mode={state.overlay === "diff" ? "diff" : "default"}
+						/>
 					</Box>
 					<Box width={rightWidth}>
 						<ActionRow
 							activeTab={state.activeTab}
 							selectedIssue={selectedIssue}
 							selectedReview={selectedReview}
+							overlay={state.overlay}
 						/>
 					</Box>
 				</Box>
@@ -2475,11 +2538,18 @@ function ActionRow({
 	activeTab,
 	selectedIssue,
 	selectedReview,
+	overlay,
 }: {
 	activeTab: "issues" | "reviews";
 	selectedIssue: DashboardIssue | null;
 	selectedReview: import("../lib/dashboard/types.js").EnrichedReviewPR | null;
+	overlay: import("../lib/dashboard/types.js").ActionOverlay;
 }) {
+	// During the diff overlay, none of the per-issue actions apply (View diff
+	// is what got us here, Commit/PR/etc. need the detail panel context). Keep
+	// the row blank so the diff-specific CommandBar reads cleanly.
+	if (overlay === "diff") return <Text> </Text>;
+
 	const items: Array<IssueActionItem | ReviewActionItem> =
 		activeTab === "reviews"
 			? selectedReview

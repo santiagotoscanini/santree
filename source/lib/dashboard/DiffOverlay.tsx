@@ -17,6 +17,11 @@ interface Props {
 	error: string | null;
 	/** Theme-adapted selection background. Falls back to dark navy. */
 	selectionBg?: string;
+	/**
+	 * User-set left pane width (from divider drag). Falls back to the default
+	 * formula when undefined. Always clamped against pane minimums.
+	 */
+	leftWidthOverride?: number;
 }
 
 // ── Tree building ─────────────────────────────────────────────────────
@@ -165,18 +170,34 @@ export interface DiffLayout {
  * Shared between DiffOverlay (rendering) and the dashboard mouse handler
  * (mapping click coords back to file indices).
  */
+export const DIFF_LEFT_MIN = 20;
+export const DIFF_RIGHT_MIN = 20;
+export const DIFF_DIVIDER_WIDTH = 1;
+
+export function defaultDiffLeftWidth(width: number): number {
+	return Math.min(48, Math.max(24, Math.floor(width * 0.32)));
+}
+
+export function clampDiffLeftWidth(leftWidth: number, width: number): number {
+	const max = Math.max(DIFF_LEFT_MIN, width - DIFF_DIVIDER_WIDTH - DIFF_RIGHT_MIN);
+	return Math.max(DIFF_LEFT_MIN, Math.min(leftWidth, max));
+}
+
 export function computeDiffLayout(opts: {
 	width: number;
 	height: number;
 	files: DiffFile[];
 	fileIndex: number;
 	fileScrollOffset: number;
+	leftWidthOverride?: number;
 }): DiffLayout {
 	const headerHeight = 2;
-	const footerHeight = 1;
-	const bodyHeight = Math.max(3, opts.height - headerHeight - footerHeight);
-	const leftWidth = Math.min(48, Math.max(24, Math.floor(opts.width * 0.32)));
-	const rightWidth = Math.max(20, opts.width - leftWidth - 1);
+	// Keymap footer lives in the dashboard's global CommandBar — don't reserve
+	// a row here or we'd render two stacked keymap rows.
+	const bodyHeight = Math.max(3, opts.height - headerHeight);
+	const requestedLeft = opts.leftWidthOverride ?? defaultDiffLeftWidth(opts.width);
+	const leftWidth = clampDiffLeftWidth(requestedLeft, opts.width);
+	const rightWidth = Math.max(DIFF_RIGHT_MIN, opts.width - leftWidth - DIFF_DIVIDER_WIDTH);
 
 	const rows: RenderedRow[] = [];
 	const tree = buildTree(opts.files);
@@ -283,8 +304,16 @@ export default function DiffOverlay({
 	loadingContent,
 	error,
 	selectionBg = "#1e3a5f",
+	leftWidthOverride,
 }: Props) {
-	const layout = computeDiffLayout({ width, height, files, fileIndex, fileScrollOffset });
+	const layout = computeDiffLayout({
+		width,
+		height,
+		files,
+		fileIndex,
+		fileScrollOffset,
+		leftWidthOverride,
+	});
 	const { bodyHeight, leftWidth, rightWidth, rows, effectiveScroll, selectedRowIdx } = layout;
 	const visibleRows = rows.slice(effectiveScroll, effectiveScroll + bodyHeight);
 
@@ -422,13 +451,6 @@ export default function DiffOverlay({
 						})
 					)}
 				</Box>
-			</Box>
-
-			{/* Footer */}
-			<Box flexShrink={0} width={width}>
-				<Text dimColor wrap="truncate">
-					j/k file • J/K scroll • g/G top/bot • click select • wheel scroll • q close
-				</Text>
 			</Box>
 		</Box>
 	);

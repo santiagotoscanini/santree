@@ -180,9 +180,9 @@ const CMUX_CLAUDE_PATH = "/Applications/cmux.app/Contents/Resources/bin/claude";
  */
 export function resolveClaudeBinary(): string | null {
 	// Inside cmux, the bundled binary is the only one wired to the active
-	// workspace. Gate on `CMUX_SURFACE_ID` (actual cmux runtime), not
-	// `SANTREE_MULTIPLEXER=cmux` — outside a live workspace the bundled
-	// binary has no auth context and exits with "Invalid API key".
+	// workspace. Gate on `CMUX_SURFACE_ID` (real cmux runtime) — outside a live
+	// workspace the bundled binary has no auth context and exits with
+	// "Invalid API key".
 	if (process.env["CMUX_SURFACE_ID"] && existsSync(CMUX_CLAUDE_PATH)) {
 		return CMUX_CLAUDE_PATH;
 	}

@@ -135,7 +135,7 @@ The `IssueTracker` interface (`lib/trackers/types.ts`) exposes: `kind`, `display
 
 ### Multiplexer abstraction (`lib/multiplexer/`)
 
-Santree supports pluggable terminal multiplexers (currently tmux and cmux; zellij planned). Selection is driven by `SANTREE_MULTIPLEXER` (`tmux` | `cmux` | `none`), falling back to runtime detection (`$TMUX` → tmux, `$CMUX_SURFACE_ID` → cmux, else `none`).
+Santree supports pluggable terminal multiplexers (currently tmux and cmux; zellij planned). Selection is fully auto-detected — `getMultiplexer()` iterates over the adapter list and picks the first whose `isActive()` returns true (tmux: `$TMUX` set; cmux: `$CMUX_SURFACE_ID` set), falling back to the no-op `noneMultiplexer`. Each adapter owns its own detection; there is no env-var override.
 
 The `Multiplexer` interface (`lib/multiplexer/types.ts`) exposes: `isActive()`, `createWindow({name, cwd, command})`, `selectWindow(name)`, `renameWindow(currentName, newName)`, `sendCommand(name, command)`, and `isSessionAlive(ticketId)`. All ops return a `SessionResult` (`{ ok: true } | { ok: false, reason, message? }`). Use `getMultiplexer()` from `lib/multiplexer/index.js` at call sites.
 
@@ -182,7 +182,6 @@ Full-screen interactive dashboard showing all issues assigned to the user from t
 | Variable | Effect |
 |---|---|
 | `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, the factory falls back to repo config → legacy `_linear.org` → auto-detect (any Linear creds → Linear, else GitHub). |
-| `SANTREE_MULTIPLEXER` | Select the terminal multiplexer used by the dashboard and worktree-create flows: `tmux`, `cmux`, or `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. |
 | `SANTREE_DIFF_TOOL` | Diff pager for `worktree diff` (CLI) and the dashboard `[v]` overlay. CLI passes `-c core.pager=<tool>` to git (the pager handles render + scroll, as usual). The dashboard captures `git diff --color=always \| <tool>` stdout as a string and handles scrolling itself in Ink — the pager's render half is what we want there, the scroll half is bypassed. Validated against `[A-Za-z0-9_\-/.+]` in `getDiffTool()` to keep the spawn arg surface tight. |
 | `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In auto mode, `detectTerminalTheme()` in `lib/dashboard/theme.ts` queries the terminal background via OSC 11 (`\x1b]11;?\x07`), parses the RGB response, and picks light/dark by Rec. 709 luminance. Re-runs alongside `loadDashboardData()` on every refresh so theme switches propagate within ~30s. Falls back to `dark` on non-TTY or 150ms timeout. Affects `selectionBg` (only theme-sensitive style — terminal-native foreground colors render correctly on either background). |
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. |

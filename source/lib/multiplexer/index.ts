@@ -5,15 +5,13 @@ import type { Multiplexer, MultiplexerKind } from "./types.js";
 
 export type { CreateWindowOpts, Multiplexer, MultiplexerKind, SessionResult } from "./types.js";
 
-export function getMultiplexer(): Multiplexer {
-	const explicit = process.env["SANTREE_MULTIPLEXER"]?.toLowerCase();
-	if (explicit === "tmux") return tmuxMultiplexer;
-	if (explicit === "cmux") return cmuxMultiplexer;
-	if (explicit === "none") return noneMultiplexer;
+// Each adapter declares its own runtime detection in `isActive()`. Order matters:
+// if more than one adapter reports active (e.g. tmux running inside a cmux
+// workspace), the first match wins.
+const CANDIDATES: Multiplexer[] = [tmuxMultiplexer, cmuxMultiplexer];
 
-	if (process.env["TMUX"]) return tmuxMultiplexer;
-	if (process.env["CMUX_SURFACE_ID"]) return cmuxMultiplexer;
-	return noneMultiplexer;
+export function getMultiplexer(): Multiplexer {
+	return CANDIDATES.find((m) => m.isActive()) ?? noneMultiplexer;
 }
 
 export function getMultiplexerKind(): MultiplexerKind {

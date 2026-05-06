@@ -405,13 +405,30 @@ To preview the JSON without writing: `santree helpers session-signal install --d
 
 Verify with `santree doctor` — look for the "Session Signal Hooks" row under Claude Code.
 
+### English Tutor (Optional)
+
+When enabled, Claude Code spots grammar mistakes in your prompts and replies with a one-line correction (`original -> correction (reason)`) before doing the actual work. Mistake-free prompts are ignored. Useful if English isn't your first language and you'd like ambient feedback while you code.
+
+**Install:**
+
+```bash
+santree helpers english-tutor install
+```
+
+This adds two hooks (`UserPromptSubmit`, `SessionStart`) and a scoped `Edit` permission for the practice log to `~/.claude/settings.json`. Existing hooks and permissions are preserved.
+
+To preview the JSON without writing: `santree helpers english-tutor install --dry`
+
+Corrections are appended to `~/.config/santree/english-practice-log.md` (or `$XDG_CONFIG_HOME/santree/english-practice-log.md`). The `SessionStart` hook replays this log into context on new sessions so Claude can spot recurring patterns.
+
+Remove with `santree helpers english-tutor uninstall`.
+
 ### Environment Variables
 
 | Variable | Effect |
 |---|---|
 | `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, falls back to repo config → legacy `_linear.org` → auto-detect. |
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. Examples: `cursor`, `zed`, `code`, `nvim`. |
-| `SANTREE_MULTIPLEXER` | Terminal multiplexer used by the dashboard and `worktree create --window`. One of `tmux`, `cmux`, `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. cmux is macOS-only and limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472). |
 | `SANTREE_DIFF_TOOL` | Pager used by `worktree diff` (CLI) and the dashboard diff overlay. Passed to git as `-c core.pager=<tool>` for the CLI, and used to pipe content for the overlay. Examples: `delta`, `diff-so-fancy`. Must accept a unified diff on stdin. Names are restricted to `[A-Za-z0-9_\-/.+]`. |
 | `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In `auto` mode, santree queries the terminal's background via OSC 11 and re-detects on each refresh cycle (≤30s) so theme switches propagate automatically. Set explicitly when your terminal doesn't respond to OSC 11. |
 
@@ -522,7 +539,7 @@ These are hardwired in `lib/github.ts` and `lib/ai.ts` respectively. Adding a se
 | --- | --- | --- |
 | **Issue tracker** | `santree issue switch <linear\|github>` (or `SANTREE_TRACKER` env var, or as a side effect of `santree linear auth` / `santree github auth`) | Linear (OAuth + GraphQL), GitHub Issues (via `gh` CLI). Adding a third tracker = one new directory under `lib/trackers/`. |
 | **Editor** | `SANTREE_EDITOR` env var (or `--editor` flag on `worktree open`) | `code`, `cursor`, `zed`, `nvim`, `subl`, `webstorm` — any executable that takes a path argument |
-| **Terminal multiplexer** | `SANTREE_MULTIPLEXER` env var | `tmux` (default, all platforms), `cmux` (macOS only — see [#1472](https://github.com/manaflow-ai/cmux/issues/1472)), `none`. Zellij is planned but not implemented. |
+| **Terminal multiplexer** | Auto-detected via `$TMUX` / `$CMUX_SURFACE_ID`. No config needed — each adapter's `isActive()` declares its own runtime check. | `tmux` (all platforms), `cmux` (macOS only — see [#1472](https://github.com/manaflow-ai/cmux/issues/1472)). Zellij is planned but not implemented. |
 | **Diff renderer** | `SANTREE_DIFF_TOOL` env var | `delta`, `diff-so-fancy`, or any pager that accepts a unified diff. Falls back to plain `git diff` colorization when unset. |
 | **Color theme** | `SANTREE_THEME` env var (`light`/`dark`/`auto`) | Auto-detects via OSC 11; manual override available. Re-detects every refresh so theme switches show up within 30s. |
 | **Shell integration** | `santree helpers shell-init` detects the shell | `zsh`, `bash` (templates in `shell/init.{zsh,bash}.njk`) |

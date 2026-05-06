@@ -67,6 +67,13 @@ type SessionSignalStatus = {
 	hint?: string;
 };
 
+type EnglishTutorStatus = {
+	configured: boolean;
+	missingHooks: string[];
+	missingPermission: boolean;
+	hint?: string;
+};
+
 type SantreeSetupStatus = {
 	isGitRepo: boolean;
 	mainRepoRoot?: string;
@@ -133,12 +140,12 @@ async function checkTool(
 
 /**
  * Reports the active multiplexer (tmux/cmux/none) and verifies the underlying
- * binary is reachable. Surfaces a hint when the configured multiplexer can't run.
+ * binary is reachable. Detection is auto — each adapter's `isActive()` checks
+ * its own runtime env (`$TMUX`, `$CMUX_SURFACE_ID`).
  */
 async function checkMultiplexer(): Promise<ToolStatus> {
 	const mux = getMultiplexer();
-	const explicit = process.env["SANTREE_MULTIPLEXER"]?.toLowerCase();
-	const description = `Multiplexer (active: ${mux.kind}${explicit ? `, SANTREE_MULTIPLEXER=${explicit}` : ""})`;
+	const description = `Multiplexer (active: ${mux.kind})`;
 
 	if (mux.kind === "none") {
 		return {
@@ -146,7 +153,7 @@ async function checkMultiplexer(): Promise<ToolStatus> {
 			description,
 			required: false,
 			installed: false,
-			hint: "No multiplexer active. Set SANTREE_MULTIPLEXER=tmux (or cmux) and run inside one. Install: brew install tmux",
+			hint: "Run inside tmux or cmux to enable session window renaming. Install tmux: brew install tmux",
 		};
 	}
 
@@ -180,7 +187,7 @@ async function checkMultiplexer(): Promise<ToolStatus> {
 			description,
 			required: false,
 			installed: false,
-			hint: "Install cmux.app from https://cmux.com or set SANTREE_MULTIPLEXER=tmux. cmux is macOS-only.",
+			hint: "Install cmux.app from https://cmux.com (cmux is macOS-only).",
 		};
 	}
 	const version = await tryExec("cmux --version 2>/dev/null");
@@ -198,9 +205,7 @@ async function checkMultiplexer(): Promise<ToolStatus> {
 		installed: !!ping,
 		version: version || "unknown",
 		path,
-		hint: !ping
-			? "cmux app not reachable — open cmux.app or set SANTREE_MULTIPLEXER=tmux."
-			: undefined,
+		hint: !ping ? "cmux app not reachable — open cmux.app." : undefined,
 	};
 }
 
@@ -442,6 +447,64 @@ function checkSessionSignalHooks(): SessionSignalStatus {
 }
 
 /**
+ * Checks if english-tutor hooks are configured. Verifies the UserPromptSubmit
+ * and SessionStart hooks plus the scoped Edit permission for the practice log.
+ */
+function checkEnglishTutorHooks(): EnglishTutorStatus {
+	const home = process.env.HOME || "";
+	const claudeSettingsPath = path.join(home, ".claude", "settings.json");
+
+	const requiredEvents = ["UserPromptSubmit", "SessionStart"];
+	const missingHooks: string[] = [];
+	let missingPermission = true;
+
+	const configDir = process.env.XDG_CONFIG_HOME || path.join(home, ".config");
+	const expectedPermission = `Edit(${path.join(configDir, "santree", "english-practice-log.md")})`;
+
+	try {
+		if (fs.existsSync(claudeSettingsPath)) {
+			const settings = JSON.parse(fs.readFileSync(claudeSettingsPath, "utf-8"));
+			const hooks = settings.hooks || {};
+
+			for (const event of requiredEvents) {
+				const eventHooks = hooks[event];
+				if (!Array.isArray(eventHooks)) {
+					missingHooks.push(event);
+					continue;
+				}
+				const found = eventHooks.some((entry: any) => {
+					const innerHooks = entry.hooks || [];
+					return innerHooks.some(
+						(h: any) => typeof h.command === "string" && h.command.includes("english-tutor"),
+					);
+				});
+				if (!found) missingHooks.push(event);
+			}
+
+			const allow = settings.permissions?.allow;
+			if (Array.isArray(allow) && allow.includes(expectedPermission)) {
+				missingPermission = false;
+			}
+		} else {
+			missingHooks.push(...requiredEvents);
+		}
+	} catch {
+		missingHooks.push(...requiredEvents);
+	}
+
+	if (missingHooks.length === 0 && !missingPermission) {
+		return { configured: true, missingHooks: [], missingPermission: false };
+	}
+
+	return {
+		configured: false,
+		missingHooks,
+		missingPermission,
+		hint: "Run: santree helpers english-tutor install",
+	};
+}
+
+/**
  * Checks if a path is gitignored (via .gitignore or .git/info/exclude).
  */
 function isGitIgnored(filePath: string, cwd: string): boolean {
@@ -677,6 +740,33 @@ function SessionSignalRow({ status }: { status: SessionSignalStatus }) {
 	);
 }
 
+function EnglishTutorRow({ status }: { status: EnglishTutorStatus }) {
+	const missingParts: string[] = [];
+	if (status.missingHooks.length > 0) missingParts.push(`hooks: ${status.missingHooks.join(", ")}`);
+	if (status.missingPermission) missingParts.push("log Edit permission");
+	return (
+		<Box flexDirection="column" marginBottom={1}>
+			<Box>
+				<StatusIcon ok={status.configured} required={false} />
+				<Text> </Text>
+				<Text bold>English Tutor Hooks</Text>
+				<Text dimColor> - Inline grammar corrections</Text>
+				<Text dimColor> (optional)</Text>
+			</Box>
+			<Box marginLeft={2} flexDirection="column">
+				{status.configured ? (
+					<Text dimColor>Hooks and log permission configured</Text>
+				) : (
+					<>
+						<Text dimColor>Missing: {missingParts.join("; ") || "—"}</Text>
+						{status.hint && <Text color="yellow">↳ {status.hint}</Text>}
+					</>
+				)}
+			</Box>
+		</Box>
+	);
+}
+
 function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 	const isOk =
 		status.santreeFolderExists &&
@@ -748,6 +838,7 @@ export default function Doctor() {
 	const [remoteControl, setRemoteControl] = useState<RemoteControlStatus | null>(null);
 	const [statusline, setStatusline] = useState<StatuslineStatus | null>(null);
 	const [sessionSignal, setSessionSignal] = useState<SessionSignalStatus | null>(null);
+	const [englishTutor, setEnglishTutor] = useState<EnglishTutorStatus | null>(null);
 	const [santreeSetup, setSantreeSetup] = useState<SantreeSetupStatus | null>(null);
 	const [loading, setLoading] = useState(true);
 
@@ -854,6 +945,7 @@ export default function Doctor() {
 			setRemoteControl(checkRemoteControl());
 			setStatusline(statuslineResult);
 			setSessionSignal(checkSessionSignalHooks());
+			setEnglishTutor(checkEnglishTutorHooks());
 			setSantreeSetup(checkSantreeSetup());
 			setLoading(false);
 		}
@@ -915,6 +1007,7 @@ export default function Doctor() {
 			{remoteControl && <RemoteControlRow status={remoteControl} />}
 			{statusline && <StatuslineRow status={statusline} />}
 			{sessionSignal && <SessionSignalRow status={sessionSignal} />}
+			{englishTutor && <EnglishTutorRow status={englishTutor} />}
 
 			<Box
 				marginTop={1}

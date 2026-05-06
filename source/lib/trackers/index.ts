@@ -19,7 +19,7 @@ export { setRepoTracker, removeRepoTracker, readTrackerConfig } from "./config.j
 
 /**
  * Resolve the active IssueTracker for a given repo. Selection order:
- *   1. SANTREE_TRACKER env override (matches SANTREE_MULTIPLEXER pattern).
+ *   1. SANTREE_TRACKER env override.
  *   2. Per-repo `_tracker.kind` in .santree/metadata.json.
  *   3. Legacy `_linear.org` (treated as kind: "linear" so existing repos keep working).
  *   4. Auto-detect: any stored Linear creds → Linear, else GitHub (gh is always available).

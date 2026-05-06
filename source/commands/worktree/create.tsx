@@ -62,7 +62,6 @@ export default function Create({ options, args }: Props) {
 	const [worktreePath, setWorktreePath] = useState("");
 	const [baseBranch, setBaseBranch] = useState<string | null>(null);
 	const [muxWindowName, setMuxWindowName] = useState<string | null>(null);
-	const [muxKind, setMuxKind] = useState<string | null>(null);
 
 	async function finalize(path: string, branch: string) {
 		const wantsWindow = options.window || options.tmux;
@@ -76,11 +75,10 @@ export default function Create({ options, args }: Props) {
 			}
 
 			setStatus("spawning-window");
-			setMessage(`Creating ${mux.kind} window...`);
+			setMessage("Creating window...");
 
 			const windowName = getWindowName(branch, options.name);
 			setMuxWindowName(windowName);
-			setMuxKind(mux.kind);
 
 			let runCommand: string | undefined;
 			if (options.work) {
@@ -90,7 +88,7 @@ export default function Create({ options, args }: Props) {
 			const result = await mux.createWindow({ name: windowName, cwd: path, command: runCommand });
 			if (!result.ok) {
 				setMessage(
-					`Worktree created, but failed to create ${mux.kind} window${result.message ? `: ${result.message}` : ""}`,
+					`Worktree created, but failed to create window${result.message ? `: ${result.message}` : ""}`,
 				);
 				setStatus("done");
 				console.log(`SANTREE_CD:${path}`);
@@ -99,7 +97,7 @@ export default function Create({ options, args }: Props) {
 
 			setStatus("done");
 			const workInfo = options.work ? (options.plan ? " + Claude (plan)" : " + Claude") : "";
-			setMessage(`Worktree and ${mux.kind} window created!${workInfo}`);
+			setMessage(`Worktree and window created!${workInfo}`);
 			// Don't output SANTREE_CD when a window is created — user is already in the new window
 			return;
 		}
@@ -285,12 +283,7 @@ export default function Create({ options, args }: Props) {
 							✓ {message}
 						</Text>
 						<Text dimColor> {worktreePath}</Text>
-						{muxWindowName && (
-							<Text dimColor>
-								{" "}
-								{muxKind ?? "tmux"} window: {muxWindowName}
-							</Text>
-						)}
+						{muxWindowName && <Text dimColor> window: {muxWindowName}</Text>}
 					</Box>
 				)}
 				{status === "error" && (

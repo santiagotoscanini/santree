@@ -1,17 +1,7 @@
 import type { PRInfo, PRCheck, PRReview, PRConversationComment, SearchPR } from "../github.js";
+import type { AssignedIssue } from "../trackers/types.js";
 
-export interface LinearAssignedIssue {
-	identifier: string;
-	title: string;
-	description: string | null;
-	url: string;
-	priority: number;
-	priorityLabel: string;
-	state: { name: string; type: string };
-	labels: string[];
-	projectId: string | null;
-	projectName: string | null;
-}
+export type { AssignedIssue } from "../trackers/types.js";
 
 export interface WorktreeInfo {
 	path: string;
@@ -26,7 +16,7 @@ export interface WorktreeInfo {
 }
 
 export interface DashboardIssue {
-	issue: LinearAssignedIssue;
+	issue: AssignedIssue;
 	worktree: WorktreeInfo | null;
 	pr: PRInfo | null;
 	checks: PRCheck[] | null;

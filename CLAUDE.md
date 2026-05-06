@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Santree is a CLI for managing Git worktrees with integrated AI assistance. It creates isolated development environments for feature branches, integrating with GitHub PRs and Linear tickets.
+Santree is a CLI for managing Git worktrees with integrated AI assistance. It creates isolated development environments for feature branches, integrating with GitHub PRs and pluggable issue trackers (Linear or GitHub Issues today, more behind the same interface tomorrow).
 
 ## Build Commands
 
@@ -20,11 +20,18 @@ source/
 ├── cli.tsx              # Entry point — Pastel app runner
 ├── lib/
 │   ├── ai.ts            # Shared AI logic (context resolution, prompt rendering, claude launch)
-│   ├── git.ts           # Sync/async git helpers (worktrees, branches, metadata)
+│   ├── git.ts           # Sync/async git helpers (worktrees, branches); extractTicketId is a tracker shim
 │   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push, checks, reviews)
 │   ├── exec.ts          # run() — execSync wrapper returning string | null
-│   ├── linear.ts        # Linear GraphQL API client (OAuth, tickets, images)
+│   ├── metadata.ts      # .santree/metadata.json r/w (extracted to break the trackers ↔ git import cycle)
 │   ├── prompts.ts       # Nunjucks template renderer for AI prompts
+│   ├── trackers/        # Issue tracker abstraction (Linear, GitHub Issues)
+│   │   ├── types.ts     # IssueTracker interface + generic Issue/AssignedIssue/Comment/AuthStatus
+│   │   ├── index.ts     # getIssueTracker(repoRoot) factory + setRepoTracker/readTrackerConfig
+│   │   ├── config.ts    # Per-repo `_tracker.kind` r/w (with legacy `_linear.org` migration)
+│   │   ├── auth-store.ts # Versioned ~/.config/santree/auth.json (v1 Linear-flat → v2 namespaced)
+│   │   ├── linear/      # OAuth PKCE + GraphQL queries + image rewriter
+│   │   └── github/      # `gh` CLI / REST wrappers; priority derived from labels
 │   └── dashboard/       # Dashboard UI components
 │       ├── types.ts     # State types, action types, phase enums
 │       ├── IssueList.tsx # Left pane — issue list with nested detail sub-rows (diff/pr/session) below issues with worktrees
@@ -35,7 +42,9 @@ source/
     ├── dashboard.tsx     # Top-level: interactive dashboard (alt screen, mouse, inline flows)
     ├── worktree/         # santree worktree {create,list,switch,remove,clean,sync,work,open,setup,commit,diff}
     ├── pr/               # santree pr {create,open,fix,review}
-    ├── linear/           # santree linear {auth,switch,open}
+    ├── linear/           # santree linear {auth,switch} — Linear-specific OAuth flow
+    ├── github/           # santree github {auth} — `gh auth login` wrapper
+    ├── issue/            # santree issue {switch,open} — tracker-agnostic actions
     └── helpers/          # santree helpers {shell-init,statusline}
 prompts/                 # Nunjucks templates: work, review, fix-pr, fill-pr, diff, pr, ticket
 shell/                   # Shell integration templates: init.zsh.njk, init.bash.njk
@@ -87,7 +96,7 @@ Three AI-powered commands share context resolution and prompt rendering:
 - `pr/fix.tsx` → fix PR review comments
 - `pr/review.tsx` → review changes against ticket
 
-`resolveAIContext()` finds repo, branch, ticket ID, and fetches Linear ticket data. `renderAIPrompt()` renders a named Nunjucks template with context. `launchAgent()` spawns the Claude CLI. `fetchAndRenderPR(branch)` and `fetchAndRenderDiff(branch)` pre-fetch structured PR feedback and diff data for injection into prompts.
+`resolveAIContext()` finds repo, branch, and issue identifier, then fetches the issue from the active tracker (Linear or GitHub — see [Issue tracker abstraction](#issue-tracker-abstraction-libtrackers)). It returns `AIContext` with the issue plus `trackerName`/`issueNoun` so prompt templates and downstream code don't hardcode a vendor name. `renderAIPrompt()` renders a named Nunjucks template with context. `launchAgent()` spawns the Claude CLI. `fetchAndRenderPR(branch)` and `fetchAndRenderDiff(branch)` pre-fetch structured PR feedback and diff data for injection into prompts.
 
 ### Metadata storage
 
@@ -103,7 +112,26 @@ Two layers:
 - **`run(cmd)`** (`lib/exec.ts`) — `execSync` wrapper, returns trimmed stdout or `null` on failure. Used for quick git queries.
 - **`execAsync(cmd)`** — `promisify(exec)`, used for operations that may take time (worktree add/remove, push, branch delete).
 
-Key functions: `findMainRepoRoot()` (resolves through worktrees to main repo), `findRepoRoot()` (current checkout), `isInWorktree()` (compares `--git-dir` vs `--git-common-dir`), `extractTicketId(branch)` (regex `[A-Z]+-\d+`).
+Key functions: `findMainRepoRoot()` (resolves through worktrees to main repo), `findRepoRoot()` (current checkout), `isInWorktree()` (compares `--git-dir` vs `--git-common-dir`), `extractTicketId(branch)` (one-line shim that delegates to `getIssueTracker(...).extractIdFromBranch(branch)` — Linear's regex is `[A-Z]+-\d+`, GitHub's requires an explicit prefix `gh-NN`/`issue-NN`/`#NN`/`feature/NN-`).
+
+The metadata-file r/w helpers (`readAllMetadata`/`writeAllMetadata`/`getSantreeDir`) live in `lib/metadata.ts` and are re-exported from `lib/git.ts` for backward compat. They were extracted to break a circular import: `lib/trackers/linear/auth.ts` needs to read/write the `_linear.org` key, but `lib/trackers/*` is imported by `lib/git.ts` itself. ESM doesn't allow `require()` to dodge cycles, so the metadata layer is its own module.
+
+### Issue tracker abstraction (`lib/trackers/`)
+
+Santree supports pluggable issue trackers — Linear (OAuth PKCE + GraphQL) and GitHub Issues (via the `gh` CLI) ship today. Selection is driven by, in order:
+
+1. `SANTREE_TRACKER` env var (`linear` | `github`) — overrides everything; useful for one-offs.
+2. Per-repo `_tracker.kind` in `.santree/metadata.json` — set by `santree issue switch <kind>`, or as a side effect of `santree linear auth` / `santree github auth`.
+3. Legacy `_linear.org` (no `_tracker.kind`) — treated as `kind: "linear"` so existing repos keep working.
+4. Auto-detect: any Linear creds in `~/.config/santree/auth.json` → Linear, else GitHub (since `gh` is a hard dep).
+
+The `IssueTracker` interface (`lib/trackers/types.ts`) exposes: `kind`, `displayName` ("Linear"/"GitHub"), `issueNoun` ("ticket"/"issue"), `getAuthStatus(repoRoot)`, `signOut(repoRoot)`, `extractIdFromBranch(branch)`, `cleanupCache(id)`, `listAssigned(repoRoot)`, `getIssue(id, repoRoot)`. Both list/get methods return `IssueTrackerResult<T>` (`{ ok: true, value } | { ok: false, reason: "unauthenticated"|"not-found"|"network", message? }`). Use `getIssueTracker(repoRoot)` from `lib/trackers/index.js` at every call site — never reach into a concrete tracker module.
+
+**Generic data shape** — `Issue`/`AssignedIssue` carry the union of fields actually consumed by UI + prompts: `identifier`, `title`, `description`, `url`, `priority` (number), `priorityLabel`, `state: { name, type }`, `labels`, `projectId`, `projectName`. Each tracker maps its native API to that shape: GitHub derives priority from `P0`/`P1`/etc. labels, projectName from `repository.nameWithOwner`. Adding a third tracker = one new directory under `lib/trackers/`, one entry in the `IssueTrackerKind` union, one branch in `getIssueTracker()`. Nothing else changes.
+
+**Auth file** — `~/.config/santree/auth.json` is versioned. v1 (`{[orgSlug]: LinearTokens}`) is migrated to v2 (`{ version: 2, linear: {...}, github: {} }`) on first read. The `github` namespace is reserved (the `gh` CLI owns its own token; santree never writes it).
+
+**No `if tracker.kind === "linear"` outside the factory.** Vendor names appear in user-facing strings only when (a) the active tracker's `displayName` flows in (e.g. dashboard's `[o]` action key labelled "Linear" or "GitHub" depending on the repo), (b) a command is explicitly named after the backend (`santree linear auth`, `santree github auth`), or (c) `santree doctor` is reporting which backend is active. Every other surface speaks generically ("issue", "tracker").
 
 ### Multiplexer abstraction (`lib/multiplexer/`)
 
@@ -121,7 +149,7 @@ Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hoo
 
 ### Dashboard (`commands/dashboard.tsx`)
 
-Full-screen interactive dashboard showing all Linear issues assigned to the user. Runs in the terminal alternate screen with mouse support (click-to-select, drag-to-resize panes, scroll wheel).
+Full-screen interactive dashboard showing all issues assigned to the user from the active tracker (see [Issue tracker abstraction](#issue-tracker-abstraction-libtrackers)). Runs in the terminal alternate screen with mouse support (click-to-select, drag-to-resize panes, scroll wheel).
 
 **Layout**: Two-pane split — left pane (`IssueList`) shows issues grouped by project. Each issue with a worktree expands into one or more nested **detail sub-rows** below its title (`· diff`, `· pr`, `· session`); issues without worktrees stay as a single row. The shared row builder `buildIssueListRows()` is exported from `IssueList.tsx` and used by both the renderer and the dashboard's mouse-click row→issue mapper, so click coordinates always resolve to the correct parent issue (sub-rows resolve to the parent's `flatIndex`). Right pane (`DetailPanel`) shows issue detail with description, git status, PR info, checks, reviews, and context-aware actions.
 
@@ -138,23 +166,24 @@ Full-screen interactive dashboard showing all Linear issues assigned to the user
 - **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a new window
 - **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in a new window
 
-**Data fetching**: `loadDashboardData()` fetches Linear issues and enriches each with worktree info (git status, commits ahead, session ID, **diff shortstat vs merge-base**), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 30s. `getDiffShortstatAsync()` in `lib/git.ts` runs `git diff --shortstat $(git merge-base <base> HEAD)`.
+**Data fetching**: `loadDashboardData()` calls `getIssueTracker(repoRoot).listAssigned(repoRoot)` and enriches each issue with worktree info (git status, commits ahead, session ID, **diff shortstat vs merge-base**), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 30s. `getDiffShortstatAsync()` in `lib/git.ts` runs `git diff --shortstat $(git merge-base <base> HEAD)`.
 
 **Alt screen lifecycle**: `ensureAltScreen()` enters alt screen before first render. Cleanup in `useEffect` return exits alt screen — `exit()` triggers unmount which triggers cleanup (do not write escape sequences before `exit()` or Ink's final render leaks to normal buffer).
 
 ## Key Patterns
 
-- **Branch naming**: `{prefix}/{TICKET-ID}-description` (e.g., `feature/TEAM-123-auth`)
-- **Ticket ID extraction**: first `[A-Z]+-\d+` match in branch name, uppercased
-- **Error resilience**: commands degrade gracefully when integrations (gh, Linear API) are unavailable
-- **Prompt-driven AI**: Nunjucks templates in `prompts/` generate context-rich prompts passed to Claude CLI
+- **Branch naming**: depends on the active tracker. Linear uses `{prefix}/{TICKET-ID}-description` (e.g., `feature/TEAM-123-auth`). GitHub Issues requires an explicit prefix to avoid false positives — `feature/issue-42-auth`, `gh-42-auth`, or `42-auth`.
+- **Ticket ID extraction**: `extractTicketId(branch)` delegates to the active tracker's regex. Linear: `[A-Z]+-\d+` (uppercased). GitHub: `(?:#|gh-|issue-)(\d+)` or `(?:^|/)(\d+)(?:-|$)`.
+- **Error resilience**: commands degrade gracefully when integrations (gh, the active tracker's API) are unavailable.
+- **Prompt-driven AI**: Nunjucks templates in `prompts/` generate context-rich prompts passed to Claude CLI. `prompts/ticket.njk` is tracker-agnostic — it reads `state.name`, `priorityLabel`, and a `trackerName` injected by `renderTicket()`.
 
 ## Environment Variables
 
 | Variable | Effect |
 |---|---|
+| `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, the factory falls back to repo config → legacy `_linear.org` → auto-detect (any Linear creds → Linear, else GitHub). |
 | `SANTREE_MULTIPLEXER` | Select the terminal multiplexer used by the dashboard and worktree-create flows: `tmux`, `cmux`, or `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. |
-| `SANTREE_DIFF_TOOL` | Pager/renderer for `worktree diff` (CLI) and the dashboard diff overlay. CLI passes `-c core.pager=<tool>` to git; overlay pipes `git diff --color=always` output through the tool and renders the ANSI result. Validated against `[A-Za-z0-9_\-/.+]` in `getDiffTool()` to keep the spawn arg surface tight. |
+| `SANTREE_DIFF_TOOL` | Diff pager for `worktree diff` (CLI) and the dashboard `[v]` overlay. CLI passes `-c core.pager=<tool>` to git (the pager handles render + scroll, as usual). The dashboard captures `git diff --color=always \| <tool>` stdout as a string and handles scrolling itself in Ink — the pager's render half is what we want there, the scroll half is bypassed. Validated against `[A-Za-z0-9_\-/.+]` in `getDiffTool()` to keep the spawn arg surface tight. |
 | `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In auto mode, `detectTerminalTheme()` in `lib/dashboard/theme.ts` queries the terminal background via OSC 11 (`\x1b]11;?\x07`), parses the RGB response, and picks light/dark by Rec. 709 luminance. Re-runs alongside `loadDashboardData()` on every refresh so theme switches propagate within ~30s. Falls back to `dark` on non-TTY or 150ms timeout. Affects `selectionBg` (only theme-sensitive style — terminal-native foreground colors render correctly on either background). |
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. |
 
@@ -167,6 +196,10 @@ Optional:
 - A terminal multiplexer for new-window flows — tmux (default, all platforms) or cmux (experimental, macOS-only; limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472))
 - `git-delta` (or any unified-diff pager) — used by `worktree diff` and the dashboard `v` overlay when `SANTREE_DIFF_TOOL` is set. `santree doctor` reports its presence.
 
-### Linear Integration
+### Issue tracker setup
 
-Santree fetches Linear ticket data via the GraphQL API (OAuth PKCE). Run `santree linear auth` to authenticate — opens browser, stores tokens in `$XDG_CONFIG_HOME/santree/auth.json` (defaults to `~/.config/santree/auth.json`), and links the org to the current repo. Ticket data (title, description, comments, images) is injected into prompts before launching Claude. Auth tokens auto-refresh; images are downloaded to `/tmp/santree-images-{ticketId}/` and cleaned up on exit.
+Each repo picks one tracker. Pick once with `santree issue switch <linear|github>`, or let one of the auth commands set it as a side effect.
+
+**Linear** — OAuth PKCE + GraphQL. Run `santree linear auth` to authenticate (opens browser, stores tokens in `$XDG_CONFIG_HOME/santree/auth.json`, defaults to `~/.config/santree/auth.json`), and links the org to the current repo. Ticket data (title, description, comments, images) is injected into prompts before launching Claude. Auth tokens auto-refresh; images are downloaded to `/tmp/santree-images-{ticketId}/`.
+
+**GitHub Issues** — uses the existing `gh` CLI (no separate OAuth). Run `santree github auth` to verify `gh auth status` and flip the repo's `_tracker.kind` to `github`. The dashboard then lists `gh search issues --assignee=@me --state=open --repo <owner>/<name>`. Priority is derived from labels (`P0`/`P1`/`urgent`/`high`/etc.); attached images are downloaded from `user-images.githubusercontent.com` / `github.com/.../assets/`. Cross-repo issues are not surfaced — scope is the current repo.

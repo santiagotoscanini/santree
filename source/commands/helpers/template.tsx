@@ -10,7 +10,7 @@ import {
 	extractTicketId,
 } from "../../lib/git.js";
 import { renderTicket } from "../../lib/prompts.js";
-import { getTicketContent } from "../../lib/linear.js";
+import { getIssueTracker } from "../../lib/trackers/index.js";
 import {
 	resolveAIContext,
 	renderAIPrompt,
@@ -21,10 +21,10 @@ import {
 export const description = "Render a template to stdout";
 
 export const args = z.tuple([
-	z.enum(["linear", "git-changes", "pr", "fix-pr", "review"]).describe(
+	z.enum(["ticket", "linear", "git-changes", "pr", "fix-pr", "review"]).describe(
 		argument({
 			name: "type",
-			description: "Template type (linear, git-changes, pr, fix-pr, or review)",
+			description: "Template type (ticket, git-changes, pr, fix-pr, or review)",
 		}),
 	),
 ]);
@@ -118,28 +118,28 @@ export default function Template({ args }: Props) {
 				setStatus("done");
 				setTimeout(() => exit(), 100);
 			} else {
+				const mainRoot = findMainRepoRoot() ?? repoRoot;
+				const tracker = getIssueTracker(mainRoot);
 				const ticketId = extractTicketId(branch);
 				if (!ticketId) {
 					setStatus("error");
-					setMessage(
-						"Could not extract ticket ID from branch name. Expected format: user/TEAM-123-description",
-					);
+					setMessage(`Could not extract ${tracker.issueNoun} ID from branch name '${branch}'.`);
 					setTimeout(() => exit(), 100);
 					return;
 				}
 
-				const mainRoot = findMainRepoRoot() ?? repoRoot;
-				const ticket = await getTicketContent(ticketId, mainRoot);
-				if (!ticket) {
+				const result = await tracker.getIssue(ticketId, mainRoot);
+				if (!result.ok) {
+					const status = await tracker.getAuthStatus(mainRoot);
 					setStatus("error");
 					setMessage(
-						`Could not fetch Linear ticket ${ticketId}. Run 'santree linear auth' to authenticate.`,
+						`Could not fetch ${tracker.issueNoun} ${ticketId}.${status.hint ? ` ${status.hint}` : ""}`,
 					);
 					setTimeout(() => exit(), 100);
 					return;
 				}
 
-				process.stdout.write(renderTicket(ticket));
+				process.stdout.write(renderTicket(result.value, tracker.displayName));
 				setStatus("done");
 				setTimeout(() => exit(), 100);
 			}
@@ -151,7 +151,8 @@ export default function Template({ args }: Props) {
 	if (status === "done") return null;
 
 	const spinnerTexts: Record<string, string> = {
-		linear: "Fetching Linear ticket...",
+		ticket: "Fetching issue...",
+		linear: "Fetching issue...",
 		"git-changes": "Gathering changes...",
 		pr: "Fetching PR feedback...",
 		"fix-pr": "Building fix-pr prompt...",

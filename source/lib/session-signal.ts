@@ -1,6 +1,5 @@
 import * as fs from "fs";
 import * as path from "path";
-import { spawn } from "child_process";
 import { getMultiplexer } from "./multiplexer/index.js";
 
 export type SessionStateValue = "waiting" | "idle" | "active" | "exited";
@@ -26,7 +25,7 @@ export function extractRepoAndTicket(cwd: string): { repoRoot: string; ticketId:
 	return { repoRoot, ticketId };
 }
 
-export function renameTmuxWindow(ticketId: string, state: SessionStateValue): void {
+export function renameSessionWindow(ticketId: string, state: SessionStateValue): void {
 	const mux = getMultiplexer();
 	if (!mux.isActive()) return;
 
@@ -46,29 +45,9 @@ export function renameTmuxWindow(ticketId: string, state: SessionStateValue): vo
 	mux.renameWindow("", name);
 }
 
-export function runHookScript(
-	repoRoot: string,
-	state: SessionStateValue,
-	env: Record<string, string>,
-): void {
-	const script = path.join(repoRoot, ".santree", "hooks", `on-${state}.sh`);
-	try {
-		fs.accessSync(script, fs.constants.X_OK);
-	} catch {
-		return;
-	}
-	const child = spawn(script, [], {
-		cwd: env.SANTREE_WORKTREE_PATH,
-		env: { ...process.env, ...env },
-		stdio: "ignore",
-		detached: true,
-	});
-	child.unref();
-}
-
 /**
  * Unified helper: reads stdin, extracts repo/ticket, writes state file,
- * renames tmux window, runs hook script, then exits.
+ * renames the multiplexer window, then exits.
  */
 export function signalState(state: SessionStateValue): void {
 	const input = readStdin();
@@ -99,17 +78,7 @@ export function signalState(state: SessionStateValue): void {
 
 	fs.writeFileSync(stateFile, JSON.stringify(payload, null, 2) + "\n");
 
-	renameTmuxWindow(ticketId, state);
-
-	const worktreePath = path.join(repoRoot, ".santree", "worktrees", ticketId);
-	runHookScript(repoRoot, state, {
-		SANTREE_TICKET_ID: ticketId,
-		SANTREE_SESSION_STATE: state,
-		SANTREE_SESSION_ID: data.session_id ?? "",
-		SANTREE_WORKTREE_PATH: worktreePath,
-		SANTREE_REPO_ROOT: repoRoot,
-		SANTREE_MESSAGE: payload.message ?? "",
-	});
+	renameSessionWindow(ticketId, state);
 
 	process.exit(0);
 }

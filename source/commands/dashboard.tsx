@@ -32,7 +32,7 @@ import { extractTicketId } from "../lib/git.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
 import { getPRTemplate } from "../lib/github.js";
 import { renderPrompt, renderDiff, renderTicket } from "../lib/prompts.js";
-import { getTicketContent } from "../lib/linear.js";
+import { getIssueTracker } from "../lib/trackers/index.js";
 import * as os from "os";
 import type { DashboardIssue, ProjectGroup } from "../lib/dashboard/types.js";
 import { initialState, reducer } from "../lib/dashboard/types.js";
@@ -66,7 +66,7 @@ import {
 	isUpdateAvailable,
 } from "../lib/version.js";
 
-export const description = "Interactive dashboard of your Linear issues";
+export const description = "Interactive dashboard of your assigned issues";
 
 const execAsync = promisify(exec);
 
@@ -148,6 +148,8 @@ function runPipedDiff(
 						GIT_CONFIG_PARAMETERS: "'delta.hyperlinks=false' 'delta.line-numbers=false'",
 					}
 				: process.env;
+		// We use the pager only for its rendering — the dashboard owns
+		// scrolling/search itself in Ink, so we capture stdout as a string.
 		const pager = spawn(tool, pagerArgs, {
 			stdio: ["pipe", "pipe", "pipe"],
 			env: pagerEnv,
@@ -954,12 +956,12 @@ export default function Dashboard() {
 						type: "SET_ACTION_MESSAGE",
 						message: resumeCmd
 							? `Resumed session in new window: ${windowName}`
-							: `Launched ${mode} in ${mux.kind} window: ${windowName}`,
+							: `Launched ${mode} in new window: ${windowName}`,
 					});
 				} else {
 					dispatch({
 						type: "SET_ACTION_MESSAGE",
-						message: `Failed to create ${mux.kind} window${created.message ? `: ${created.message}` : ""}`,
+						message: `Failed to create window${created.message ? `: ${created.message}` : ""}`,
 					});
 				}
 			}
@@ -997,7 +999,7 @@ export default function Dashboard() {
 				} else {
 					dispatch({
 						type: "SET_ACTION_MESSAGE",
-						message: `Worktree created, but ${mux.kind} failed${created.message ? `: ${created.message}` : ""}`,
+						message: `Worktree created, but window launch failed${created.message ? `: ${created.message}` : ""}`,
 					});
 				}
 				setTimeout(() => refresh(), 3000);
@@ -1356,12 +1358,14 @@ export default function Dashboard() {
 				const ticketId = extractTicketId(s.prCreateBranch) ?? "";
 				const mainRepoRoot = findMainRepoRoot();
 
-				// Fetch ticket content (downloads images for Linear tickets)
+				// Fetch issue content from the active tracker (downloads images
+				// inline so Claude can read them via --allowedTools Read).
 				let ticketContent: string | undefined;
 				if (ticketId && mainRepoRoot) {
-					const ticket = await getTicketContent(ticketId, mainRepoRoot);
-					if (ticket) {
-						ticketContent = renderTicket(ticket);
+					const tracker = getIssueTracker(mainRepoRoot);
+					const result = await tracker.getIssue(ticketId, mainRepoRoot);
+					if (result.ok) {
+						ticketContent = renderTicket(result.value, tracker.displayName);
 					}
 				}
 
@@ -2059,7 +2063,7 @@ export default function Dashboard() {
 							dispatch({
 								type: "SET_ACTION_MESSAGE",
 								message: created.ok
-									? `Launched AI review in ${mux.kind}`
+									? "Launched AI review in new window"
 									: `Failed to launch review${created.message ? `: ${created.message}` : ""}`,
 							});
 						})();
@@ -2166,7 +2170,7 @@ export default function Dashboard() {
 						if (!created.ok) {
 							dispatch({
 								type: "SET_ACTION_MESSAGE",
-								message: `Failed to switch ${mux.kind} window${created.message ? `: ${created.message}` : ""}`,
+								message: `Failed to switch window${created.message ? `: ${created.message}` : ""}`,
 							});
 						}
 					})();
@@ -2178,10 +2182,10 @@ export default function Dashboard() {
 				return;
 			}
 
-			// Open in Linear
+			// Open issue in tracker (Linear/GitHub web UI)
 			if (input === "o") {
 				if (!di.issue.url) {
-					dispatch({ type: "SET_ACTION_MESSAGE", message: "No Linear ticket URL" });
+					dispatch({ type: "SET_ACTION_MESSAGE", message: "No issue URL available" });
 					return;
 				}
 				const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
@@ -2240,7 +2244,7 @@ export default function Dashboard() {
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
 							message: created.ok
-								? `Launched review in ${mux.kind}`
+								? "Launched review in new window"
 								: `Failed to launch review${created.message ? `: ${created.message}` : ""}`,
 						});
 					})();
@@ -2309,7 +2313,7 @@ export default function Dashboard() {
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
 							message: created.ok
-								? `Launched PR fix in ${mux.kind}`
+								? "Launched PR fix in new window"
 								: `Failed to launch PR fix${created.message ? `: ${created.message}` : ""}`,
 						});
 					})();
@@ -2788,6 +2792,7 @@ export default function Dashboard() {
 									selectedIssue={selectedIssue}
 									selectedReview={selectedReview}
 									overlay={state.overlay}
+									trackerName={getIssueTracker(repoRootRef.current).displayName}
 								/>
 							</Box>
 						</>
@@ -2808,11 +2813,13 @@ function ActionRow({
 	selectedIssue,
 	selectedReview,
 	overlay,
+	trackerName,
 }: {
 	activeTab: "issues" | "reviews";
 	selectedIssue: DashboardIssue | null;
 	selectedReview: import("../lib/dashboard/types.js").EnrichedReviewPR | null;
 	overlay: import("../lib/dashboard/types.js").ActionOverlay;
+	trackerName: string;
 }) {
 	// During the diff overlay, none of the per-issue actions apply (View diff
 	// is what got us here, Commit/PR/etc. need the detail panel context). Keep
@@ -2825,7 +2832,7 @@ function ActionRow({
 				? buildReviewActions(selectedReview)
 				: []
 			: selectedIssue
-				? buildIssueActions(selectedIssue)
+				? buildIssueActions(selectedIssue, trackerName)
 				: [];
 
 	if (items.length === 0) return <Text> </Text>;

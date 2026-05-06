@@ -75,8 +75,11 @@ function fileColor(xy: string): string | undefined {
 
 /** Returns the context-sensitive action key list for the selected issue.
  * Lifted out of the panel so the dashboard can render it on the same row as
- * the global command bar (so left- and right-pane key hints align). */
-export function buildIssueActions(di: DashboardIssue): IssueActionItem[] {
+ * the global command bar (so left- and right-pane key hints align). The
+ * `trackerName` is the active tracker's `displayName` ("Linear" / "GitHub"),
+ * surfaced as the open-in-browser action label so the panel doesn't hardcode
+ * a vendor name. */
+export function buildIssueActions(di: DashboardIssue, trackerName: string): IssueActionItem[] {
 	const { worktree, pr, issue } = di;
 	const items: IssueActionItem[] = [];
 
@@ -110,7 +113,7 @@ export function buildIssueActions(di: DashboardIssue): IssueActionItem[] {
 	}
 
 	if (issue.url) {
-		items.push({ key: "o", label: "Linear", color: "gray" });
+		items.push({ key: "o", label: trackerName, color: "gray" });
 	}
 	if (pr) items.push({ key: "p", label: "Open PR", color: "gray" });
 

@@ -1,7 +1,7 @@
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import nunjucks from "nunjucks";
-import type { LinearIssue } from "./linear.js";
+import type { Issue } from "./trackers/types.js";
 import type {
 	PRCheck,
 	PRReview,
@@ -50,10 +50,11 @@ export function renderPrompt(
 }
 
 /**
- * Render a LinearIssue into formatted markdown using the ticket template.
+ * Render an issue into formatted markdown using the ticket template.
+ * `trackerName` is injected for header/link text ("Linear" / "GitHub").
  */
-export function renderTicket(issue: LinearIssue): string {
-	return promptsEnv.render("ticket.njk", issue);
+export function renderTicket(issue: Issue, trackerName: string): string {
+	return promptsEnv.render("ticket.njk", { ...issue, trackerName });
 }
 
 export interface DiffData {

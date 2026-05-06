@@ -10,7 +10,8 @@ import * as path from "path";
 const require = createRequire(import.meta.url);
 const { version } = require("../../package.json");
 import { findMainRepoRoot, getSantreeDir, getInitScriptPath } from "../lib/git.js";
-import { getAuthStatus, getValidTokens } from "../lib/linear.js";
+import { getIssueTracker } from "../lib/trackers/index.js";
+import type { IssueTracker } from "../lib/trackers/types.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
 import { resolveClaudeBinary } from "../lib/ai.js";
 import {
@@ -40,11 +41,11 @@ type ToolStatus = {
 	updateHint?: string;
 };
 
-type LinearAuthCheckStatus = {
+type TrackerCheckStatus = {
+	displayName: string;
 	authenticated: boolean;
-	orgSlug?: string;
-	orgName?: string;
-	tokenValid?: boolean;
+	accountLabel?: string;
+	expiresAt?: number;
 	repoLinked?: boolean;
 	hint?: string;
 };
@@ -60,17 +61,9 @@ type StatuslineStatus = {
 	hint?: string;
 };
 
-type HookScriptStatus = {
-	name: string;
-	exists: boolean;
-	executable: boolean;
-};
-
 type SessionSignalStatus = {
 	configured: boolean;
 	missingHooks: string[];
-	hookScripts: HookScriptStatus[];
-	hooksDir: string | null;
 	hint?: string;
 };
 
@@ -219,8 +212,9 @@ async function checkMultiplexer(): Promise<ToolStatus> {
  */
 async function checkClaude(): Promise<ToolStatus> {
 	const resolved = resolveClaudeBinary();
+	const usingBundled = resolved?.startsWith("/Applications/cmux.app/") ?? false;
 	const inCmux = getMultiplexer().kind === "cmux";
-	const description = inCmux ? "Claude Code CLI (cmux-bundled)" : "Claude Code CLI";
+	const description = usingBundled ? "Claude Code CLI (cmux-bundled)" : "Claude Code CLI";
 
 	if (!resolved) {
 		return {
@@ -289,33 +283,22 @@ async function checkGhAuth(): Promise<ToolStatus> {
 }
 
 /**
- * Checks Linear API authentication status.
+ * Checks the active issue tracker's auth state. The tracker (Linear, GitHub)
+ * is resolved from the repo's `_tracker` config (or env / auto-detect).
+ * Doctor is the one place that legitimately names the active tracker — it's
+ * diagnostic context, not a generic UI string.
  */
-async function checkLinearAuth(): Promise<LinearAuthCheckStatus> {
+async function checkTrackerAuth(): Promise<TrackerCheckStatus> {
 	const repoRoot = findMainRepoRoot();
-	const status = getAuthStatus(repoRoot);
-
-	if (!status.authenticated || !status.orgSlug) {
-		return {
-			authenticated: false,
-			hint: "Run: santree linear auth",
-		};
-	}
-
-	// Try to validate/refresh tokens
-	const valid = await getValidTokens(status.orgSlug);
-
+	const tracker: IssueTracker = getIssueTracker(repoRoot);
+	const status = await tracker.getAuthStatus(repoRoot);
 	return {
-		authenticated: true,
-		orgSlug: status.orgSlug,
-		orgName: status.orgName,
-		tokenValid: valid !== null,
+		displayName: tracker.displayName,
+		authenticated: status.authenticated,
+		accountLabel: status.accountLabel,
+		expiresAt: status.expiresAt,
 		repoLinked: status.repoLinked,
-		hint: !valid
-			? "Token expired. Run: santree linear auth"
-			: !status.repoLinked
-				? "Repo not linked. Run: santree linear auth"
-				: undefined,
+		hint: status.hint,
 	};
 }
 
@@ -447,41 +430,13 @@ function checkSessionSignalHooks(): SessionSignalStatus {
 		missingHooks.push(...requiredEvents);
 	}
 
-	// Check hook script files in .santree/hooks/
-	const hookScripts: HookScriptStatus[] = [];
-	const mainRepoRoot = findMainRepoRoot();
-	let hooksDir: string | null = null;
-	if (mainRepoRoot) {
-		hooksDir = path.join(mainRepoRoot, ".santree", "hooks");
-		const scriptNames = ["on-waiting.sh", "on-active.sh", "on-idle.sh", "on-exited.sh"];
-
-		for (const name of scriptNames) {
-			const scriptPath = path.join(hooksDir, name);
-			const exists = fs.existsSync(scriptPath);
-			let executable = false;
-			if (exists) {
-				try {
-					fs.accessSync(scriptPath, fs.constants.X_OK);
-					executable = true;
-				} catch {
-					// not executable
-				}
-			}
-			if (exists) {
-				hookScripts.push({ name, exists, executable });
-			}
-		}
-	}
-
 	if (missingHooks.length === 0) {
-		return { configured: true, missingHooks: [], hookScripts, hooksDir };
+		return { configured: true, missingHooks: [] };
 	}
 
 	return {
 		configured: false,
 		missingHooks,
-		hookScripts,
-		hooksDir,
 		hint: `Missing: ${missingHooks.join(", ")}. Run: santree helpers session-signal install`,
 	};
 }
@@ -607,29 +562,27 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
 	);
 }
 
-function LinearRow({ linear }: { linear: LinearAuthCheckStatus }) {
-	const isOk = linear.authenticated && linear.tokenValid && linear.repoLinked;
-
+function TrackerRow({ tracker }: { tracker: TrackerCheckStatus }) {
+	const isOk = tracker.authenticated && !tracker.hint;
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box>
-				<StatusIcon ok={!!isOk} required={true} />
+				<StatusIcon ok={isOk} required={true} />
 				<Text> </Text>
-				<Text bold>Linear API</Text>
-				<Text dimColor> - Linear ticket integration</Text>
+				<Text bold>{tracker.displayName} API</Text>
+				<Text dimColor> - Issue tracker integration</Text>
 			</Box>
-			{linear.authenticated ? (
+			{tracker.authenticated ? (
 				<Box marginLeft={2} flexDirection="column">
-					<Text dimColor>
-						Organization: {linear.orgName} ({linear.orgSlug})
-					</Text>
-					<Text dimColor>Token: {linear.tokenValid ? "valid" : "expired"}</Text>
-					<Text dimColor>Repo linked: {linear.repoLinked ? "yes" : "no"}</Text>
-					{linear.hint && <Text color="yellow">↳ {linear.hint}</Text>}
+					{tracker.accountLabel && <Text dimColor>Account: {tracker.accountLabel}</Text>}
+					{tracker.repoLinked !== undefined && (
+						<Text dimColor>Repo linked: {tracker.repoLinked ? "yes" : "no"}</Text>
+					)}
+					{tracker.hint && <Text color="yellow">↳ {tracker.hint}</Text>}
 				</Box>
 			) : (
 				<Box marginLeft={2}>
-					<Text color="yellow">↳ {linear.hint}</Text>
+					<Text color="yellow">↳ {tracker.hint}</Text>
 				</Box>
 			)}
 		</Box>
@@ -701,15 +654,10 @@ function RemoteControlRow({ status }: { status: RemoteControlStatus }) {
 }
 
 function SessionSignalRow({ status }: { status: SessionSignalStatus }) {
-	const allScriptNames = ["on-waiting.sh", "on-active.sh", "on-idle.sh", "on-exited.sh"];
-	const existingNames = new Set(status.hookScripts.map((s) => s.name));
-	const missingScripts = allScriptNames.filter((n) => !existingNames.has(n));
-	const nonExecutable = status.hookScripts.filter((s) => !s.executable);
-
 	return (
 		<Box flexDirection="column" marginBottom={1}>
 			<Box>
-				<StatusIcon ok={status.configured && nonExecutable.length === 0} required={false} />
+				<StatusIcon ok={status.configured} required={false} />
 				<Text> </Text>
 				<Text bold>Session Signal Hooks</Text>
 				<Text dimColor> - Surface session state in dashboard/tmux</Text>
@@ -724,24 +672,6 @@ function SessionSignalRow({ status }: { status: SessionSignalStatus }) {
 						{status.hint && <Text color="yellow">↳ {status.hint}</Text>}
 					</>
 				)}
-				{status.hooksDir && (
-					<Text dimColor>
-						Hook scripts:{" "}
-						{status.hookScripts.length > 0
-							? status.hookScripts.map((s) => s.name).join(", ")
-							: "none"}
-					</Text>
-				)}
-				{status.hooksDir && missingScripts.length > 0 && (
-					<Text color="yellow">
-						↳ Create in {status.hooksDir}: {missingScripts.join(", ")}
-					</Text>
-				)}
-				{nonExecutable.map((s) => (
-					<Text key={s.name} color="yellow">
-						↳ {s.name} is not executable. Run: chmod +x .santree/hooks/{s.name}
-					</Text>
-				))}
 			</Box>
 		</Box>
 	);
@@ -810,7 +740,7 @@ function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 
 export default function Doctor() {
 	const [tools, setTools] = useState<ToolStatus[]>([]);
-	const [linear, setLinear] = useState<LinearAuthCheckStatus | null>(null);
+	const [tracker, setTracker] = useState<TrackerCheckStatus | null>(null);
 	const [shellStatus, setShellStatus] = useState<{
 		configured: boolean;
 		shell: string | null;
@@ -875,17 +805,19 @@ export default function Doctor() {
 				}
 			}
 
-			// Optional: a syntax-highlighted diff pager — used by `st worktree diff`
+			// Optional: a syntax-highlighting diff pager — used by `st worktree diff`
 			// and the dashboard `v` overlay when SANTREE_DIFF_TOOL is set. Any
-			// pager works (delta, diff-so-fancy, …); without one set, git's
-			// default pager runs. Delta is the most popular choice so we check
-			// for it as a convenience, but it is never a hard dependency.
+			// diff pager works (delta, diff-so-fancy, …); without one set, the
+			// dashboard renders inline with santree's own colorizer and the CLI
+			// falls back to git's default pager. Delta is the most popular
+			// choice so we check for it as a convenience, but it is never a
+			// hard dependency.
 			const deltaCheck = await checkTool(
 				"delta",
-				"Recommended diff pager — any pager works",
+				"Recommended diff pager — any diff pager works",
 				false,
 				"delta --version | head -1",
-				"Optional — git's default pager works too. Set SANTREE_DIFF_TOOL or `git config core.pager <tool>`. To install delta: brew install git-delta",
+				"Optional — santree's built-in colorizer handles the dashboard overlay; the CLI falls back to git's default pager. Set SANTREE_DIFF_TOOL to override. To install delta: brew install git-delta",
 			);
 			results.push(deltaCheck);
 
@@ -913,11 +845,11 @@ export default function Doctor() {
 				});
 			}
 
-			const linearResult = await checkLinearAuth();
+			const trackerResult = await checkTrackerAuth();
 			const statuslineResult = await checkStatusline();
 
 			setTools(results);
-			setLinear(linearResult);
+			setTracker(trackerResult);
 			setShellStatus(checkShellIntegration());
 			setRemoteControl(checkRemoteControl());
 			setStatusline(statuslineResult);
@@ -942,8 +874,8 @@ export default function Doctor() {
 
 	const requiredMissing = tools.filter((t) => t.required && (!t.installed || t.hint));
 	const optionalMissing = tools.filter((t) => !t.required && !t.installed);
-	const linearOk = linear?.authenticated && linear?.tokenValid && linear?.repoLinked;
-	const allRequired = requiredMissing.length === 0 && linearOk && shellStatus?.configured;
+	const trackerOk = tracker?.authenticated && !tracker?.hint;
+	const allRequired = requiredMissing.length === 0 && trackerOk && shellStatus?.configured;
 
 	return (
 		<Box flexDirection="column" padding={1}>
@@ -970,7 +902,7 @@ export default function Doctor() {
 				</Text>
 			</Box>
 
-			{linear && <LinearRow linear={linear} />}
+			{tracker && <TrackerRow tracker={tracker} />}
 			{shellStatus && <ShellRow configured={shellStatus.configured} shell={shellStatus.shell} />}
 			{santreeSetup && <SantreeSetupRow status={santreeSetup} />}
 
@@ -995,7 +927,7 @@ export default function Doctor() {
 				) : (
 					<Box flexDirection="column">
 						<Text color="yellow">
-							{requiredMissing.length + (linearOk ? 0 : 1) + (shellStatus?.configured ? 0 : 1)}{" "}
+							{requiredMissing.length + (trackerOk ? 0 : 1) + (shellStatus?.configured ? 0 : 1)}{" "}
 							required item(s) need attention
 						</Text>
 						{optionalMissing.length > 0 && (

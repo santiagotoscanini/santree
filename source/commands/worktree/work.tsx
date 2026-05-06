@@ -179,7 +179,7 @@ export default function Work({ options }: Props) {
 						<Text color="cyan">
 							<Spinner type="dots" />
 						</Text>
-						<Text> Fetching ticket from Linear...</Text>
+						<Text> Fetching issue from tracker...</Text>
 					</Box>
 				)}
 				{status === "launching" && (

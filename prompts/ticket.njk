@@ -1,7 +1,7 @@
-## Linear Ticket: {{ identifier }}
+## {{ trackerName }} Issue: {{ identifier }}
 **{{ title }}**
-{% if url %}[View in Linear]({{ url }}){% endif %}
-{% if status %}Status: {{ status }}{% endif %}{% if priority %} | Priority: {{ priority }}{% endif %}{% if labels | length %} | Labels: {{ labels | join(", ") }}{% endif %}
+{% if url %}[View in {{ trackerName }}]({{ url }}){% endif %}
+{% if state and state.name %}Status: {{ state.name }}{% endif %}{% if priorityLabel %} | Priority: {{ priorityLabel }}{% endif %}{% if labels | length %} | Labels: {{ labels | join(", ") }}{% endif %}
 
 {% if description %}
 ### Description

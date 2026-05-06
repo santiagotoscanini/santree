@@ -2,16 +2,10 @@ import { execSync, spawn, spawnSync, type ChildProcess } from "child_process";
 import { existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir, tmpdir } from "os";
-import { getMultiplexer } from "./multiplexer/index.js";
-import {
-	getCurrentBranch,
-	extractTicketId,
-	findRepoRoot,
-	findMainRepoRoot,
-	getBaseBranch,
-} from "./git.js";
+import { getCurrentBranch, findRepoRoot, findMainRepoRoot, getBaseBranch } from "./git.js";
 import { renderPrompt, renderTicket, renderDiff, renderPR } from "./prompts.js";
-import { getTicketContent, cleanupImages, type LinearIssue } from "./linear.js";
+import { getIssueTracker } from "./trackers/index.js";
+import type { Issue } from "./trackers/types.js";
 import {
 	getPRInfoAsync,
 	getPRChecksAsync,
@@ -27,12 +21,14 @@ export interface AIContext {
 	mainRoot: string;
 	branch: string;
 	ticketId: string | null;
-	ticket: LinearIssue | null;
+	ticket: Issue | null;
+	trackerName: string;
+	issueNoun: string;
 }
 
 /**
- * Resolves repo, branch, ticket ID, and fetches the Linear ticket.
- * Returns an error string if any required context is missing.
+ * Resolves repo, branch, issue identifier, and fetches the issue from the
+ * active tracker (Linear or GitHub Issues — selected by repo config).
  */
 export async function resolveAIContext(): Promise<
 	{ ok: true; context: AIContext } | { ok: false; error: string }
@@ -47,21 +43,31 @@ export async function resolveAIContext(): Promise<
 		return { ok: false, error: "Could not determine current branch" };
 	}
 
-	const ticketId = extractTicketId(branch);
+	const mainRoot = findMainRepoRoot() ?? repoRoot;
+	const tracker = getIssueTracker(mainRoot);
+
+	const ticketId = tracker.extractIdFromBranch(branch);
 	if (!ticketId) {
 		return {
 			ok: false,
-			error:
-				"Could not extract ticket ID from branch name. Expected format: user/TEAM-123-description",
+			error: `Could not extract ${tracker.issueNoun} ID from branch name '${branch}'.`,
 		};
 	}
 
-	const mainRoot = findMainRepoRoot() ?? repoRoot;
-	const ticket = await getTicketContent(ticketId, mainRoot);
+	const result = await tracker.getIssue(ticketId, mainRoot);
+	const ticket = result.ok ? result.value : null;
 
 	return {
 		ok: true,
-		context: { repoRoot, mainRoot, branch, ticketId, ticket },
+		context: {
+			repoRoot,
+			mainRoot,
+			branch,
+			ticketId,
+			ticket,
+			trackerName: tracker.displayName,
+			issueNoun: tracker.issueNoun,
+		},
 	};
 }
 
@@ -74,7 +80,7 @@ export function buildPromptContext(
 ): Record<string, string | undefined> {
 	return {
 		ticket_id: ctx.ticketId ?? undefined,
-		ticket_content: ctx.ticket ? renderTicket(ctx.ticket) : undefined,
+		ticket_content: ctx.ticket ? renderTicket(ctx.ticket, ctx.trackerName) : undefined,
 		...extra,
 	};
 }
@@ -174,8 +180,10 @@ const CMUX_CLAUDE_PATH = "/Applications/cmux.app/Contents/Resources/bin/claude";
  */
 export function resolveClaudeBinary(): string | null {
 	// Inside cmux, the bundled binary is the only one wired to the active
-	// workspace. Always prefer it when present.
-	if (getMultiplexer().kind === "cmux" && existsSync(CMUX_CLAUDE_PATH)) {
+	// workspace. Gate on `CMUX_SURFACE_ID` (actual cmux runtime), not
+	// `SANTREE_MULTIPLEXER=cmux` — outside a live workspace the bundled
+	// binary has no auth context and exits with "Invalid API key".
+	if (process.env["CMUX_SURFACE_ID"] && existsSync(CMUX_CLAUDE_PATH)) {
 		return CMUX_CLAUDE_PATH;
 	}
 
@@ -294,6 +302,9 @@ export function runAgent(prompt: string, opts?: { allowedTools?: string[] }): Ru
 }
 
 /**
- * Cleanup images downloaded for a ticket.
+ * Clean up cached image downloads for an issue identifier on the active tracker.
  */
-export { cleanupImages };
+export function cleanupImages(ticketId: string): void {
+	const repoRoot = findMainRepoRoot();
+	getIssueTracker(repoRoot).cleanupCache(ticketId);
+}

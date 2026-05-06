@@ -33,7 +33,7 @@ import {
 } from "../../lib/github.js";
 import { renderPrompt, renderDiff, renderTicket } from "../../lib/prompts.js";
 import { runAgent } from "../../lib/ai.js";
-import { getTicketContent } from "../../lib/linear.js";
+import { getIssueTracker } from "../../lib/trackers/index.js";
 
 const execAsync = promisify(exec);
 
@@ -107,12 +107,14 @@ export default function PR({ options }: Props) {
 			const ticketId = extractTicketId(branch);
 			const mainRepoRoot = findMainRepoRoot();
 
-			// Fetch ticket content (downloads images for Linear tickets)
+			// Fetch issue content from the active tracker (downloads images
+			// inline so Claude can read them via --allowedTools Read).
 			let ticketContent: string | undefined;
 			if (ticketId && mainRepoRoot) {
-				const ticket = await getTicketContent(ticketId, mainRepoRoot);
-				if (ticket) {
-					ticketContent = renderTicket(ticket);
+				const tracker = getIssueTracker(mainRepoRoot);
+				const result = await tracker.getIssue(ticketId, mainRepoRoot);
+				if (result.ok) {
+					ticketContent = renderTicket(result.value, tracker.displayName);
 				}
 			}
 

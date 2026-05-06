@@ -4,6 +4,10 @@ import * as path from "path";
 import * as fs from "fs";
 import { run, runAsync, spawnAsync } from "./exec.js";
 import { getMultiplexer } from "./multiplexer/index.js";
+import { getSantreeDir, readAllMetadata, writeAllMetadata } from "./metadata.js";
+import { getIssueTracker } from "./trackers/index.js";
+
+export { getSantreeDir, readAllMetadata, writeAllMetadata } from "./metadata.js";
 
 const execAsync = promisify(exec);
 
@@ -130,13 +134,6 @@ export function listWorktrees(): Worktree[] {
 	}
 
 	return worktrees;
-}
-
-/**
- * Get the path to the .santree directory inside a repo root.
- */
-export function getSantreeDir(repoRoot: string): string {
-	return path.join(repoRoot, ".santree");
 }
 
 /**
@@ -283,16 +280,18 @@ export async function removeWorktree(
 }
 
 /**
- * Extract a ticket ID (e.g. "TEAM-123") from a branch name.
- * Matches the first occurrence of LETTERS-DIGITS in the string.
- * Returns null if no ticket ID pattern is found.
+ * Extract an issue identifier from a branch name. Delegates to the active
+ * issue tracker (Linear: `[A-Z]+-\d+`; GitHub: explicit-prefix numeric),
+ * resolving the tracker from the main repo's config.
+ *
+ * This is the single shim that frees every caller from having to know which
+ * tracker is active or how it formats IDs. Returns null when the active
+ * tracker doesn't recognize the branch's ID shape, or when no main repo can
+ * be resolved (e.g. before a worktree is created).
  */
 export function extractTicketId(branch: string): string | null {
-	const match = branch.match(/([a-zA-Z]+)-(\d+)/);
-	if (match) {
-		return `${match[1]!.toUpperCase()}-${match[2]}`;
-	}
-	return null;
+	const repoRoot = findMainRepoRoot();
+	return getIssueTracker(repoRoot).extractIdFromBranch(branch);
 }
 
 /**
@@ -314,68 +313,6 @@ export function getWorktreePath(branchName: string): string | null {
 	}
 
 	return null;
-}
-
-/**
- * Get path to centralized metadata file: .santree/metadata.json in the repo root.
- */
-function getMetadataFilePath(repoRoot: string): string {
-	return path.join(getSantreeDir(repoRoot), "metadata.json");
-}
-
-/**
- * Read all entries from .santree/metadata.json.
- * Returns an empty object if the file doesn't exist or can't be parsed.
- */
-export function readAllMetadata(repoRoot: string): Record<string, any> {
-	const filePath = getMetadataFilePath(repoRoot);
-	if (!fs.existsSync(filePath)) return {};
-	try {
-		return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-	} catch {
-		return {};
-	}
-}
-
-/**
- * Write all entries to .santree/metadata.json.
- */
-export function writeAllMetadata(repoRoot: string, data: Record<string, any>): void {
-	const filePath = getMetadataFilePath(repoRoot);
-	const dir = path.dirname(filePath);
-	if (!fs.existsSync(dir)) {
-		fs.mkdirSync(dir, { recursive: true });
-	}
-	fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
-}
-
-/**
- * Get the Linear org slug associated with this repo.
- * Stored as `_linear.org` in .santree/metadata.json.
- */
-export function getRepoLinearOrg(repoRoot: string): string | null {
-	const all = readAllMetadata(repoRoot);
-	return all._linear?.org ?? null;
-}
-
-/**
- * Associate a Linear org slug with this repo.
- * Stored as `_linear.org` in .santree/metadata.json.
- */
-export function setRepoLinearOrg(repoRoot: string, orgSlug: string): void {
-	const all = readAllMetadata(repoRoot);
-	all._linear = { org: orgSlug };
-	writeAllMetadata(repoRoot, all);
-}
-
-/**
- * Remove the Linear org association from this repo.
- * Deletes the `_linear` key from .santree/metadata.json.
- */
-export function removeRepoLinearOrg(repoRoot: string): void {
-	const all = readAllMetadata(repoRoot);
-	delete all._linear;
-	writeAllMetadata(repoRoot, all);
 }
 
 /**
@@ -521,8 +458,13 @@ export async function getCommitsAheadAsync(cwd: string, baseBranch: string): Pro
 }
 
 /**
- * Read the SANTREE_DIFF_TOOL env var, returning the configured pager command
- * (e.g. "delta", "diff-so-fancy") or null if unset/invalid.
+ * Read the SANTREE_DIFF_TOOL env var, returning the configured diff pager
+ * command (e.g. "delta", "diff-so-fancy") or null if unset/invalid.
+ *
+ * The CLI `worktree diff` flow lets the pager do its full job (render +
+ * scroll) via git's `core.pager`. The dashboard's `[v]` overlay only uses
+ * the rendering half — it captures the pager's stdout as a string and
+ * handles scrolling itself in Ink.
  *
  * The value is restricted to a safe shell-token character set since it ends
  * up in arguments passed to spawn() — even though we never use shell:true,

@@ -2,7 +2,7 @@ export type MultiplexerKind = "tmux" | "cmux" | "none";
 
 export type SessionResult =
 	| { ok: true }
-	| { ok: false; reason: "not-active" | "unsupported" | "failed"; message?: string };
+	| { ok: false; reason: "not-active" | "failed"; message?: string };
 
 export interface CreateWindowOpts {
 	name: string;

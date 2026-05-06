@@ -21,7 +21,7 @@ import {
 	type PRCheck,
 	type PRReview,
 } from "../github.js";
-import { fetchAssignedIssues } from "../linear.js";
+import { getIssueTracker } from "../trackers/index.js";
 import type { DashboardIssue, ProjectGroup, StatusGroup, EnrichedReviewPR } from "./types.js";
 
 export async function loadDashboardData(repoRoot: string): Promise<{
@@ -29,12 +29,19 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 	flatIssues: DashboardIssue[];
 }> {
 	// Fetch issues and worktrees in parallel
-	const [issues, worktrees] = await Promise.all([
-		fetchAssignedIssues(repoRoot),
+	const tracker = getIssueTracker(repoRoot);
+	const [listResult, worktrees] = await Promise.all([
+		tracker.listAssigned(repoRoot),
 		Promise.resolve(listWorktrees()),
 	]);
 
-	if (!issues) throw new Error("Failed to authenticate with Linear. Run: santree linear auth");
+	if (!listResult.ok) {
+		const status = await tracker.getAuthStatus(repoRoot);
+		throw new Error(
+			listResult.message ?? status.hint ?? `Failed to authenticate with ${tracker.displayName}`,
+		);
+	}
+	const issues = listResult.value;
 
 	// Build worktree map: ticketId -> worktree info
 	const wtMap = new Map<string, { path: string; branch: string }>();
@@ -129,11 +136,16 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					]);
 				}
 
-				// Derive a readable title from branch name: strip prefix and ticket ID
+				// Derive a readable title from branch name: strip prefix and the
+				// tracker-format ID literal (e.g. "TEAM-123-" or "123-"). The ID
+				// shape comes from the tracker's parser so this works for both
+				// Linear and GitHub branches.
+				const idLiteral = tid ? new RegExp(`^${tid}-?`) : null;
 				const titleFromBranch =
-					wt.branch
-						.replace(/^[^/]+\//, "") // strip prefix (e.g. "feature/")
-						.replace(/^[A-Z]+-\d+-?/, "") // strip ticket ID
+					(idLiteral
+						? wt.branch.replace(/^[^/]+\//, "").replace(idLiteral, "")
+						: wt.branch.replace(/^[^/]+\//, "")
+					)
 						.replace(/-/g, " ")
 						.trim() || tid;
 

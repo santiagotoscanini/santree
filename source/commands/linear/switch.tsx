@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Text, Box, useInput } from "ink";
 import Spinner from "ink-spinner";
-import { findMainRepoRoot, setRepoLinearOrg, getRepoLinearOrg } from "../../lib/git.js";
-import { readAuthStore } from "../../lib/linear.js";
+import { findMainRepoRoot } from "../../lib/git.js";
+import { setRepoLinearOrg, getRepoLinearOrg } from "../../lib/trackers/linear/index.js";
+import { readLinearAuthStore } from "../../lib/trackers/auth-store.js";
+import { setRepoTracker } from "../../lib/trackers/index.js";
 
 export const description = "Switch Linear workspace for this repo";
 
@@ -32,6 +34,7 @@ export default function LinearSwitch() {
 			const choice = choices[selected]!;
 			const repoRoot = findMainRepoRoot()!;
 			setRepoLinearOrg(repoRoot, choice.slug);
+			setRepoTracker(repoRoot, "linear");
 			setMessage(`Switched to ${choice.name} (${choice.slug})`);
 			setStatus("done");
 		}
@@ -48,7 +51,7 @@ export default function LinearSwitch() {
 				return;
 			}
 
-			const store = readAuthStore();
+			const store = readLinearAuthStore();
 			const orgs = Object.entries(store).map(([slug, tokens]) => ({
 				slug,
 				name: tokens.org_name,
@@ -63,6 +66,7 @@ export default function LinearSwitch() {
 			if (orgs.length === 1) {
 				const org = orgs[0]!;
 				setRepoLinearOrg(repoRoot, org.slug);
+				setRepoTracker(repoRoot, "linear");
 				setMessage(`Linked to ${org.name} (${org.slug})`);
 				setStatus("done");
 				return;

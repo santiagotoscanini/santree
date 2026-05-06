@@ -16,7 +16,7 @@
 
 <p align="center">
   Create, switch, and manage Git worktrees with ease.<br/>
-  Integrates with GitHub PRs and Linear tickets via Claude AI.
+  Integrates with GitHub PRs and pluggable issue trackers (Linear, GitHub Issues) via Claude AI.
 </p>
 
 ---
@@ -112,13 +112,29 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 | `santree pr fix`    | Fix PR review comments with AI        |
 | `santree pr review` | Review changes against ticket with AI |
 
-### Linear (`santree linear`)
+### Issue trackers
+
+Santree supports Linear and GitHub Issues behind a single interface. Each repo picks one. Use the generic `santree issue` commands for tracker-agnostic actions; use `santree linear` / `santree github` for backend-specific auth.
+
+#### Generic — `santree issue`
+
+| Command                                | Description                                                  |
+| -------------------------------------- | ------------------------------------------------------------ |
+| `santree issue switch <linear\|github>` | Pick the active tracker for this repo                        |
+| `santree issue open`                   | Open the current branch's issue in the browser               |
+
+#### Linear (`santree linear`)
 
 | Command                 | Description                                   |
 | ----------------------- | --------------------------------------------- |
 | `santree linear auth`   | Authenticate with Linear (OAuth)              |
 | `santree linear switch` | Switch Linear workspace for this repo         |
-| `santree linear open`   | Open the current Linear ticket in the browser |
+
+#### GitHub Issues (`santree github`)
+
+| Command               | Description                                                            |
+| --------------------- | ---------------------------------------------------------------------- |
+| `santree github auth` | Verify `gh auth status`, run `gh auth login` if needed, set tracker=github |
 
 ### Helpers (`santree helpers`)
 
@@ -137,16 +153,75 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 
 | Command             | Description                                     |
 | ------------------- | ----------------------------------------------- |
-| `santree dashboard` | Interactive dashboard of all your Linear issues |
+| `santree dashboard` | Interactive dashboard of all your assigned issues |
 | `santree doctor`    | Check system requirements and integrations      |
 
 ---
 
 ## Features
 
+### Workflow
+
+End-to-end flow, from picking an issue to merging the PR. Everything runs inside the terminal multiplexer; the dashboard orchestrates and the AI agent does the heavy lifting at two distinct stages.
+
+```mermaid
+flowchart TB
+    subgraph Term["Terminal · tmux / cmux"]
+        direction TB
+        Dashboard(["① Dashboard<br/>pick issue · add context"]):::action
+        Editor["Editor<br/><sub>zed · cursor · vscode · nvim · jetbrains</sub>"]:::tool
+        AI(("② / ⑤ AI agent<br/>Claude Code")):::agent
+        Pager["③ Diff pager<br/><sub>delta · diff-so-fancy · built-in</sub>"]:::tool
+        Decision{good?}:::decision
+        Ship(["④ git commit + PR"]):::action
+        GitHub[("GitHub<br/>PRs · CI")]:::external
+
+        Dashboard ==>|implement| AI
+        Dashboard -. write context .-> Editor
+        Editor -. context · hand-edit .-> AI
+        AI ==> Pager
+        Pager ==> Decision
+        Decision -->|hand-edit| Editor
+        Decision -->|resume| AI
+        Decision ==>|ship| Ship
+        Ship ==> GitHub
+        GitHub -->|reviews · CI| AI
+        AI -->|push fix| Ship
+    end
+
+    classDef action fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a
+    classDef tool fill:#f3f4f6,stroke:#9ca3af,color:#374151
+    classDef agent fill:#ede9fe,stroke:#8b5cf6,stroke-width:2px,color:#4c1d95
+    classDef external fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#78350f
+    classDef decision fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#7f1d1d
+```
+
+Bold edges (`==>`) follow the happy path; thin edges (`-->`) are branches/loops; dotted edges (`-.->`) are optional editor side-trips. Colors group nodes by role: blue actions, purple agent, gray tools, yellow external service, red decision.
+
+**Stages, in order:**
+
+1. **Pick + add context** — open the dashboard, browse assigned issues, pick one. The inline context box lets you add custom instructions to the prompt; `Ctrl+O` drops into your editor for longer prose.
+2. **AI agent (Claude)** — runs in the worktree's mux window with the rendered ticket + your context. Implements or plans.
+3. **Diff pager (review)** — `[v]` opens the diff overlay. From here you iterate: hand-edit in your editor, or resume the Claude session to keep going.
+4. **Ship** — once the diff looks right, `[C]` for inline commit + push, then `[c]` to create the PR (`--fill` runs Claude non-interactively against the PR template).
+5. **PR feedback loop** — `[f]` (fix) and `[r]` (self-review) re-launch the AI with PR comments + CI failures as input. Patches are pushed; CI re-runs; loop until merged.
+
+**Supported tools per stage:**
+
+| Stage | Supported today | Planned |
+|---|---|---|
+| **Issue tracker** (① Dashboard) | Linear, GitHub Issues | Jira, Shortcut, etc. |
+| **AI agent** (②, ⑤) | Claude Code (`claude` CLI) | OpenAI Codex, OpenCode, Cursor agent |
+| **Diff pager** (③) | delta, diff-so-fancy, any unified-diff pager — built-in colorizer when none set | — |
+| **Editor** (side branch) | Anything taking a path: zed, nvim, jetbrains, cursor, vscode. cursor + vscode also handle `.code-workspace` files via `[E]` workspace shortcut | — |
+| **Forge** (④) | GitHub via `gh` CLI | GitLab, Bitbucket, Gitea |
+| **Terminal multiplexer** (outer frame) | tmux, cmux *(macOS-only — see [#1472](https://github.com/manaflow-ai/cmux/issues/1472))*, none | zellij |
+
+The AI agent and issue tracker are already behind interfaces (`lib/trackers/`, plus the `claude` CLI shim in `lib/ai.ts`). Adding a new option in either category means writing one new module and wiring it into the factory — no changes to UI/dashboard code.
+
 ### Interactive Dashboard
 
-`santree dashboard` opens a full-screen TUI to manage all your work in one place. It shows your Linear issues grouped by project, with live status for worktrees, PRs, CI checks, and reviews.
+`santree dashboard` opens a full-screen TUI to manage all your work in one place. It shows your assigned issues from the active tracker (Linear or GitHub Issues) grouped by project, with live status for worktrees, PRs, CI checks, and reviews.
 
 **Left pane** — issue list. Issues without worktrees show as a single row (priority + ID + title). Issues with worktrees expand into nested sub-rows below the title showing `· diff` (files/adds/deletes/commits-ahead), `· pr` (number, state, CI, review count), and `· session` (state + Claude session ID). Click any row (main or sub) to select; scroll wheel navigates; drag the divider to resize panes.
 
@@ -162,7 +237,7 @@ With the `stw` alias: `stw create`, `stw list`, `stw switch`, `stw work`, `stw c
 | `c` | Create PR (fill from commits or open in browser) |
 | `v` | Inline diff overlay — file tree + diff content (mouse + keyboard) |
 | `f` / `r` | Fix PR / Review PR (launches in tmux) |
-| `o` / `p` | Open Linear ticket / PR in browser |
+| `o` / `p` | Open issue (in Linear or GitHub) / PR in browser |
 | `d` | Remove worktree |
 
 Commit, PR creation, and diff review happen inline without leaving the dashboard. Work, fix, and review open in new tmux windows.
@@ -177,9 +252,9 @@ Create isolated worktrees for each feature branch. No more stashing or committin
 
 See PR status directly in your worktree list. Clean up worktrees automatically when PRs are merged or closed.
 
-### Linear Integration
+### Issue Tracker Integration
 
-Santree fetches Linear ticket data (title, description, comments, images) and injects it into prompts when running `santree worktree work`. See [Linear Integration](#linear-integration-1) for setup.
+Santree fetches issue data (title, description, comments, images) from the active tracker — Linear or GitHub Issues — and injects it into prompts when running `santree worktree work`. See [Issue Tracker Integration](#issue-tracker-integration-1) for setup.
 
 ### Claude AI Integration
 
@@ -210,16 +285,46 @@ npm install
 
 ### Branch Naming
 
-For Linear integration, use branch names with ticket IDs:
+Branch names need to encode the issue ID so santree can link the worktree back to the right ticket. The accepted format depends on the active tracker:
 
 ```
+# Linear (uppercased letter prefix + dash + digits)
 user/TEAM-123-feature-description
 feature/PROJ-456-add-auth
+
+# GitHub Issues (explicit prefix required, to avoid `fix-typo-1` matching)
+feature/issue-42-add-auth
+gh-42-add-auth
+42-add-auth
 ```
 
-### Linear Integration
+GitHub's parser is strict on purpose: a commit-style branch like `fix-typo-1` will *not* match (no explicit prefix, no slash-led number).
 
-Santree fetches Linear ticket data (title, description, comments, images) and injects it into prompts when running `santree worktree work`.
+### Issue Tracker Integration
+
+Each repo picks one tracker. The active tracker is resolved in this order: `SANTREE_TRACKER` env var → per-repo `_tracker.kind` (in `.santree/metadata.json`) → legacy `_linear.org` (treated as Linear) → auto-detect (any Linear creds → Linear, else GitHub).
+
+#### Choosing a tracker
+
+```bash
+# Explicitly pick the active tracker for this repo
+santree issue switch linear
+santree issue switch github
+
+# Or let an auth command set it as a side effect:
+santree linear auth        # Sets _tracker.kind = "linear" after OAuth
+santree github auth        # Sets _tracker.kind = "github" after `gh auth login`
+```
+
+For a one-off override (testing, scripting):
+
+```bash
+SANTREE_TRACKER=github santree dashboard
+```
+
+#### Linear
+
+Santree fetches Linear ticket data via the GraphQL API (OAuth PKCE).
 
 ```bash
 # Authenticate with Linear (opens browser for OAuth)
@@ -233,11 +338,25 @@ santree linear auth --test TEAM-123
 
 # Log out
 santree linear auth --logout
+
+# Switch between authenticated workspaces
+santree linear switch
 ```
 
 On first run, `santree linear auth` opens your browser to authorize the app with your Linear workspace. Tokens are stored in `$XDG_CONFIG_HOME/santree/auth.json` (defaults to `~/.config/santree/auth.json`) and auto-refresh transparently.
 
 If you have multiple workspaces authenticated, running `santree linear auth` in a new repo will let you pick which one to link. Images from tickets are downloaded to a temp directory and cleaned up after Claude exits.
+
+#### GitHub Issues
+
+Santree uses the existing `gh` CLI — no separate OAuth flow.
+
+```bash
+# Verify gh is authenticated; flips this repo's tracker to GitHub
+santree github auth
+```
+
+Issues are listed via `gh search issues --assignee=@me --state=open --repo <owner>/<name>` (current repo only — cross-repo issues aren't surfaced today). Priority is derived from labels matching `P0`/`P1`/`P2`/`P3`/`urgent`/`critical`/`high`/`medium`/`low`, falling back to `No priority`. Attached images on `user-images.githubusercontent.com` and `github.com/.../assets/` are downloaded so Claude can read them when filling PR templates.
 
 ### Claude Code Statusline (Optional)
 
@@ -286,45 +405,11 @@ To preview the JSON without writing: `santree helpers session-signal install --d
 
 Verify with `santree doctor` — look for the "Session Signal Hooks" row under Claude Code.
 
-### Session Hooks (Optional)
-
-Run custom scripts when Claude's session state changes. Create executable scripts in `.santree/hooks/`:
-
-```
-.santree/hooks/
-  on-waiting.sh    # Runs when session needs permission approval
-  on-active.sh     # Runs when user submits a new prompt
-  on-idle.sh       # Runs when session finishes and waits for next prompt
-  on-exited.sh     # Runs when session ends
-```
-
-Each script receives these environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `SANTREE_TICKET_ID` | e.g. `TEAM-123` |
-| `SANTREE_SESSION_STATE` | `waiting`, `active`, `idle`, or `exited` |
-| `SANTREE_SESSION_ID` | The Claude session ID |
-| `SANTREE_WORKTREE_PATH` | Absolute path to the worktree |
-| `SANTREE_REPO_ROOT` | Absolute path to the main repo |
-| `SANTREE_MESSAGE` | Notification message (only for `waiting`) |
-
-Scripts are optional — only executed if they exist and are executable. They run fire-and-forget with a 5-second timeout.
-
-**Example** — log when Claude is waiting for approval:
-
-```bash
-#!/bin/bash
-# .santree/hooks/on-waiting.sh
-echo "$(date): $SANTREE_TICKET_ID waiting — $SANTREE_MESSAGE" >> /tmp/santree-hooks.log
-```
-
-Make it executable: `chmod +x .santree/hooks/on-waiting.sh`
-
 ### Environment Variables
 
 | Variable | Effect |
 |---|---|
+| `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, falls back to repo config → legacy `_linear.org` → auto-detect. |
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. Examples: `cursor`, `zed`, `code`, `nvim`. |
 | `SANTREE_MULTIPLEXER` | Terminal multiplexer used by the dashboard and `worktree create --window`. One of `tmux`, `cmux`, `none`. If unset, auto-detects from `$TMUX` / `$CMUX_SURFACE_ID`. cmux is macOS-only and limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472). |
 | `SANTREE_DIFF_TOOL` | Pager used by `worktree diff` (CLI) and the dashboard diff overlay. Passed to git as `-c core.pager=<tool>` for the CLI, and used to pipe content for the overlay. Examples: `delta`, `diff-so-fancy`. Must accept a unified diff on stdin. Names are restricted to `[A-Za-z0-9_\-/.+]`. |
@@ -384,7 +469,7 @@ Shows a branch-only unified diff against the base branch's merge-base — same s
 | -------- | ------------------------------- |
 | `--plan` | Only create implementation plan |
 
-Automatically fetches Linear ticket data if authenticated. Degrades gracefully if not.
+Automatically fetches issue data from the active tracker (Linear or GitHub Issues) if authenticated. Degrades gracefully if not.
 
 ### pr create
 
@@ -426,16 +511,16 @@ Santree currently locks in to specific providers for some integrations and is in
 
 | Area | Supported | Not yet supported |
 | --- | --- | --- |
-| **Ticket system** | Linear (via `santree linear auth`) | Jira, GitHub Issues, Shortcut, Asana, Linear-equivalents |
 | **Source control / forge** | GitHub (via `gh` CLI) | GitLab, Bitbucket, Gitea, Codeberg, self-hosted Forgejo |
 | **Coding agent** | Claude Code (`claude` CLI) | OpenAI Codex, OpenCode, Cursor agent, Aider, others |
 
-These are hardwired in `lib/linear.ts`, `lib/github.ts`, and `lib/ai.ts` respectively. Adding a second provider means abstracting an interface (similar to `lib/multiplexer/`) and wiring a selection mechanism.
+These are hardwired in `lib/github.ts` and `lib/ai.ts` respectively. Adding a second provider means abstracting an interface (similar to `lib/trackers/` or `lib/multiplexer/`) and wiring a selection mechanism.
 
 ### Multi-provider (already interchangeable)
 
 | Area | How to switch | Examples |
 | --- | --- | --- |
+| **Issue tracker** | `santree issue switch <linear\|github>` (or `SANTREE_TRACKER` env var, or as a side effect of `santree linear auth` / `santree github auth`) | Linear (OAuth + GraphQL), GitHub Issues (via `gh` CLI). Adding a third tracker = one new directory under `lib/trackers/`. |
 | **Editor** | `SANTREE_EDITOR` env var (or `--editor` flag on `worktree open`) | `code`, `cursor`, `zed`, `nvim`, `subl`, `webstorm` — any executable that takes a path argument |
 | **Terminal multiplexer** | `SANTREE_MULTIPLEXER` env var | `tmux` (default, all platforms), `cmux` (macOS only — see [#1472](https://github.com/manaflow-ai/cmux/issues/1472)), `none`. Zellij is planned but not implemented. |
 | **Diff renderer** | `SANTREE_DIFF_TOOL` env var | `delta`, `diff-so-fancy`, or any pager that accepts a unified diff. Falls back to plain `git diff` colorization when unset. |
@@ -502,11 +587,17 @@ source/
 ├── cli.tsx              # Entry point (Pastel app runner)
 ├── lib/
 │   ├── ai.ts            # Shared AI logic (context, prompt, launch)
-│   ├── git.ts           # Git helpers (worktrees, branches, metadata)
+│   ├── git.ts           # Git helpers (worktrees, branches); extractTicketId is a tracker shim
 │   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push, checks, reviews)
-│   ├── linear.ts        # Linear GraphQL API client (OAuth, tickets, images)
 │   ├── exec.ts          # Shell command helpers
+│   ├── metadata.ts      # .santree/metadata.json r/w (extracted to break import cycles)
 │   ├── prompts.ts       # Nunjucks template renderer
+│   ├── trackers/        # Issue tracker abstraction (Linear, GitHub Issues)
+│   │   ├── types.ts     # IssueTracker interface + generic Issue/AssignedIssue types
+│   │   ├── index.ts     # getIssueTracker(repoRoot) factory
+│   │   ├── linear/      # OAuth PKCE + GraphQL + image rewriter
+│   │   └── github/      # `gh` CLI wrappers; priority derived from labels
+│   ├── multiplexer/     # tmux/cmux/none abstraction (windows/sessions)
 │   └── dashboard/       # Dashboard UI components
 │       ├── types.ts     # State types, action types, phase enums
 │       ├── IssueList.tsx # Left pane — issue list with priority, session, PR, CI columns
@@ -516,7 +607,9 @@ source/
     ├── dashboard.tsx     # Top-level: interactive dashboard
     ├── worktree/         # Worktree management (create, list, switch, etc.)
     ├── pr/               # PR lifecycle (create, open, fix, review)
-    ├── linear/           # Linear integration (auth, open)
+    ├── linear/           # Linear-specific OAuth (auth, switch)
+    ├── github/           # GitHub-specific auth (gh wrapper)
+    ├── issue/            # Tracker-agnostic actions (switch, open)
     └── helpers/          # Shell init, statusline
 prompts/                 # Nunjucks templates: implement, plan, review, fix-pr, fill-pr, ticket
 shell/                   # Shell integration templates: init.zsh.njk, init.bash.njk

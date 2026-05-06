@@ -91,7 +91,7 @@ export const cmuxMultiplexer: Multiplexer = {
 		// follow-up sends to an existing workspace, which doesn't.
 		return {
 			ok: false,
-			reason: "unsupported",
+			reason: "failed",
 			message: "blocked by manaflow-ai/cmux#1472",
 		};
 	},

@@ -3,16 +3,16 @@ import { Text, Box } from "ink";
 import Spinner from "ink-spinner";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { findMainRepoRoot, getCurrentBranch, extractTicketId } from "../../lib/git.js";
-import { getTicketContent } from "../../lib/linear.js";
+import { findMainRepoRoot, getCurrentBranch } from "../../lib/git.js";
+import { getIssueTracker } from "../../lib/trackers/index.js";
 
 const execAsync = promisify(exec);
 
-export const description = "Open the current Linear ticket in the browser";
+export const description = "Open the current branch's issue in the browser";
 
 type Status = "checking" | "done" | "error";
 
-export default function LinearOpen() {
+export default function IssueOpen() {
 	const [status, setStatus] = useState<Status>("checking");
 	const [message, setMessage] = useState("");
 
@@ -34,18 +34,20 @@ export default function LinearOpen() {
 				return;
 			}
 
-			const ticketId = extractTicketId(branch);
+			const tracker = getIssueTracker(repoRoot);
+			const ticketId = tracker.extractIdFromBranch(branch);
 			if (!ticketId) {
 				setStatus("error");
-				setMessage("No ticket ID found in branch name (expected pattern like TEAM-123)");
+				setMessage(`No ${tracker.issueNoun} ID found in branch '${branch}'`);
 				return;
 			}
 
-			const issue = await getTicketContent(ticketId, repoRoot);
-			if (!issue?.url) {
+			const result = await tracker.getIssue(ticketId, repoRoot);
+			if (!result.ok || !result.value.url) {
+				const auth = await tracker.getAuthStatus(repoRoot);
 				setStatus("error");
 				setMessage(
-					`Could not fetch ticket ${ticketId}. Check auth with: santree linear auth --status`,
+					`Could not fetch ${tracker.issueNoun} ${ticketId}.${auth.hint ? ` ${auth.hint}` : ""}`,
 				);
 				return;
 			}
@@ -57,7 +59,7 @@ export default function LinearOpen() {
 						: process.platform === "win32"
 							? "start"
 							: "xdg-open";
-				await execAsync(`${openCmd} "${issue.url}"`);
+				await execAsync(`${openCmd} "${result.value.url}"`);
 				setStatus("done");
 				setMessage(`Opened ${ticketId} in browser`);
 			} catch {
@@ -83,7 +85,7 @@ export default function LinearOpen() {
 					<Text color="cyan">
 						<Spinner type="dots" />
 					</Text>
-					<Text> Opening Linear ticket...</Text>
+					<Text> Opening issue...</Text>
 				</Box>
 			)}
 			{status === "done" && (

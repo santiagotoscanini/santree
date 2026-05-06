@@ -2,19 +2,17 @@ import { useEffect, useState } from "react";
 import { Text, Box, useInput } from "ink";
 import Spinner from "ink-spinner";
 import { z } from "zod";
+import { findMainRepoRoot } from "../../lib/git.js";
 import {
-	findMainRepoRoot,
 	setRepoLinearOrg,
 	getRepoLinearOrg,
 	removeRepoLinearOrg,
-} from "../../lib/git.js";
-import {
 	startOAuthFlow,
-	getAuthStatus,
 	getValidTokens,
-	getTicketContent,
-	readAuthStore,
-} from "../../lib/linear.js";
+	linearTracker,
+} from "../../lib/trackers/linear/index.js";
+import { readLinearAuthStore } from "../../lib/trackers/auth-store.js";
+import { setRepoTracker } from "../../lib/trackers/index.js";
 import { renderTicket } from "../../lib/prompts.js";
 
 export const description = "Authenticate with Linear";
@@ -71,6 +69,7 @@ export default function LinearAuth({ options }: Props) {
 					return;
 				}
 				setRepoLinearOrg(repoRoot, result.orgSlug);
+				setRepoTracker(repoRoot, "linear");
 				setMessage(`Authenticated as ${result.orgName} (${result.orgSlug})`);
 				setStatus("done");
 			});
@@ -80,6 +79,7 @@ export default function LinearAuth({ options }: Props) {
 		// Link existing org
 		const choice = choices[selected]!;
 		setRepoLinearOrg(repoRoot, choice.slug);
+		setRepoTracker(repoRoot, "linear");
 		setMessage(`Linked repo to ${choice.name} (${choice.slug})`);
 		setStatus("done");
 	}
@@ -96,21 +96,21 @@ export default function LinearAuth({ options }: Props) {
 					return;
 				}
 
-				const issue = await getTicketContent(options.test, repoRoot);
-				if (!issue) {
+				const result = await linearTracker.getIssue(options.test, repoRoot);
+				if (!result.ok) {
 					setError(`Could not fetch ticket ${options.test}. Check auth and ticket ID.`);
 					setStatus("error");
 					return;
 				}
 
-				setMessage(renderTicket(issue).trim());
+				setMessage(renderTicket(result.value, linearTracker.displayName).trim());
 				setStatus("done");
 				return;
 			}
 
 			if (options.status) {
 				const repoRoot = findMainRepoRoot();
-				const authStatus = getAuthStatus(repoRoot);
+				const authStatus = await linearTracker.getAuthStatus(repoRoot);
 
 				if (!authStatus.authenticated) {
 					setMessage("Not authenticated with Linear");
@@ -118,16 +118,23 @@ export default function LinearAuth({ options }: Props) {
 					return;
 				}
 
-				if (authStatus.orgSlug) {
-					const valid = await getValidTokens(authStatus.orgSlug);
+				const orgSlug = repoRoot ? getRepoLinearOrg(repoRoot) : null;
+				if (orgSlug) {
+					const valid = await getValidTokens(orgSlug);
 					const expiry = valid
 						? new Date(valid.expires_at).toLocaleString()
 						: "expired (refresh failed)";
-
 					setMessage(
 						[
-							`Organization: ${authStatus.orgName} (${authStatus.orgSlug})`,
+							`Account: ${authStatus.accountLabel ?? orgSlug}`,
 							`Token expires: ${expiry}`,
+							`Repo linked: ${authStatus.repoLinked ? "yes" : "no"}`,
+						].join("\n"),
+					);
+				} else {
+					setMessage(
+						[
+							`Account: ${authStatus.accountLabel ?? "unknown"}`,
 							`Repo linked: ${authStatus.repoLinked ? "yes" : "no"}`,
 						].join("\n"),
 					);
@@ -184,13 +191,14 @@ export default function LinearAuth({ options }: Props) {
 					return;
 				}
 				setRepoLinearOrg(repoRoot, result.orgSlug);
+				setRepoTracker(repoRoot, "linear");
 				setMessage(`Re-authenticated as ${result.orgName} (${result.orgSlug})`);
 				setStatus("done");
 				return;
 			}
 
 			// Check for existing authenticated orgs
-			const store = readAuthStore();
+			const store = readLinearAuthStore();
 			const orgs = Object.entries(store).map(([slug, tokens]) => ({
 				slug,
 				name: tokens.org_name,
@@ -206,6 +214,7 @@ export default function LinearAuth({ options }: Props) {
 					return;
 				}
 				setRepoLinearOrg(repoRoot, result.orgSlug);
+				setRepoTracker(repoRoot, "linear");
 				setMessage(`Authenticated as ${result.orgName} (${result.orgSlug})`);
 				setStatus("done");
 				return;

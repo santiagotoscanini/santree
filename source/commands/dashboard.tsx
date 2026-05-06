@@ -767,21 +767,21 @@ export default function Dashboard() {
 	}, [state.reviewSelectedIndex, state.flatReviews, contentHeight, state.reviewListScrollOffset]);
 
 	// ── Mouse tracking pause ─────────────────────────────────────────
-	// The MultilineTextArea captures ESC for cancel. With SGR mouse tracking on,
-	// every click emits `\x1b[<btn;col;rowM` — Ink reads the leading ESC and fires
-	// key.escape, dismissing the overlay. Disable tracking while any overlay
-	// phase mounts a MultilineTextArea (context-input editing OR pr-create
-	// review); restore when that phase ends.
+	// With SGR mouse tracking on, every click emits `\x1b[<btn;col;rowM` —
+	// these escape sequences leak into text inputs as garbage characters
+	// (and into MultilineTextArea, the leading ESC fires key.escape).
+	// Disable tracking while any text-input overlay is mounted; restore on exit.
 	useEffect(() => {
 		const needsMouseOff =
-			(state.overlay === "context-input" && state.contextInputPhase === "editing") ||
-			(state.overlay === "pr-create" && state.prCreatePhase === "review");
+			state.overlay === "context-input" ||
+			(state.overlay === "pr-create" && state.prCreatePhase === "review") ||
+			(state.overlay === "commit" && state.commitPhase === "awaiting-message");
 		if (!needsMouseOff) return;
 		process.stdout.write("\x1b[?1002l\x1b[?1006l");
 		return () => {
 			process.stdout.write("\x1b[?1002h\x1b[?1006h");
 		};
-	}, [state.overlay, state.contextInputPhase, state.prCreatePhase]);
+	}, [state.overlay, state.prCreatePhase, state.commitPhase]);
 
 	// ── Diff overlay: load file list when opened ──────────────────────
 	// Resolves merge-base against the configured base branch so upstream-only
@@ -1621,28 +1621,10 @@ export default function Dashboard() {
 				return;
 			}
 
-			// Context-input overlay.
-			// Editing phase: MultilineTextArea owns useInput (outer is disabled
-			// via isActive below).
-			// Review phase: outer handles y/n/e/ESC.
+			// Context-input overlay: MultilineTextArea owns useInput (outer is
+			// disabled via isActive below). Submit launches directly; cancel
+			// closes the overlay.
 			if (state.overlay === "context-input") {
-				if (state.contextInputPhase === "review") {
-					if (input === "y" || key.return) {
-						const mode = state.contextInputMode;
-						const ctx = state.contextInputValue;
-						dispatch({ type: "CONTEXT_INPUT_DONE" });
-						if (mode) doWork(mode, ctx);
-						return;
-					}
-					if (input === "n" || input === "e") {
-						dispatch({ type: "CONTEXT_INPUT_EDIT" });
-						return;
-					}
-					if (key.escape) {
-						dispatch({ type: "CONTEXT_INPUT_DONE" });
-						return;
-					}
-				}
 				return;
 			}
 
@@ -2353,7 +2335,7 @@ export default function Dashboard() {
 		},
 		{
 			isActive:
-				(state.overlay !== "context-input" || state.contextInputPhase === "review") &&
+				state.overlay !== "context-input" &&
 				(state.overlay !== "pr-create" || state.prCreatePhase !== "review") &&
 				(state.overlay !== "commit" || state.commitPhase !== "awaiting-message"),
 		},
@@ -2482,81 +2464,35 @@ export default function Dashboard() {
 							</Text>
 							<Text dimColor>Optional — appended to the prompt before launching Claude</Text>
 							<Text> </Text>
-							{state.contextInputPhase === "editing" ? (
-								<>
-									<MultilineTextArea
-										value={state.contextInputValue}
-										onChange={(v) => dispatch({ type: "CONTEXT_INPUT_CHANGE", value: v })}
-										onSubmit={() => dispatch({ type: "CONTEXT_INPUT_REVIEW" })}
-										onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
-										width={Math.min(columns - 8, 100)}
-										height={10}
-										placeholder="Type or paste extra context…"
-									/>
-									<Text> </Text>
-									<Text dimColor>
-										<Text color="cyan" bold>
-											Ctrl+D
-										</Text>
-										{" send  ·  "}
-										<Text color="cyan" bold>
-											Ctrl+O
-										</Text>
-										{" editor  ·  "}
-										<Text color="cyan" bold>
-											Ctrl+C
-										</Text>
-										{" cancel"}
-									</Text>
-								</>
-							) : (
-								<>
-									<Box
-										flexDirection="column"
-										borderStyle="round"
-										borderColor="green"
-										paddingX={1}
-										minHeight={6}
-									>
-										{(state.contextInputValue || "(no extra context)")
-											.split("\n")
-											.slice(0, 12)
-											.map((line, i) => (
-												<Text key={i}>{line || " "}</Text>
-											))}
-										{state.contextInputValue.split("\n").length > 12 && (
-											<Text dimColor>
-												…+{state.contextInputValue.split("\n").length - 12} more lines
-											</Text>
-										)}
-									</Box>
-									<Text> </Text>
-									<Text bold>Anything else to add?</Text>
-									<Text> </Text>
-									<Text>
-										<Text color="green" bold>
-											y
-										</Text>
-										{" / "}
-										<Text color="green" bold>
-											Enter
-										</Text>
-										{"  launch   "}
-										<Text color="yellow" bold>
-											n
-										</Text>
-										{" / "}
-										<Text color="yellow" bold>
-											e
-										</Text>
-										{"  keep editing   "}
-										<Text color="red" bold>
-											ESC
-										</Text>
-										{"  cancel"}
-									</Text>
-								</>
-							)}
+							<MultilineTextArea
+								value={state.contextInputValue}
+								onChange={(v) => dispatch({ type: "CONTEXT_INPUT_CHANGE", value: v })}
+								onSubmit={() => {
+									const mode = state.contextInputMode;
+									const ctx = state.contextInputValue;
+									dispatch({ type: "CONTEXT_INPUT_DONE" });
+									if (mode) doWork(mode, ctx);
+								}}
+								onCancel={() => dispatch({ type: "CONTEXT_INPUT_DONE" })}
+								width={Math.min(columns - 8, 100)}
+								height={10}
+								placeholder="Type or paste extra context…"
+							/>
+							<Text> </Text>
+							<Text dimColor>
+								<Text color="cyan" bold>
+									Ctrl+D
+								</Text>
+								{" launch  ·  "}
+								<Text color="cyan" bold>
+									Ctrl+O
+								</Text>
+								{" editor  ·  "}
+								<Text color="cyan" bold>
+									Ctrl+G
+								</Text>
+								{" cancel"}
+							</Text>
 						</Box>
 					</Box>
 				) : state.overlay === "base-select" ? (

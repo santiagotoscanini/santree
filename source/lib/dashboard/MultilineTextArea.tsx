@@ -199,24 +199,15 @@ export function MultilineTextArea({
 				return;
 			}
 
-			// Ctrl+C: cancel (preferred over Esc — vim users rely on Esc muscle memory)
-			if (key.ctrl && input === "c") {
-				onCancel();
-				return;
-			}
-
 			// Ctrl+O: escalate to $SANTREE_EDITOR / $VISUAL / $EDITOR. On save+close
-			// the buffer is replaced and the form is auto-submitted (matches git commit).
+			// the buffer is replaced and control returns to the textbox so the
+			// user can keep editing or submit with Ctrl+D.
 			if (key.ctrl && input === "o") {
 				const result = editExternally(value, "md");
 				if (!result.ok) return;
-				if (result.cancelled) {
-					onCancel();
-					return;
-				}
+				if (result.cancelled) return;
 				onChange(result.content);
 				setCursor(result.content.length);
-				onSubmit();
 				return;
 			}
 
@@ -224,6 +215,14 @@ export function MultilineTextArea({
 			if (key.ctrl && input === "v") {
 				const imagePath = pasteClipboardImageToTmp();
 				if (imagePath) insertAt(cursor, `![pasted image](${imagePath})`);
+				return;
+			}
+
+			// Ctrl+G: cancel (Emacs abort). Ctrl+C can't be used because Ink's
+			// exitOnCtrlC fires at the app level before useInput sees it, exiting
+			// the dashboard. Esc is reserved for vim muscle memory (swallowed).
+			if (key.ctrl && input === "g") {
+				onCancel();
 				return;
 			}
 

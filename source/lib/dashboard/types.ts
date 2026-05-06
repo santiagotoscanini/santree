@@ -141,7 +141,6 @@ export interface DashboardState {
 	baseSelectChosen: string | null;
 	contextInputValue: string;
 	contextInputMode: "plan" | "implement" | null;
-	contextInputPhase: "editing" | "review";
 	// Diff overlay
 	diffTicketId: string | null;
 	diffWorktreePath: string | null;
@@ -213,8 +212,6 @@ export type DashboardAction =
 	| { type: "REVIEW_SCROLL_DETAIL"; offset: number }
 	| { type: "CONTEXT_INPUT_SHOW"; mode: "plan" | "implement" }
 	| { type: "CONTEXT_INPUT_CHANGE"; value: string }
-	| { type: "CONTEXT_INPUT_REVIEW" }
-	| { type: "CONTEXT_INPUT_EDIT" }
 	| { type: "CONTEXT_INPUT_DONE" }
 	| {
 			type: "DIFF_OPEN";
@@ -281,7 +278,6 @@ export const initialState: DashboardState = {
 	baseSelectChosen: null,
 	contextInputValue: "",
 	contextInputMode: null,
-	contextInputPhase: "editing",
 	diffTicketId: null,
 	diffWorktreePath: null,
 	diffBaseBranch: null,
@@ -511,21 +507,15 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				overlay: "context-input",
 				contextInputMode: action.mode,
 				contextInputValue: "",
-				contextInputPhase: "editing",
 			};
 		case "CONTEXT_INPUT_CHANGE":
 			return { ...state, contextInputValue: action.value };
-		case "CONTEXT_INPUT_REVIEW":
-			return { ...state, contextInputPhase: "review" };
-		case "CONTEXT_INPUT_EDIT":
-			return { ...state, contextInputPhase: "editing" };
 		case "CONTEXT_INPUT_DONE":
 			return {
 				...state,
 				overlay: null,
 				contextInputMode: null,
 				contextInputValue: "",
-				contextInputPhase: "editing",
 			};
 		case "DIFF_OPEN":
 			return {

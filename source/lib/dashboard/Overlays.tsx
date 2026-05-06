@@ -231,7 +231,7 @@ export function PrCreateOverlay({
 						</Text>
 						{" editor  ·  "}
 						<Text color="cyan" bold>
-							Ctrl+C
+							Ctrl+G
 						</Text>
 						{" cancel"}
 					</Text>

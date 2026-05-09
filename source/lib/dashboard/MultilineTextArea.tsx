@@ -338,7 +338,20 @@ export function MultilineTextArea({
 			if (key.ctrl || key.meta) return;
 			if (!input) return;
 
-			insertAt(cursor, input.replace(/\r\n?/g, "\n"));
+			// Strip OSC sequences (terminal-side responses to OSC 11/52 etc.
+			// queries) — they leak into stdin while a refresh is querying
+			// the background color and would otherwise type themselves into
+			// the buffer. Pattern: anything starting with `]` followed by a
+			// number, semicolon, payload, then BEL or ST. We strip both the
+			// fully-formed OSC `\x1b]…\x07` and the bracket-only fragment
+			// that arrives when Ink consumed the leading ESC as a separate
+			// keypress (which it does for almost all OSC responses).
+			let cleaned = input
+				.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+				.replace(/^\][0-9]+;[^\x07]*\x07?/, "");
+			if (!cleaned) return;
+
+			insertAt(cursor, cleaned.replace(/\r\n?/g, "\n"));
 		},
 		{ isActive: focus },
 	);

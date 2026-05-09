@@ -30,6 +30,8 @@ function stateColor(type: string): string {
 			return "gray";
 		case "orphaned":
 			return "gray";
+		case "main":
+			return "magenta";
 		default:
 			return "yellow";
 	}
@@ -82,6 +84,19 @@ function fileColor(xy: string): string | undefined {
 export function buildIssueActions(di: DashboardIssue, trackerName: string): IssueActionItem[] {
 	const { worktree, pr, issue } = di;
 	const items: IssueActionItem[] = [];
+
+	// The synthetic "Main repo" row is special: no PR/Switch/Resume/Remove,
+	// no work-launching (you're already on it). Only commit / diff /
+	// editor — the actions that make sense for "I have changes in main and
+	// want to review or land them".
+	if (issue.state.type === "main") {
+		if (worktree) {
+			items.push({ key: "e", label: "Editor", color: "cyan" });
+			if (worktree.dirty) items.push({ key: "C", label: "Commit", color: "cyan" });
+			items.push({ key: "v", label: "View diff", color: "cyan" });
+		}
+		return items;
+	}
 
 	if (worktree?.sessionId) {
 		items.push({ key: "↵", label: "Resume", color: "cyan" });
@@ -224,24 +239,30 @@ export default function DetailPanel({
 
 		// Single metric row: files / +ins / -dels / commits ahead.
 		const ds = worktree.diffStats;
-		if (ds && (ds.insertions > 0 || ds.deletions > 0 || ds.filesChanged > 0)) {
+		const behind = worktree.commitsBehind ?? 0;
+		const hasDiff = ds && (ds.insertions > 0 || ds.deletions > 0 || ds.filesChanged > 0);
+		if (hasDiff || worktree.commitsAhead > 0 || behind > 0) {
 			const segs: Segment[] = [{ text: "  " }];
-			if (ds.filesChanged > 0) {
+			if (ds && ds.filesChanged > 0) {
 				segs.push({
 					text: `${ds.filesChanged} file${ds.filesChanged === 1 ? "" : "s"}`,
 				});
 			}
-			if (ds.insertions > 0) {
+			if (ds && ds.insertions > 0) {
 				if (segs.length > 1) segs.push({ text: "   " });
 				segs.push({ text: `+${ds.insertions}`, color: "green" });
 			}
-			if (ds.deletions > 0) {
+			if (ds && ds.deletions > 0) {
 				if (segs.length > 1) segs.push({ text: "   " });
 				segs.push({ text: `−${ds.deletions}`, color: "red" });
 			}
 			if (worktree.commitsAhead > 0) {
 				if (segs.length > 1) segs.push({ text: "   " });
 				segs.push({ text: `↑ ${worktree.commitsAhead}`, color: "cyan" });
+			}
+			if (behind > 0) {
+				if (segs.length > 1) segs.push({ text: "   " });
+				segs.push({ text: `↓ ${behind} behind`, color: "yellow" });
 			}
 			lines.push({ text: "", segments: segs });
 		}
@@ -330,10 +351,78 @@ export default function DetailPanel({
 		lines.push({ text: "  no worktree for this ticket", dim: true });
 	}
 
+	// ── Claude tasks ──────────────────────────────────────────────────
+	// Reads `~/.claude/todos/<sessionId>-agent-<sessionId>.json` (main-agent
+	// list only — sub-agent todos are noise). Section is hidden when the
+	// session has no todos or has exited; the header shows done/total at a
+	// glance. Up to 6 rows are rendered before collapsing into "+ N more".
+	const todos = worktree?.claudeTodos ?? null;
+	if (todos && todos.length > 0) {
+		const completed = todos.filter((t) => t.status === "completed").length;
+		const inProgress = todos.filter((t) => t.status === "in_progress").length;
+		lines.push(ruleLine);
+		const headerSegs: Segment[] = [
+			{ text: "⎈ ", color: "cyan", bold: true },
+			{ text: "Tasks", bold: true },
+			{ text: "   " },
+			{
+				text: `${completed}/${todos.length}`,
+				color: completed === todos.length ? "green" : "cyan",
+			},
+		];
+		if (inProgress > 0) {
+			headerSegs.push({ text: "  ·  ", dim: true });
+			headerSegs.push({ text: `${inProgress} in progress`, color: "yellow" });
+		}
+		lines.push({ text: "", segments: headerSegs });
+
+		const maxRows = 6;
+		// Surface in-progress first so the active task is always visible even
+		// when the list is long; pending next; completed last (most likely to
+		// be elided when truncating).
+		const ordered = [
+			...todos.filter((t) => t.status === "in_progress"),
+			...todos.filter((t) => t.status === "pending"),
+			...todos.filter((t) => t.status === "completed"),
+		];
+		for (const t of ordered.slice(0, maxRows)) {
+			if (t.status === "in_progress") {
+				lines.push({
+					text: "",
+					segments: [
+						{ text: "  ◐ ", color: "yellow", bold: true },
+						{ text: t.content, color: "yellow" },
+					],
+				});
+			} else if (t.status === "completed") {
+				lines.push({
+					text: "",
+					segments: [
+						{ text: "  ✓ ", color: "green" },
+						{ text: t.content, dim: true },
+					],
+				});
+			} else {
+				lines.push({
+					text: "",
+					segments: [{ text: "  ◯ ", dim: true }, { text: t.content }],
+				});
+			}
+		}
+		if (ordered.length > maxRows) {
+			lines.push({ text: `  + ${ordered.length - maxRows} more`, dim: true });
+		}
+	}
+
 	// ── Pull Request ──────────────────────────────────────────────────
+	// Skip PR/Checks/Reviews sections entirely for the synthetic main row
+	// — those concepts don't apply to "the user's main checkout".
+	const isMain = li.state.type === "main";
 	const { checks, reviews } = issue;
-	lines.push(ruleLine);
-	if (pr) {
+	if (!isMain) {
+		lines.push(ruleLine);
+	}
+	if (!isMain && pr) {
 		const prColor = pr.state === "MERGED" ? "magenta" : pr.state === "OPEN" ? "green" : "red";
 		const draft = pr.isDraft ? " · draft" : "";
 		lines.push({
@@ -351,13 +440,13 @@ export default function DetailPanel({
 		if (pr.url) {
 			lines.push({ text: `  ${pr.url}`, dim: true });
 		}
-	} else {
+	} else if (!isMain) {
 		lines.push(sectionHeader("◉", "Pull Request"));
 		lines.push({ text: "  no PR yet", dim: true });
 	}
 
 	// ── Checks ────────────────────────────────────────────────────────
-	if (checks && checks.length > 0) {
+	if (!isMain && checks && checks.length > 0) {
 		const passing = checks.filter((c) => c.bucket === "pass");
 		const failing = checks.filter((c) => c.bucket === "fail");
 		const pending = checks.filter((c) => c.bucket !== "pass" && c.bucket !== "fail");
@@ -394,7 +483,7 @@ export default function DetailPanel({
 	}
 
 	// ── Reviews ───────────────────────────────────────────────────────
-	if (reviews && reviews.length > 0) {
+	if (!isMain && reviews && reviews.length > 0) {
 		lines.push(ruleLine);
 		lines.push(sectionHeader("★", "Reviews"));
 		for (const review of reviews) {

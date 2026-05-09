@@ -1,7 +1,6 @@
 import { useEffect, useReducer, useCallback, useRef, useState } from "react";
 import { Text, Box, useInput, useStdout, useApp } from "ink";
-import Spinner from "ink-spinner";
-import { exec, execSync, spawn } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import { createRequire } from "module";
 import * as fs from "fs";
@@ -26,13 +25,17 @@ import {
 	discardFile,
 } from "../lib/git.js";
 import { run, spawnAsync } from "../lib/exec.js";
-import { resolveAgentBinary } from "../lib/ai.js";
+import { resolveAgentBinary, fillCommitMessage } from "../lib/ai.js";
 import { getInstalledClaudeVersion } from "../lib/version.js";
-import { extractTicketId } from "../lib/git.js";
+import { extractTicketId, getStagedDiffContent } from "../lib/git.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
+import { shellEscape } from "../lib/multiplexer/types.js";
+import SquirrelLoader from "../lib/squirrel-loader.js";
 import { getPRTemplate } from "../lib/github.js";
 import { renderPrompt, renderDiff, renderTicket } from "../lib/prompts.js";
 import { getIssueTracker } from "../lib/trackers/index.js";
+import { openUrl } from "../lib/open-url.js";
+import { parseUnifiedDiff } from "../lib/diff-parse.js";
 import * as os from "os";
 import type { DashboardIssue, ProjectGroup } from "../lib/dashboard/types.js";
 import { initialState, reducer } from "../lib/dashboard/types.js";
@@ -47,7 +50,7 @@ import {
 import DetailPanel, { buildIssueActions } from "../lib/dashboard/DetailPanel.js";
 import ReviewList from "../lib/dashboard/ReviewList.js";
 import ReviewDetailPanel, { buildReviewActions } from "../lib/dashboard/ReviewDetailPanel.js";
-import { CommitOverlay, PrCreateOverlay } from "../lib/dashboard/Overlays.js";
+import { CommitOverlay, PrCreateOverlay, HelpOverlay } from "../lib/dashboard/Overlays.js";
 import { MultilineTextArea } from "../lib/dashboard/MultilineTextArea.js";
 import DiffOverlay, {
 	flattenTreeFiles,
@@ -372,6 +375,9 @@ function CommandBar({
 			<Key k="R" />
 			<Text dimColor> refresh</Text>
 			{dot}
+			<Key k="?" />
+			<Text dimColor> help</Text>
+			{dot}
 			<Key k="q" />
 			<Text dimColor> quit</Text>
 		</Text>
@@ -474,14 +480,23 @@ export default function Dashboard() {
 		repoRootRef.current = repoRoot;
 
 		try {
-			// Re-detect terminal theme alongside data fetch so light↔dark switches
-			// propagate within one refresh cycle (≤30s).
+			// Re-detect terminal theme alongside data fetch so light↔dark
+			// switches propagate within one refresh cycle (≤30s). Skip the
+			// OSC 11 query when a text-input overlay is active — the
+			// terminal's response would otherwise leak into the user's
+			// commit/PR/context message via Ink's stdin handler.
+			const overlay = stateRef.current.overlay;
+			const inTextInput =
+				overlay === "context-input" ||
+				(overlay === "pr-create" && stateRef.current.prCreatePhase === "review") ||
+				(overlay === "commit" && stateRef.current.commitPhase === "awaiting-message");
+			const themeP = inTextInput ? Promise.resolve<null>(null) : detectTerminalTheme();
 			const [data, reviewData, themeMode] = await Promise.all([
 				loadDashboardData(repoRoot),
 				loadReviewsData(repoRoot),
-				detectTerminalTheme(),
+				themeP,
 			]);
-			setTheme(getThemeForMode(themeMode));
+			if (themeMode !== null) setTheme(getThemeForMode(themeMode));
 			// Workspace file presence — only meaningful when the editor consumes
 			// `.code-workspace` files. Cheap directory read; recomputed each cycle
 			// in case the user adds/removes one.
@@ -783,6 +798,28 @@ export default function Dashboard() {
 		};
 	}, [state.overlay, state.prCreatePhase, state.commitPhase]);
 
+	// ── Diff overlay: load file list when opened (gh pr diff path) ────
+	// Reviews-tab PRs without a local worktree shell out to `gh pr diff <n>`,
+	// parse the unified blob into per-file records, and stash the per-file
+	// content for the content-loader effect below to read synchronously.
+	useEffect(() => {
+		if (state.overlay !== "diff" || state.diffPRNumber == null) return;
+		const prNumber = state.diffPRNumber;
+		void (async () => {
+			try {
+				const { stdout } = await execAsync(`gh pr diff ${prNumber}`, {
+					maxBuffer: 32 * 1024 * 1024,
+				});
+				const { files, contentByPath } = parseUnifiedDiff(stdout);
+				const ordered = flattenTreeFiles(files);
+				dispatch({ type: "DIFF_PR_LOADED", files: ordered, contentByPath });
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				dispatch({ type: "DIFF_FILES_ERROR", error: msg });
+			}
+		})();
+	}, [state.overlay, state.diffPRNumber]);
+
 	// ── Diff overlay: load file list when opened ──────────────────────
 	// Resolves merge-base against the configured base branch so upstream-only
 	// changes (commits on master we haven't pulled) are excluded — same semantics
@@ -839,6 +876,26 @@ export default function Dashboard() {
 			}
 		})();
 	}, [state.overlay, state.diffWorktreePath, state.diffBaseBranch, state.diffRefreshTick]);
+
+	// ── Diff overlay: select content for current file (gh pr diff path) ─
+	// Per-file slices were parsed up front by the file-list effect above —
+	// just pull the right entry out of the map. No subprocess per file.
+	useEffect(() => {
+		if (state.overlay !== "diff" || state.diffPRNumber == null) return;
+		const file = state.diffFiles[state.diffFileIndex];
+		if (!file) {
+			dispatch({ type: "DIFF_CONTENT_LOADED", content: "" });
+			return;
+		}
+		const content = state.diffPRContentByPath[file.path] ?? "";
+		dispatch({ type: "DIFF_CONTENT_LOADED", content });
+	}, [
+		state.overlay,
+		state.diffPRNumber,
+		state.diffFileIndex,
+		state.diffFiles,
+		state.diffPRContentByPath,
+	]);
 
 	// ── Diff overlay: load content for selected file ──────────────────
 	// If SANTREE_DIFF_TOOL is set, pipe `git diff` output through the tool so
@@ -922,7 +979,16 @@ export default function Dashboard() {
 			const windowName = di.issue.identifier;
 			const sessionId = di.worktree?.sessionId;
 			const bin = resolveAgentBinary();
-			const resumeCmd = sessionId && bin ? `${bin} --resume ${sessionId}` : null;
+			// `claude --resume` is cwd-scoped — it only finds the session under
+			// the encoded path of the current cwd. Project conventions (direnv,
+			// shell init) sometimes leave the tmux window in a subdir, so we
+			// prepend `cd <sessionCwd>` (resolved by `findClaudeSessionCwd`)
+			// to guarantee the resume runs from where the session was created.
+			const sessionCwd = di.worktree?.sessionCwd ?? di.worktree?.path;
+			const resumeCmd =
+				sessionId && bin && sessionCwd
+					? `cd ${shellEscape(sessionCwd)} && ${bin} --resume ${sessionId}`
+					: null;
 			const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
 			const workCmd =
 				mode === "plan" ? `st worktree work --plan${contextArg}` : `st worktree work${contextArg}`;
@@ -1208,18 +1274,61 @@ export default function Dashboard() {
 
 	const handleStageAll = useCallback(async () => {
 		const wtPath = stateRef.current.commitWorktreePath;
-		const ticketId = stateRef.current.commitTicketId;
 		if (!wtPath) return;
 		try {
 			await execAsync("git add -A", { cwd: wtPath });
-			dispatch({ type: "COMMIT_MESSAGE", message: `[${ticketId}] ` });
-			dispatch({ type: "COMMIT_PHASE", phase: "awaiting-message" });
+			// After staging, ask whether to draft with AI or write manually.
+			dispatch({ type: "COMMIT_PHASE", phase: "choose-mode" });
 		} catch (e: any) {
 			dispatch({
 				type: "COMMIT_ERROR",
 				error: e?.stderr?.trim() || e?.message || "Failed to stage",
 			});
 		}
+	}, []);
+
+	const handleFillCommit = useCallback(async () => {
+		const s = stateRef.current;
+		const wtPath = s.commitWorktreePath;
+		const branch = s.commitBranch;
+		const ticketId = s.commitTicketId;
+		if (!wtPath || !branch) return;
+
+		dispatch({ type: "COMMIT_PHASE", phase: "filling" });
+
+		const diffContent = getStagedDiffContent(wtPath);
+		const fallbackPrefix = ticketId ? `[${ticketId}] ` : "";
+		if (!diffContent.trim()) {
+			dispatch({ type: "COMMIT_MESSAGE", message: fallbackPrefix });
+			dispatch({ type: "COMMIT_PHASE", phase: "awaiting-message" });
+			return;
+		}
+
+		// Pull ticket context so the AI message is grounded in the requested
+		// change rather than just the literal diff.
+		let ticketContent: string | undefined;
+		const mainRoot = repoRootRef.current;
+		if (ticketId && mainRoot) {
+			try {
+				const tracker = getIssueTracker(mainRoot);
+				const result = await tracker.getIssue(ticketId, mainRoot);
+				if (result.ok) {
+					ticketContent = renderTicket(result.value, tracker.displayName);
+				}
+			} catch {
+				// non-fatal — the prompt works with diff alone
+			}
+		}
+
+		const drafted = await fillCommitMessage({
+			branch,
+			ticketId,
+			ticketContent,
+			diffContent,
+		});
+
+		dispatch({ type: "COMMIT_MESSAGE", message: drafted ?? fallbackPrefix });
+		dispatch({ type: "COMMIT_PHASE", phase: "awaiting-message" });
 	}, []);
 
 	const handleCommitSubmit = useCallback(
@@ -1231,9 +1340,10 @@ export default function Dashboard() {
 				dispatch({ type: "COMMIT_ERROR", error: "Empty commit message" });
 				return;
 			}
-			const msg = trimmed.includes(`[${s.commitTicketId}]`)
-				? trimmed
-				: `[${s.commitTicketId}] ${trimmed}`;
+			// Auto-prefix with `[TICKET]` only when there's a real ticket
+			// AND the user hasn't already typed it.
+			const tid = s.commitTicketId;
+			const msg = tid && !trimmed.includes(`[${tid}]`) ? `[${tid}] ${trimmed}` : trimmed;
 
 			dispatch({ type: "COMMIT_PHASE", phase: "committing" });
 			try {
@@ -1483,8 +1593,26 @@ export default function Dashboard() {
 				dispatch({ type: "SET_ACTION_MESSAGE", message: null });
 			}
 
+			// Help overlay — toggleable from anywhere except text-input
+			// overlays. ? opens, ? again or Esc closes.
+			if (state.overlay === "help") {
+				if (input === "?" || key.escape) {
+					dispatch({ type: "SET_OVERLAY", overlay: null });
+				}
+				return;
+			}
+			if (input === "?" && state.overlay === null) {
+				dispatch({ type: "SET_OVERLAY", overlay: "help" });
+				return;
+			}
+
 			// Commit overlay
 			if (state.overlay === "commit") {
+				// awaiting-message is owned by MultilineTextArea (Ctrl+D submit,
+				// Ctrl+G cancel) — escape there is handled inside the component,
+				// so we don't intercept any keys at this phase.
+				if (state.commitPhase === "awaiting-message") return;
+
 				if (key.escape) {
 					dispatch({ type: "COMMIT_CANCEL" });
 					return;
@@ -1500,8 +1628,20 @@ export default function Dashboard() {
 					}
 					return;
 				}
-				// awaiting-message is handled by TextInput, not useInput
-				// All other phases: swallow input
+				if (state.commitPhase === "choose-mode") {
+					if (input === "f") {
+						handleFillCommit();
+						return;
+					}
+					if (input === "m") {
+						const tid = state.commitTicketId;
+						dispatch({ type: "COMMIT_MESSAGE", message: tid ? `[${tid}] ` : "" });
+						dispatch({ type: "COMMIT_PHASE", phase: "awaiting-message" });
+						return;
+					}
+					return;
+				}
+				// committing / pushing / done / error: swallow
 				return;
 			}
 
@@ -1909,12 +2049,52 @@ export default function Dashboard() {
 				const ri = state.flatReviews[state.reviewSelectedIndex];
 				if (!ri) return;
 
-				// Open PR in browser
+				// Open linked ticket in browser (only when one is associated).
+				// Aligns with the issues tab: `[o]` always opens the ticket; `[p]`
+				// opens the PR. The previous behavior — `[o]` opens the PR — is
+				// the only intentional muscle-memory break in this redesign.
 				if (input === "o") {
-					if (ri.pr.url) {
-						const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
-						execSync(`${openCmd} "${ri.pr.url}"`, { stdio: "ignore" });
+					if (!ri.ticket?.url) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "No linked ticket" });
+						return;
+					}
+					if (openUrl(ri.ticket.url)) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened ticket in browser" });
+					}
+					return;
+				}
+
+				// Open PR in browser
+				if (input === "p") {
+					if (!ri.pr.url) return;
+					if (openUrl(ri.pr.url)) {
 						dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened PR in browser" });
+					}
+					return;
+				}
+
+				// View diff (inline overlay).
+				//   - With a local worktree: reuse the issues-tab path (git diff
+				//     against merge-base, full XY/staging support).
+				//   - Without a worktree: parse `gh pr diff <n>` once, render the
+				//     same DiffOverlay in read-only mode.
+				if (input === "v") {
+					const ticketLabel = ri.ticket?.identifier ?? `#${ri.pr.number}`;
+					if (ri.worktree) {
+						const baseBranch = getBaseBranch(ri.worktree.branch);
+						dispatch({
+							type: "DIFF_OPEN",
+							ticketId: ticketLabel,
+							worktreePath: ri.worktree.path,
+							baseBranch,
+						});
+					} else {
+						dispatch({
+							type: "DIFF_OPEN_PR",
+							label: ticketLabel,
+							prNumber: ri.pr.number,
+							baseBranch: ri.baseBranch ?? "main",
+						});
 					}
 					return;
 				}
@@ -2138,7 +2318,11 @@ export default function Dashboard() {
 					const windowName = di.issue.identifier;
 					const sessionId = di.worktree.sessionId;
 					const bin = resolveAgentBinary();
-					const resumeCmd = sessionId && bin ? `${bin} --resume ${sessionId}` : null;
+					const sessionCwd = di.worktree.sessionCwd ?? di.worktree.path;
+					const resumeCmd =
+						sessionId && bin
+							? `cd ${shellEscape(sessionCwd)} && ${bin} --resume ${sessionId}`
+							: null;
 					const worktreePath = di.worktree.path;
 					void (async () => {
 						const selected = await mux.selectWindow(windowName);
@@ -2170,9 +2354,9 @@ export default function Dashboard() {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "No issue URL available" });
 					return;
 				}
-				const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
-				execSync(`${openCmd} "${di.issue.url}"`, { stdio: "ignore" });
-				dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened in browser" });
+				if (openUrl(di.issue.url)) {
+					dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened in browser" });
+				}
 				return;
 			}
 
@@ -2182,9 +2366,9 @@ export default function Dashboard() {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "No PR to open" });
 					return;
 				}
-				const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
-				execSync(`${openCmd} "${di.pr.url}"`, { stdio: "ignore" });
-				dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened PR in browser" });
+				if (openUrl(di.pr.url)) {
+					dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened PR in browser" });
+				}
 				return;
 			}
 
@@ -2268,7 +2452,9 @@ export default function Dashboard() {
 				}
 				dispatch({
 					type: "COMMIT_START",
-					ticketId: di.issue.identifier,
+					// Main-row commits don't carry a ticket prefix — only real
+					// tracker tickets do.
+					ticketId: di.issue.state.type === "main" ? null : di.issue.identifier,
 					worktreePath: di.worktree.path,
 					branch: di.worktree.branch,
 					gitStatus: di.worktree.gitStatus,
@@ -2347,10 +2533,7 @@ export default function Dashboard() {
 		return (
 			<Box width={columns} height={rows} flexDirection="column">
 				<Box justifyContent="center" alignItems="center" flexGrow={1}>
-					<Text color="cyan">
-						<Spinner type="dots" />
-					</Text>
-					<Text> Loading dashboard...</Text>
+					<SquirrelLoader text="Loading dashboard..." />
 				</Box>
 			</Box>
 		);
@@ -2429,7 +2612,9 @@ export default function Dashboard() {
 			{/* Bordered content area — wraps tab content for a real "panel" feel */}
 			<Box flexGrow={1} borderStyle="round" borderColor="cyan" flexDirection="column">
 				{/* Main content */}
-				{state.overlay === "mode-select" ? (
+				{state.overlay === "help" ? (
+					<HelpOverlay width={innerWidth} height={contentHeight} />
+				) : state.overlay === "mode-select" ? (
 					<Box flexGrow={1} justifyContent="center" alignItems="center">
 						<Box
 							flexDirection="column"

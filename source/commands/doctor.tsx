@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
-import Spinner from "ink-spinner";
 import { useEffect, useState } from "react";
+import SquirrelLoader from "../lib/squirrel-loader.js";
 import { exec, execSync } from "child_process";
 import { promisify } from "util";
 import { createRequire } from "module";
@@ -955,11 +955,8 @@ export default function Doctor() {
 
 	if (loading) {
 		return (
-			<Box>
-				<Text color="cyan">
-					<Spinner type="dots" />
-				</Text>
-				<Text> Checking system requirements...</Text>
+			<Box paddingY={1}>
+				<SquirrelLoader text="Checking system requirements..." />
 			</Box>
 		);
 	}

@@ -348,6 +348,35 @@ export async function getRepoNameAsync(): Promise<string | null> {
 }
 
 /**
+ * Per-process cache of `login → display name`. GitHub display names rarely
+ * change inside a dashboard session, and `gh api users/<login>` is a network
+ * call we don't want to repeat per refresh. Resolves to `null` for users
+ * with no display name set (we'll fall back to login at the call site).
+ */
+const githubUserNameCache = new Map<string, Promise<string | null>>();
+
+/**
+ * Look up a GitHub user's display name (`name` field). Returns null if the
+ * user has no display name set, the API call fails, or `gh` isn't available.
+ * Caches per process — repeated calls for the same login are free.
+ */
+export function getGitHubUserNameAsync(login: string): Promise<string | null> {
+	const cached = githubUserNameCache.get(login);
+	if (cached) return cached;
+	const promise = (async () => {
+		try {
+			const { stdout } = await execAsync(`gh api users/${login} --jq .name`);
+			const name = stdout.trim();
+			return name && name !== "null" ? name : null;
+		} catch {
+			return null;
+		}
+	})();
+	githubUserNameCache.set(login, promise);
+	return promise;
+}
+
+/**
  * Fetch open PRs where the current user's review is still pending (async).
  * Uses the GitHub search API with `user-review-requested:@me` which excludes
  * PRs where you've already submitted a review (unlike `review-requested` which

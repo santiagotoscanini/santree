@@ -15,9 +15,9 @@ interface Props {
 
 function checksIndicator(checks: PRCheck[] | null): { text: string; color: string } {
 	if (!checks || checks.length === 0) return { text: "-", color: "gray" };
-	if (checks.some((c) => c.bucket === "fail")) return { text: "\u2717", color: "red" };
-	if (checks.every((c) => c.bucket === "pass")) return { text: "\u2713", color: "green" };
-	return { text: "\u25cf", color: "yellow" };
+	if (checks.some((c) => c.bucket === "fail")) return { text: "✗", color: "red" };
+	if (checks.every((c) => c.bucket === "pass")) return { text: "✓", color: "green" };
+	return { text: "●", color: "yellow" };
 }
 
 const HEADER_ROWS = 1;
@@ -34,17 +34,17 @@ export default function ReviewList({
 	width,
 	selectionBg = "#1e3a5f",
 }: Props) {
-	// Keymap footer lives in the dashboard's global CommandBar \u2014 use the full
+	// Keymap footer lives in the dashboard's global CommandBar — use the full
 	// pane height for the list so we don't render two stacked keymap rows.
 	const listHeight = height;
 
+	// Per the user request, the list keeps only the columns that aid
+	// navigation: PR number, title, CI. Author + lines-changed live in the
+	// detail panel where they have room to be readable.
 	const numColWidth = 6;
-	const authorColWidth = 12;
-	const changesColWidth = 10;
 	const checksColWidth = 2;
-	const fixedWidth =
-		2 + numColWidth + 1 + authorColWidth + 1 + changesColWidth + 1 + checksColWidth;
-	const titleMaxWidth = Math.max(width - fixedWidth, 10);
+	const fixedWidth = 2 + numColWidth + 1 + checksColWidth;
+	const titleMaxWidth = Math.max(width - fixedWidth - 1, 10);
 
 	const totalRows = HEADER_ROWS + flatReviews.length;
 	const visibleStart = scrollOffset;
@@ -60,10 +60,6 @@ export default function ReviewList({
 					<Text dimColor>{"#".padEnd(numColWidth)}</Text>
 					<Text dimColor> </Text>
 					<Text dimColor>{"".padEnd(titleMaxWidth)}</Text>
-					<Text dimColor>{"author".padStart(authorColWidth)}</Text>
-					<Text dimColor> </Text>
-					<Text dimColor>{"changes".padStart(changesColWidth)}</Text>
-					<Text dimColor> </Text>
 					<Text dimColor>{"ci".padStart(checksColWidth)}</Text>
 				</Box>,
 			);
@@ -79,12 +75,7 @@ export default function ReviewList({
 		const cursor = selected ? ">" : " ";
 		const num = `#${pr.number}`;
 		const title =
-			pr.title.length > titleMaxWidth ? pr.title.slice(0, titleMaxWidth - 1) + "\u2026" : pr.title;
-		const author =
-			pr.author.login.length > authorColWidth
-				? pr.author.login.slice(0, authorColWidth - 1) + "\u2026"
-				: pr.author.login;
-		const changes = `+${item.additions} -${item.deletions}`;
+			pr.title.length > titleMaxWidth ? pr.title.slice(0, titleMaxWidth - 1) + "…" : pr.title;
 		const ci = checksIndicator(item.checks);
 		const bg = selected ? selectionBg : undefined;
 
@@ -100,21 +91,7 @@ export default function ReviewList({
 				<Text backgroundColor={bg} bold={selected}>
 					{title.padEnd(titleMaxWidth)}
 				</Text>
-				<Text backgroundColor={bg} dimColor>
-					{author.padStart(authorColWidth)}
-				</Text>
-				<Text backgroundColor={bg}> </Text>
-				<Text backgroundColor={bg}>
-					<Text color="green">{`+${item.additions}`}</Text>
-					<Text dimColor>/</Text>
-					<Text color="red">{`-${item.deletions}`}</Text>
-					{"".padStart(Math.max(0, changesColWidth - changes.length))}
-				</Text>
-				<Text backgroundColor={bg}> </Text>
-				<Text
-					backgroundColor={bg}
-					color={selected ? (ci.color === "gray" ? "gray" : ci.color) : ci.color}
-				>
+				<Text backgroundColor={bg} color={ci.color}>
 					{ci.text.padStart(checksColWidth)}
 				</Text>
 			</Box>,

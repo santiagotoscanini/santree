@@ -334,6 +334,29 @@ export function setSessionId(repoRoot: string, ticketId: string, sessionId: stri
 }
 
 /**
+ * Remove the stored session_id for a ticket. Used when the underlying Claude
+ * session file is no longer on disk (Claude Code clears old transcripts) — the
+ * stored ID is unresumable, so we drop it to avoid showing a "Resume" action
+ * that will fail with "No conversation found with session ID".
+ *
+ * Leaves any other metadata fields (e.g. `base_branch`) intact and only drops
+ * the entry entirely when nothing remains.
+ */
+export function clearSessionId(repoRoot: string, ticketId: string): void {
+	const all = readAllMetadata(repoRoot);
+	const entry = all[ticketId];
+	if (!entry || entry.session_id === undefined) return;
+	const rest = { ...entry };
+	delete rest.session_id;
+	if (Object.keys(rest).length === 0) {
+		delete all[ticketId];
+	} else {
+		all[ticketId] = rest;
+	}
+	writeAllMetadata(repoRoot, all);
+}
+
+/**
  * Get the base branch for a given branch name.
  * Looks up metadata first, falls back to the default branch.
  */
@@ -429,6 +452,15 @@ export function getStagedDiffStat(): string {
 }
 
 /**
+ * Get the full staged diff body for AI commit-message generation.
+ * Runs: `git diff --cached`. Uses a 5MB max buffer; very large diffs
+ * are truncated by the caller before sending to Claude.
+ */
+export function getStagedDiffContent(cwd?: string): string {
+	return run("git diff --cached", { cwd, maxBuffer: 5 * 1024 * 1024 }) ?? "";
+}
+
+/**
  * Count how many commits the current branch is behind origin/baseBranch.
  * Runs: `git rev-list --count HEAD..origin/<baseBranch>`
  * Returns 0 on failure.
@@ -454,6 +486,16 @@ export function getCommitsAhead(baseBranch: string): number {
  */
 export async function getCommitsAheadAsync(cwd: string, baseBranch: string): Promise<number> {
 	const output = await runAsync(`git -C "${cwd}" rev-list --count ${baseBranch}..HEAD`);
+	return output ? parseInt(output, 10) || 0 : 0;
+}
+
+/**
+ * Count how many commits HEAD is BEHIND origin/<baseBranch> in the given
+ * cwd. Used by the dashboard's main-repo row to show how stale the local
+ * checkout is. Returns 0 on failure (e.g. no upstream tracking branch).
+ */
+export async function getCommitsBehindAsync(cwd: string, baseBranch: string): Promise<number> {
+	const output = await runAsync(`git -C "${cwd}" rev-list --count HEAD..origin/${baseBranch}`);
 	return output ? parseInt(output, 10) || 0 : 0;
 }
 

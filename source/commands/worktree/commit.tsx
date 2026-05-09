@@ -2,25 +2,40 @@ import { useEffect, useState } from "react";
 import { Text, Box, useInput, useApp } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
+import { z } from "zod";
 import { exec } from "child_process";
 import { promisify } from "util";
 import {
 	findRepoRoot,
+	findMainRepoRoot,
 	getCurrentBranch,
 	extractTicketId,
 	getGitStatus,
 	getStagedDiffStat,
+	getStagedDiffContent,
 	hasStagedChanges,
 	hasUnstagedChanges,
 } from "../../lib/git.js";
+import { fillCommitMessage } from "../../lib/ai.js";
+import { getIssueTracker } from "../../lib/trackers/index.js";
+import { renderTicket } from "../../lib/prompts.js";
 
 export const description = "Stage and commit changes";
+
+export const options = z.object({
+	fill: z.boolean().optional().describe("Use AI to draft a short commit message"),
+});
+
+type Props = {
+	options: z.infer<typeof options>;
+};
 
 const execAsync = promisify(exec);
 
 type Status =
 	| "loading"
 	| "confirm-stage"
+	| "filling"
 	| "awaiting-message"
 	| "committing"
 	| "pushing"
@@ -28,7 +43,7 @@ type Status =
 	| "no-changes"
 	| "error";
 
-export default function Commit() {
+export default function Commit({ options }: Props) {
 	const { exit } = useApp();
 	const [status, setStatus] = useState<Status>("loading");
 	const [message, setMessage] = useState("");
@@ -45,10 +60,9 @@ export default function Commit() {
 			if (input === "y" || input === "Y") {
 				stageAndContinue();
 			} else if (input === "n" || input === "N" || key.escape) {
-				if (hasStagedChanges()) {
-					setStatus("awaiting-message");
-					const prefix = ticketId ? `[${ticketId}] ` : "";
-					setCommitInput(prefix);
+				if (hasStagedChanges() && repoRoot && branch) {
+					// Respect --fill even when the user declines to stage more.
+					void openMessagePhase({ repoRoot, branch, ticketId });
 				} else {
 					setStatus("no-changes");
 					setMessage("No staged changes to commit");
@@ -59,17 +73,65 @@ export default function Commit() {
 	});
 
 	async function stageAndContinue() {
+		if (!repoRoot || !branch) return;
 		try {
-			await execAsync("git add -A", { cwd: repoRoot ?? undefined });
+			await execAsync("git add -A", { cwd: repoRoot });
 			setGitStatus(getGitStatus());
 			setDiffStat(getStagedDiffStat());
-			setStatus("awaiting-message");
-			const prefix = ticketId ? `[${ticketId}] ` : "";
-			setCommitInput(prefix);
+			await openMessagePhase({ repoRoot, branch, ticketId });
 		} catch (e) {
 			setStatus("error");
 			setMessage(`Failed to stage changes: ${e}`);
 		}
+	}
+
+	// Routes to either the AI-fill phase or straight to the bare input.
+	// Takes context as args so callers in init() (where state isn't yet
+	// propagated from the just-fired setStates) can hand in fresh values.
+	async function openMessagePhase(ctx: {
+		repoRoot: string;
+		branch: string;
+		ticketId: string | null;
+	}) {
+		const prefix = ctx.ticketId ? `[${ctx.ticketId}] ` : "";
+		if (options.fill) {
+			setStatus("filling");
+			setMessage("Drafting commit message with Claude...");
+			const drafted = await draftWithAI(ctx);
+			// Whether Claude succeeds or not, fall through to the input —
+			// the user can edit or type from scratch.
+			setCommitInput(drafted ?? prefix);
+			setStatus("awaiting-message");
+			return;
+		}
+		setCommitInput(prefix);
+		setStatus("awaiting-message");
+	}
+
+	async function draftWithAI(ctx: {
+		repoRoot: string;
+		branch: string;
+		ticketId: string | null;
+	}): Promise<string | null> {
+		const diffContent = getStagedDiffContent(ctx.repoRoot);
+		if (!diffContent.trim()) return null;
+		// Pull ticket context if we can — the prompt uses it to ground the
+		// summary in the requested change rather than the literal diff.
+		let ticketContent: string | undefined;
+		const mainRoot = findMainRepoRoot();
+		if (ctx.ticketId && mainRoot) {
+			const tracker = getIssueTracker(mainRoot);
+			const result = await tracker.getIssue(ctx.ticketId, mainRoot);
+			if (result.ok) {
+				ticketContent = renderTicket(result.value, tracker.displayName);
+			}
+		}
+		return fillCommitMessage({
+			branch: ctx.branch,
+			ticketId: ctx.ticketId,
+			ticketContent,
+			diffContent,
+		});
 	}
 
 	async function handleCommitSubmit(value: string) {
@@ -159,9 +221,7 @@ export default function Commit() {
 				setStatus("confirm-stage");
 			} else if (staged) {
 				setDiffStat(getStagedDiffStat());
-				setStatus("awaiting-message");
-				const prefix = ticket ? `[${ticket}] ` : "";
-				setCommitInput(prefix);
+				await openMessagePhase({ repoRoot: root, branch: currentBranch, ticketId: ticket });
 			} else {
 				setStatus("no-changes");
 				setMessage("No changes to commit");
@@ -172,7 +232,8 @@ export default function Commit() {
 		init();
 	}, []);
 
-	const isLoading = status === "loading" || status === "committing" || status === "pushing";
+	const isLoading =
+		status === "loading" || status === "filling" || status === "committing" || status === "pushing";
 
 	return (
 		<Box flexDirection="column" padding={1} width="100%">

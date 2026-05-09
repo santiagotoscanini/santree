@@ -43,3 +43,23 @@ export function getIssueTracker(repoRoot: string | null): IssueTracker {
 export function getActiveTrackerKind(repoRoot: string | null): IssueTrackerKind {
 	return getIssueTracker(repoRoot).kind;
 }
+
+/**
+ * Trackers worth trying when resolving a ticket from a foreign PR branch.
+ *
+ * The active tracker is always first. When the active tracker is GitHub but
+ * the user has stored Linear credentials, Linear is appended as a fallback —
+ * the typical reviewer scenario is a santree-managed repo (active tracker:
+ * GitHub) reviewing PRs from a Linear-driven team where branches encode
+ * `TEAM-1234`-style IDs that GitHub's parser ignores.
+ *
+ * Only used by features that look at OTHER people's branches (like the
+ * reviews tab). Per-repo flows still use the active tracker exclusively.
+ */
+export function getCandidateTrackers(repoRoot: string | null): IssueTracker[] {
+	const active = getIssueTracker(repoRoot);
+	if (active.kind === "github" && Object.keys(readLinearAuthStore()).length > 0) {
+		return [active, linearTracker];
+	}
+	return [active];
+}

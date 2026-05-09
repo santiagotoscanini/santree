@@ -1,18 +1,33 @@
 import type { PRInfo, PRCheck, PRReview, PRConversationComment, SearchPR } from "../github.js";
-import type { AssignedIssue } from "../trackers/types.js";
+import type { ClaudeTodo } from "../claude-todos.js";
+import type { AssignedIssue, Issue } from "../trackers/types.js";
 
-export type { AssignedIssue } from "../trackers/types.js";
+export type { AssignedIssue, Issue } from "../trackers/types.js";
 
 export interface WorktreeInfo {
 	path: string;
 	branch: string;
 	dirty: boolean;
 	commitsAhead: number;
+	/** How many commits HEAD is behind origin/<branch>. Populated for the
+	 * synthetic main-repo row so users can see how stale their local
+	 * checkout is. Null on ticket worktrees (the answer is uninteresting
+	 * because the ticket branch usually has no upstream yet). */
+	commitsBehind: number | null;
 	sessionId: string | null;
+	/** Real-path cwd from which `claude --resume <sessionId>` actually
+	 * succeeds. Usually equals `path`, but project conventions (direnv,
+	 * shell init) sometimes cd into a subdirectory like `backend/canary`
+	 * before Claude is launched, in which case the session is resumable
+	 * only from there. The dashboard prepends `cd <sessionCwd>` to the
+	 * resume command so it survives tmux send-keys cwd drift. Null when
+	 * sessionId is null or the underlying file can't be located. */
+	sessionCwd: string | null;
 	gitStatus: string;
 	sessionState: "waiting" | "idle" | "active" | null;
 	sessionMessage: string | null;
 	diffStats: { filesChanged: number; insertions: number; deletions: number } | null;
+	claudeTodos: ClaudeTodo[] | null;
 }
 
 export interface DashboardIssue {
@@ -51,6 +66,14 @@ export interface EnrichedReviewPR {
 	reviews: PRReview[] | null;
 	comments: PRConversationComment[] | null;
 	worktree: WorktreeInfo | null;
+	/** Linked tracker issue, parsed from the PR's branch name first, then
+	 * falling back to the PR title. Null when no recognizable ID is found,
+	 * the tracker fails, or the issue is gone. The detail panel renders a
+	 * Ticket section only when this is set. */
+	ticket: Issue | null;
+	/** GitHub display name for the PR author (`name` field on /users/:login).
+	 * Null when the user hasn't set one or the lookup failed. */
+	authorName: string | null;
 }
 
 export type DashboardTab = "issues" | "reviews";
@@ -64,6 +87,7 @@ export type ActionOverlay =
 	| "commit"
 	| "pr-create"
 	| "diff"
+	| "help"
 	| null;
 
 export type DiffFileStatus = "M" | "A" | "D" | "R" | "C" | "U" | "?";
@@ -83,6 +107,8 @@ export interface DiffFile {
 export type CommitPhase =
 	| "idle"
 	| "confirm-stage"
+	| "choose-mode" // pick AI fill vs manual after staging
+	| "filling" // Claude is drafting a message
 	| "awaiting-message"
 	| "committing"
 	| "pushing"
@@ -146,6 +172,12 @@ export interface DashboardState {
 	diffWorktreePath: string | null;
 	diffBaseBranch: string | null;
 	diffMergeBase: string | null;
+	/** When set, the diff is sourced from `gh pr diff <n>` rather than local
+	 * `git diff` — used by the reviews tab when a PR has no local worktree.
+	 * The file list and per-file content are parsed from the unified diff
+	 * once and held in `diffPRContentByPath`. */
+	diffPRNumber: number | null;
+	diffPRContentByPath: Record<string, string>;
 	diffFiles: DiffFile[];
 	diffFileIndex: number;
 	diffFileScrollOffset: number;
@@ -180,7 +212,9 @@ export type DashboardAction =
 	| { type: "DELETE_DONE" }
 	| {
 			type: "COMMIT_START";
-			ticketId: string;
+			/** Null when committing on a non-ticket branch (e.g. the main
+			 * repo row) — the commit message gets no `[ID]` prefix. */
+			ticketId: string | null;
 			worktreePath: string;
 			branch: string;
 			gitStatus: string;
@@ -218,6 +252,17 @@ export type DashboardAction =
 			ticketId: string;
 			worktreePath: string;
 			baseBranch: string;
+	  }
+	| {
+			type: "DIFF_OPEN_PR";
+			label: string;
+			prNumber: number;
+			baseBranch: string;
+	  }
+	| {
+			type: "DIFF_PR_LOADED";
+			files: DiffFile[];
+			contentByPath: Record<string, string>;
 	  }
 	| { type: "DIFF_FILES_LOADED"; files: DiffFile[]; mergeBase: string }
 	| { type: "DIFF_FILES_ERROR"; error: string }
@@ -282,6 +327,8 @@ export const initialState: DashboardState = {
 	diffWorktreePath: null,
 	diffBaseBranch: null,
 	diffMergeBase: null,
+	diffPRNumber: null,
+	diffPRContentByPath: {},
 	diffFiles: [],
 	diffFileIndex: 0,
 	diffFileScrollOffset: 0,
@@ -525,6 +572,8 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				diffWorktreePath: action.worktreePath,
 				diffBaseBranch: action.baseBranch,
 				diffMergeBase: null,
+				diffPRNumber: null,
+				diffPRContentByPath: {},
 				diffFiles: [],
 				diffFileIndex: 0,
 				diffFileScrollOffset: 0,
@@ -535,6 +584,40 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				diffError: null,
 				diffPendingDiscard: null,
 				diffRefreshTick: 0,
+			};
+		case "DIFF_OPEN_PR":
+			return {
+				...state,
+				overlay: "diff",
+				diffTicketId: action.label,
+				diffWorktreePath: null,
+				diffBaseBranch: action.baseBranch,
+				diffMergeBase: null,
+				diffPRNumber: action.prNumber,
+				diffPRContentByPath: {},
+				diffFiles: [],
+				diffFileIndex: 0,
+				diffFileScrollOffset: 0,
+				diffContent: null,
+				diffContentScrollOffset: 0,
+				diffLoadingFiles: true,
+				// Hold loadingContent on through the DIFF_PR_LOADED dispatch so the
+				// right pane shows "Loading diff..." until the content effect fires
+				// (avoids a one-frame "(empty diff)" flash between file-list
+				// arrival and content selection).
+				diffLoadingContent: true,
+				diffError: null,
+				diffPendingDiscard: null,
+				diffRefreshTick: 0,
+			};
+		case "DIFF_PR_LOADED":
+			return {
+				...state,
+				diffFiles: action.files,
+				diffPRContentByPath: action.contentByPath,
+				diffFileIndex: 0,
+				diffLoadingFiles: false,
+				diffError: null,
 			};
 		case "DIFF_FILES_LOADED": {
 			// Preserve the user's selection across reloads (after stage/unstage/
@@ -629,6 +712,8 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				diffWorktreePath: null,
 				diffBaseBranch: null,
 				diffMergeBase: null,
+				diffPRNumber: null,
+				diffPRContentByPath: {},
 				diffFiles: [],
 				diffFileIndex: 0,
 				diffFileScrollOffset: 0,

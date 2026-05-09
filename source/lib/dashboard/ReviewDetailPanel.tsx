@@ -8,7 +8,14 @@ interface Props {
 	width: number;
 }
 
-type LineData = { text: string; color?: string; bold?: boolean; dim?: boolean };
+type Segment = { text: string; color?: string; bold?: boolean; dim?: boolean };
+type LineData = {
+	text: string;
+	color?: string;
+	bold?: boolean;
+	dim?: boolean;
+	segments?: Segment[];
+};
 export type ReviewActionItem = { key: string; label: string; color: string };
 
 function relativeTime(dateStr: string): string {
@@ -26,6 +33,28 @@ function relativeTime(dateStr: string): string {
 	return `${months}mo ago`;
 }
 
+function stateColor(type: string): string {
+	switch (type) {
+		case "started":
+			return "green";
+		case "unstarted":
+			return "blue";
+		case "backlog":
+			return "gray";
+		case "orphaned":
+			return "gray";
+		default:
+			return "yellow";
+	}
+}
+
+/**
+ * Action footer for the reviews tab. The factory mirrors `buildIssueActions`
+ * over in DetailPanel — same shape so the dashboard's action-row renderer
+ * doesn't need a per-tab branch. Disabled-state semantics: when an action
+ * doesn't apply (no ticket, no worktree), we omit the entry rather than
+ * dimming it, matching the issues tab's convention.
+ */
 export function buildReviewActions(item: EnrichedReviewPR): ReviewActionItem[] {
 	const items: ReviewActionItem[] = [];
 
@@ -36,7 +65,12 @@ export function buildReviewActions(item: EnrichedReviewPR): ReviewActionItem[] {
 		items.push({ key: "w", label: "Checkout", color: "cyan" });
 	}
 
-	items.push({ key: "o", label: "Open PR", color: "gray" });
+	items.push({ key: "v", label: "View diff", color: "cyan" });
+
+	if (item.ticket) {
+		items.push({ key: "o", label: "Open ticket", color: "gray" });
+	}
+	items.push({ key: "p", label: "Open PR", color: "gray" });
 
 	if (item.worktree) {
 		items.push({ key: "d", label: "Remove", color: "red" });
@@ -54,107 +88,263 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 		);
 	}
 
-	const { pr } = item;
+	const { pr, ticket, worktree, checks, reviews, comments } = item;
 	const lines: LineData[] = [];
-	const rule = "\u2500".repeat(width);
+	const rule = "─".repeat(width);
+	const ruleLine: LineData = { text: rule, dim: true };
 
 	// ── Hero ──────────────────────────────────────────────────────────
 	lines.push({ text: `#${pr.number}  ${pr.title}`, bold: true });
-	const meta: string[] = [`by ${pr.author.login}`];
-	if (pr.isDraft) meta.push("draft");
-	meta.push(relativeTime(pr.updatedAt));
-	lines.push({ text: meta.join(" \u00b7 "), color: "cyan" });
 
-	// ── Changes ──────────────────────────────────────────────────────
-	if (item.changedFiles > 0) {
-		lines.push({
-			text: `${item.changedFiles} files  +${item.additions} -${item.deletions}`,
-			color: "green",
+	// Labeled metadata block — author + lines changed live here (the list
+	// strips them to keep navigation tight). Two-column "label  value" rows
+	// keep the eye scannable.
+	const labelWidth = 9;
+	const lbl = (s: string) => s.padEnd(labelWidth);
+	// Display name first; login is the unique handle, parenthesized so the
+	// reviewer can still recognize someone they only know by username.
+	const authorSegs: Segment[] = [
+		{ text: "  " },
+		{ text: lbl("Author"), dim: true },
+		{ text: item.authorName ?? pr.author.login, color: "cyan" },
+	];
+	if (item.authorName) {
+		authorSegs.push({ text: "  " });
+		authorSegs.push({ text: `@${pr.author.login}`, dim: true });
+	}
+	if (pr.isDraft) {
+		authorSegs.push({ text: "  " });
+		authorSegs.push({ text: "draft", color: "yellow" });
+	}
+	lines.push({ text: "", segments: authorSegs });
+
+	const changeSegs: Segment[] = [{ text: "  " }, { text: lbl("Changed"), dim: true }];
+	if (item.additions > 0 || item.deletions > 0 || item.changedFiles > 0) {
+		changeSegs.push({ text: `+${item.additions}`, color: "green" });
+		changeSegs.push({ text: " " });
+		changeSegs.push({ text: `−${item.deletions}`, color: "red" });
+		changeSegs.push({ text: "   " });
+		changeSegs.push({
+			text: `${item.changedFiles} file${item.changedFiles === 1 ? "" : "s"}`,
+			dim: true,
 		});
+	} else {
+		changeSegs.push({ text: "—", dim: true });
 	}
+	lines.push({ text: "", segments: changeSegs });
 
-	// ── Branch ───────────────────────────────────────────────────────
-	if (item.branch) {
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: "BRANCH", dim: true });
-		lines.push({ text: `  ${item.branch}` });
-		if (item.baseBranch) {
-			lines.push({ text: `  base: ${item.baseBranch}`, dim: true });
+	lines.push({
+		text: "",
+		segments: [
+			{ text: "  " },
+			{ text: lbl("Updated"), dim: true },
+			{ text: relativeTime(pr.updatedAt) },
+		],
+	});
+
+	// ── Linked Ticket ─────────────────────────────────────────────────
+	// Only rendered when the active tracker resolved an issue from the PR's
+	// branch — gives the reviewer the same "why does this PR exist" context
+	// the issues tab has always had.
+	if (ticket) {
+		lines.push(ruleLine);
+		const tc = stateColor(ticket.state.type);
+		const ticketHeader: Segment[] = [
+			{ text: "◎ ", color: "cyan", bold: true },
+			{ text: ticket.identifier, bold: true },
+			{ text: "  " },
+			{ text: ticket.title },
+		];
+		lines.push({ text: "", segments: ticketHeader });
+		const ticketStatus: Segment[] = [
+			{ text: "  ● ", color: tc },
+			{ text: ticket.state.name, color: tc },
+			{ text: "  ·  ", dim: true },
+			{ text: ticket.priorityLabel },
+		];
+		if (ticket.labels.length > 0) {
+			ticketStatus.push({ text: "  ·  ", dim: true });
+			ticketStatus.push({ text: ticket.labels.join(", "), dim: true });
 		}
-	}
-
-	// ── Worktree ─────────────────────────────────────────────────────
-	if (item.worktree) {
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: "WORKTREE", dim: true });
-		lines.push({ text: `  ${item.worktree.path}`, dim: true });
-		const statusParts: string[] = [];
-		if (item.worktree.dirty) statusParts.push("dirty");
-		if (item.worktree.commitsAhead > 0) statusParts.push(`+${item.worktree.commitsAhead} ahead`);
-		if (statusParts.length > 0) {
-			lines.push({ text: `  ${statusParts.join("  ")}`, color: "yellow" });
-		} else {
-			lines.push({ text: "  \u2713 clean", color: "green" });
-		}
-	}
-
-	// ── Description ──────────────────────────────────────────────────
-	if (item.body) {
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: "DESCRIPTION", dim: true });
-		lines.push({ text: "" });
-		for (const line of item.body.trimEnd().split("\n")) {
-			lines.push({ text: line });
-		}
-		lines.push({ text: "" });
-	}
-
-	// ── Checks ───────────────────────────────────────────────────────
-	if (item.checks && item.checks.length > 0) {
-		const passCount = item.checks.filter((c) => c.bucket === "pass").length;
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: `CHECKS  ${passCount}/${item.checks.length} passing`, dim: true });
-		for (const check of item.checks) {
-			if (check.bucket === "pass") {
-				lines.push({ text: `  \u2713 ${check.name}`, color: "green" });
-			} else if (check.bucket === "fail") {
-				const desc = check.description ? ` \u2014 ${check.description}` : "";
-				lines.push({ text: `  \u2717 ${check.name}${desc}`, color: "red" });
-			} else {
-				lines.push({ text: `  \u25cf ${check.name} (pending)`, color: "yellow" });
+		lines.push({ text: "", segments: ticketStatus });
+		if (ticket.description) {
+			lines.push({ text: "" });
+			for (const dLine of ticket.description.trimEnd().split("\n")) {
+				lines.push({ text: dLine });
 			}
 		}
 	}
 
-	// ── Reviews ──────────────────────────────────────────────────────
-	if (item.reviews && item.reviews.length > 0) {
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: "REVIEWS", dim: true });
-		for (const review of item.reviews) {
-			const author = review.author.login;
+	// ── Pull Request ──────────────────────────────────────────────────
+	lines.push(ruleLine);
+	const prDraft = pr.isDraft ? " · draft" : "";
+	lines.push({
+		text: "",
+		segments: [
+			{ text: "◉ ", color: "cyan", bold: true },
+			{ text: "Pull Request", bold: true },
+			{ text: "   " },
+			{ text: `#${pr.number}`, color: "green", bold: true },
+			{ text: "  " },
+			{ text: "OPEN", color: "green" },
+			{ text: prDraft, dim: true },
+		],
+	});
+	if (pr.url) {
+		lines.push({ text: `  ${pr.url}`, dim: true });
+	}
+
+	// ── Branch ────────────────────────────────────────────────────────
+	if (item.branch) {
+		lines.push(ruleLine);
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "⎇ ", color: "cyan", bold: true },
+				{ text: "Branch", bold: true },
+				{ text: "   " },
+				{ text: item.branch },
+				...(item.baseBranch
+					? ([
+							{ text: "  " },
+							{ text: "→", dim: true },
+							{ text: " " },
+							{ text: item.baseBranch, dim: true },
+						] as Segment[])
+					: ([] as Segment[])),
+			],
+		});
+	}
+
+	// ── Worktree ──────────────────────────────────────────────────────
+	if (worktree) {
+		lines.push(ruleLine);
+		const dirty = worktree.dirty;
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "⎇ ", color: "cyan", bold: true },
+				{ text: "Worktree", bold: true },
+				{ text: "   " },
+				{
+					text: dirty ? "● dirty" : "✓ clean",
+					color: dirty ? "yellow" : "green",
+				},
+			],
+		});
+		lines.push({ text: `  ${worktree.path}`, dim: true });
+		if (worktree.commitsAhead > 0) {
+			lines.push({
+				text: "",
+				segments: [{ text: "  " }, { text: `↑ ${worktree.commitsAhead} ahead`, color: "cyan" }],
+			});
+		}
+	}
+
+	// ── Description (PR body) ─────────────────────────────────────────
+	if (item.body) {
+		lines.push(ruleLine);
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "✎ ", color: "cyan", bold: true },
+				{ text: "Description", bold: true },
+			],
+		});
+		for (const line of item.body.trimEnd().split("\n")) {
+			lines.push({ text: line });
+		}
+	}
+
+	// ── Checks ────────────────────────────────────────────────────────
+	if (checks && checks.length > 0) {
+		const passing = checks.filter((c) => c.bucket === "pass");
+		const failing = checks.filter((c) => c.bucket === "fail");
+		const pending = checks.filter((c) => c.bucket !== "pass" && c.bucket !== "fail");
+		const headerColor = failing.length > 0 ? "red" : pending.length > 0 ? "yellow" : "green";
+
+		lines.push(ruleLine);
+		const headerSegs: Segment[] = [
+			{ text: "✓ ", color: "cyan", bold: true },
+			{ text: "Checks", bold: true },
+			{ text: "   " },
+			{ text: `${passing.length}/${checks.length} passing`, color: headerColor },
+		];
+		if (failing.length > 0) {
+			headerSegs.push({ text: "  ·  ", dim: true });
+			headerSegs.push({ text: `${failing.length} failing`, color: "red" });
+		}
+		if (pending.length > 0) {
+			headerSegs.push({ text: "  ·  ", dim: true });
+			headerSegs.push({ text: `${pending.length} pending`, color: "yellow" });
+		}
+		lines.push({ text: "", segments: headerSegs });
+
+		// Order: failing first (most important), then pending, then passing.
+		for (const check of failing) {
+			const desc = check.description ? ` — ${check.description}` : "";
+			lines.push({ text: `  ✗ ${check.name}${desc}`, color: "red" });
+		}
+		for (const check of pending) {
+			lines.push({ text: `  ● ${check.name}`, color: "yellow" });
+		}
+		for (const check of passing) {
+			lines.push({ text: `  ✓ ${check.name}`, color: "green" });
+		}
+	}
+
+	// ── Reviews ───────────────────────────────────────────────────────
+	if (reviews && reviews.length > 0) {
+		lines.push(ruleLine);
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "★ ", color: "cyan", bold: true },
+				{ text: "Reviews", bold: true },
+			],
+		});
+		for (const review of reviews) {
 			const rc =
 				review.state === "APPROVED"
 					? "green"
 					: review.state === "CHANGES_REQUESTED"
 						? "red"
 						: "yellow";
-			lines.push({ text: `  ${author}  ${review.state}`, color: rc });
+			lines.push({
+				text: "",
+				segments: [
+					{ text: `  ${review.author.login}` },
+					{ text: "   " },
+					{ text: review.state, color: rc },
+				],
+			});
 		}
 	}
 
-	// ── Comments ─────────────────────────────────────────────────────
-	if (item.comments && item.comments.length > 0) {
-		lines.push({ text: rule, dim: true });
-		lines.push({ text: `COMMENTS  ${item.comments.length}`, dim: true });
+	// ── Comments ──────────────────────────────────────────────────────
+	if (comments && comments.length > 0) {
+		lines.push(ruleLine);
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "● ", color: "cyan", bold: true },
+				{ text: "Comments", bold: true },
+				{ text: "   " },
+				{ text: `${comments.length}`, dim: true },
+			],
+		});
 		// Show last 5 comments
-		const recent = item.comments.slice(-5);
+		const recent = comments.slice(-5);
 		for (const comment of recent) {
 			lines.push({ text: "" });
 			lines.push({
-				text: `  ${comment.author}  ${relativeTime(comment.createdAt)}`,
-				color: "cyan",
+				text: "",
+				segments: [
+					{ text: `  ${comment.author}`, color: "cyan" },
+					{ text: "   " },
+					{ text: relativeTime(comment.createdAt), dim: true },
+				],
 			});
-			// Truncate long comments to ~4 lines
 			const bodyLines = comment.body.trimEnd().split("\n");
 			const maxLines = 4;
 			for (let i = 0; i < Math.min(bodyLines.length, maxLines); i++) {
@@ -166,7 +356,7 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 		}
 	}
 
-	// ── Build actions footer ─────────────────────────────────────────
+	// ── Render with scroll handling ───────────────────────────────────
 	const totalLines = lines.length;
 	const canScroll = totalLines > height;
 	const contentRows = canScroll ? height - 2 : height;
@@ -177,20 +367,50 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 	if (canScroll) {
 		const atTop = clampedOffset === 0;
 		const atBottom = clampedOffset + contentRows >= totalLines;
-		scrollArrow = atTop ? "\u2193 scroll" : atBottom ? "\u2191 scroll" : "\u2191\u2193 scroll";
+		scrollArrow = atTop ? "↓ scroll" : atBottom ? "↑ scroll" : "↑↓ scroll";
 	}
 
-	// Truncate lines to panel width to prevent overflow into left pane
+	// Pre-truncate to the panel width — Ink's `wrap="truncate"` on segments
+	// inside flex rows is unreliable and lets long URLs/branch names spill onto
+	// the next row, shifting everything down. Mirrors DetailPanel's clampers.
 	const clamp = (text: string) =>
-		text.length > width ? text.slice(0, width - 1) + "\u2026" : text;
+		text.length > width ? text.slice(0, Math.max(0, width - 1)) + "…" : text;
+	const clampSegments = (segs: Segment[]): Segment[] => {
+		let remaining = width;
+		const out: Segment[] = [];
+		for (const seg of segs) {
+			if (remaining <= 0) break;
+			if (seg.text.length <= remaining) {
+				out.push(seg);
+				remaining -= seg.text.length;
+			} else {
+				out.push({
+					...seg,
+					text: seg.text.slice(0, Math.max(0, remaining - 1)) + "…",
+				});
+				remaining = 0;
+			}
+		}
+		return out;
+	};
 
 	return (
 		<Box flexDirection="column" width={width} height={height} overflowX="hidden">
 			{visible.map((line, i) => (
 				<Box key={i}>
-					<Text color={line.color as any} bold={line.bold} dimColor={line.dim}>
-						{line.text ? clamp(line.text) : " "}
-					</Text>
+					{line.segments ? (
+						<Text>
+							{clampSegments(line.segments).map((seg, j) => (
+								<Text key={j} color={seg.color as any} bold={seg.bold} dimColor={seg.dim}>
+									{seg.text}
+								</Text>
+							))}
+						</Text>
+					) : (
+						<Text color={line.color as any} bold={line.bold} dimColor={line.dim}>
+							{line.text ? clamp(line.text) : " "}
+						</Text>
+					)}
 				</Box>
 			))}
 			{scrollArrow && (

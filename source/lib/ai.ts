@@ -302,9 +302,77 @@ export function runAgent(prompt: string, opts?: { allowedTools?: string[] }): Ru
 }
 
 /**
+ * Async version of runAgent. Use this from Ink renderers — spawnSync
+ * blocks Node's event loop, freezing the UI (no spinner animation, no
+ * keystroke processing) for the entire duration of Claude's generation.
+ * spawn() lets the loop run during the call.
+ */
+export function runAgentAsync(
+	prompt: string,
+	opts?: { allowedTools?: string[] },
+): Promise<RunAgentResult> {
+	const bin = resolveAgentBinary();
+	if (!bin) {
+		return Promise.reject(
+			new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"),
+		);
+	}
+
+	const toolArgs = opts?.allowedTools?.length ? ["--allowedTools", ...opts.allowedTools] : [];
+	const args = [
+		"--permission-mode",
+		"auto",
+		...toolArgs,
+		"-p",
+		"--output-format",
+		"text",
+		"--",
+		promptArg(prompt),
+	];
+
+	return new Promise<RunAgentResult>((resolve) => {
+		const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		child.stdout?.on("data", (chunk) => (stdout += chunk.toString("utf-8")));
+		child.on("error", () => resolve({ success: false, output: "" }));
+		child.on("close", (code) => resolve({ success: code === 0, output: stdout.trim() }));
+	});
+}
+
+/**
  * Clean up cached image downloads for an issue identifier on the active tracker.
  */
 export function cleanupImages(ticketId: string): void {
 	const repoRoot = findMainRepoRoot();
 	getIssueTracker(repoRoot).cleanupCache(ticketId);
+}
+
+export interface FillCommitOpts {
+	branch: string;
+	ticketId: string | null;
+	ticketContent?: string;
+	diffContent: string;
+}
+
+/**
+ * Generate a short imperative commit message from a staged diff.
+ * Async so callers (the Ink dashboard, the CLI commit flow) keep the
+ * event loop turning during Claude's ~5–30s generation — using the sync
+ * runAgent here freezes the renderer.
+ *
+ * Returns the trimmed message string (no quotes, no preamble) on success,
+ * or null if Claude failed. Caller is responsible for ensuring the diff
+ * is non-empty.
+ */
+export async function fillCommitMessage(opts: FillCommitOpts): Promise<string | null> {
+	const prompt = renderPrompt("fill-commit", {
+		branch_name: opts.branch,
+		ticket_id: opts.ticketId ?? "",
+		ticket_content: opts.ticketContent,
+		diff_content: opts.diffContent,
+	});
+	const result = await runAgentAsync(prompt);
+	if (!result.success) return null;
+	// Trim quotes/whitespace; Claude occasionally wraps despite instructions.
+	return result.output.trim().replace(/^["'`]|["'`]$/g, "");
 }

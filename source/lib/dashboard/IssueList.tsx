@@ -27,6 +27,8 @@ function stateColor(type: string, name?: string): string {
 			return "gray";
 		case "orphaned":
 			return "gray";
+		case "main":
+			return "magenta";
 		default:
 			return "yellow";
 	}

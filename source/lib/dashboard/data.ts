@@ -2,14 +2,19 @@ import {
 	listWorktrees,
 	extractTicketId,
 	getBaseBranch,
+	getDefaultBranch,
 	readAllMetadata,
 	readSessionState,
 	isSessionAlive,
 	clearSessionState,
+	clearSessionId,
 	getGitStatusAsync,
 	getCommitsAheadAsync,
+	getCommitsBehindAsync,
 	getDiffShortstatAsync,
 } from "../git.js";
+import { runAsync } from "../exec.js";
+import { readMainAgentTodos, findClaudeSessionCwd } from "../claude-todos.js";
 import {
 	getPRInfoAsync,
 	getPRChecksAsync,
@@ -18,10 +23,11 @@ import {
 	getPRViewAsync,
 	getReviewRequestedPRsAsync,
 	getRepoNameAsync,
+	getGitHubUserNameAsync,
 	type PRCheck,
 	type PRReview,
 } from "../github.js";
-import { getIssueTracker } from "../trackers/index.js";
+import { getIssueTracker, getCandidateTrackers } from "../trackers/index.js";
 import type { DashboardIssue, ProjectGroup, StatusGroup, EnrichedReviewPR } from "./types.js";
 
 export async function loadDashboardData(repoRoot: string): Promise<{
@@ -83,16 +89,39 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					sessState = null;
 				}
 				const ss = sessState?.state ?? null;
+				const storedId = metadata[issue.identifier]?.session_id ?? null;
+				// Verify the session is still resumable. Claude Code clears old
+				// transcript files (or `/clear` mints a new ID), leaving our stored
+				// session_id pointing at nothing. Without this check the dashboard
+				// offers `[↵] Resume`, which fails with "No conversation found with
+				// session ID". `findClaudeSessionCwd` also returns the real cwd
+				// where the session lives — needed because project conventions
+				// (direnv, shell init) sometimes cd into a subdir before Claude
+				// was launched, so resume must run from there. On a miss we drop
+				// the stored ID from metadata so the next refresh skips this work.
+				const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
+				let sessionId: string | null = storedId;
+				if (storedId && !sessionCwd) {
+					clearSessionId(repoRoot, issue.identifier);
+					sessionId = null;
+				}
+				// Hide stale todos when the session has exited or its file is gone —
+				// the on-disk todos file outlives the process and showing them
+				// would lie about state.
+				const claudeTodos = sessionId && ss !== "exited" ? readMainAgentTodos(sessionId) : null;
 				worktreeInfo = {
 					path: wt.path,
 					branch: wt.branch,
 					dirty: Boolean(gitStatusOutput),
 					commitsAhead: ahead,
-					sessionId: metadata[issue.identifier]?.session_id ?? null,
+					commitsBehind: null,
+					sessionId,
+					sessionCwd,
 					gitStatus: gitStatusOutput,
 					sessionState: ss === "exited" ? null : ss,
 					sessionMessage: sessState?.message ?? null,
 					diffStats: shortstat,
+					claudeTodos,
 				};
 				prInfo = pr;
 
@@ -155,6 +184,14 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					sessState = null;
 				}
 				const ss = sessState?.state ?? null;
+				const storedId = metadata[tid]?.session_id ?? null;
+				const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
+				let sessionId: string | null = storedId;
+				if (storedId && !sessionCwd) {
+					clearSessionId(repoRoot, tid);
+					sessionId = null;
+				}
+				const claudeTodos = sessionId && ss !== "exited" ? readMainAgentTodos(sessionId) : null;
 				return {
 					issue: {
 						identifier: tid,
@@ -173,11 +210,14 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						branch: wt.branch,
 						dirty: Boolean(gitStatusOutput),
 						commitsAhead: ahead,
-						sessionId: metadata[tid]?.session_id ?? null,
+						commitsBehind: null,
+						sessionId,
+						sessionCwd,
 						gitStatus: gitStatusOutput,
 						sessionState: ss === "exited" ? null : ss,
 						sessionMessage: sessState?.message ?? null,
 						diffStats: shortstat,
+						claudeTodos,
 					},
 					pr,
 					checks: checksInfo,
@@ -288,7 +328,79 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 	const flatIssues = groups.flatMap((g) =>
 		g.statusGroups.flatMap((sg) => sg.issues.flatMap(flattenWithChildren)),
 	);
+
+	// Synthesize a "Main repo" row at the very top so users can commit /
+	// view diffs / inspect drift on whatever branch their main checkout
+	// happens to be on. The row uses the same WorktreeInfo shape but with
+	// state.type === "main" so the renderer can differentiate.
+	const mainEntry = await buildMainEntry(repoRoot);
+	if (mainEntry) {
+		groups.unshift({
+			name: "Main repo",
+			id: null,
+			statusGroups: [{ name: "Main", type: "main", issues: [mainEntry] }],
+		});
+		flatIssues.unshift(mainEntry);
+	}
+
 	return { groups, flatIssues };
+}
+
+/** Build the synthetic dashboard row for the main repo checkout — the
+ * non-worktree clone that the user typically commits master/main from.
+ * Returns null only if we can't read the current branch (e.g. detached
+ * HEAD with no commits). */
+async function buildMainEntry(repoRoot: string): Promise<DashboardIssue | null> {
+	const branch = (await runAsync(`git -C "${repoRoot}" rev-parse --abbrev-ref HEAD`))?.trim();
+	if (!branch || branch === "HEAD") return null;
+
+	// `commitsAhead` here is "how many local commits haven't been pushed",
+	// `commitsBehind` is "how many upstream commits I haven't pulled" —
+	// both relative to origin/<currentBranch>. If there's no upstream,
+	// both come back as 0; the renderer treats that as "in sync".
+	const [gitStatusOutput, ahead, behind, shortstat] = await Promise.all([
+		getGitStatusAsync(repoRoot),
+		getCommitsAheadAsync(repoRoot, `origin/${branch}`),
+		getCommitsBehindAsync(repoRoot, branch),
+		// Diff vs origin so the +/- numbers reflect unpushed work.
+		getDiffShortstatAsync(repoRoot, `origin/${branch}`),
+	]);
+
+	const defaultBranch = getDefaultBranch();
+	const isDefault = branch === defaultBranch;
+	const title = isDefault ? `${branch} (default)` : branch;
+
+	return {
+		issue: {
+			identifier: branch.toUpperCase(),
+			title,
+			description: null,
+			url: "",
+			priority: 0,
+			priorityLabel: "None",
+			state: { name: "Main", type: "main" },
+			labels: [],
+			projectId: null,
+			projectName: "Main repo",
+		},
+		worktree: {
+			path: repoRoot,
+			branch,
+			dirty: Boolean(gitStatusOutput),
+			commitsAhead: ahead,
+			commitsBehind: behind,
+			sessionId: null,
+			sessionCwd: null,
+			gitStatus: gitStatusOutput,
+			sessionState: null,
+			sessionMessage: null,
+			diffStats: shortstat,
+			claudeTodos: null,
+		},
+		pr: null,
+		checks: null,
+		reviews: null,
+	};
 }
 
 export async function loadReviewsData(repoRoot: string): Promise<{
@@ -308,14 +420,24 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 	}
 	const metadata = readAllMetadata(repoRoot);
 
+	// Trackers worth trying when extracting a ticket ID from a PR's branch.
+	// We hit the reviews tab to look at OTHER people's PRs — their branches
+	// may follow a different convention than the current repo's active
+	// tracker (e.g. a GitHub-tracker repo reviewing PRs from a Linear team
+	// where branches encode `TEAM-1234`). The active tracker comes first;
+	// `getCandidateTrackers` appends Linear as a fallback when GitHub is
+	// active and Linear creds exist.
+	const candidates = getCandidateTrackers(repoRoot);
+
 	// Enrich each PR in parallel
 	const enriched: EnrichedReviewPR[] = await Promise.all(
 		prs.map(async (pr) => {
-			const [view, checks, reviews, comments] = await Promise.all([
+			const [view, checks, reviews, comments, authorName] = await Promise.all([
 				getPRViewAsync(pr.number),
 				getPRChecksAsync(String(pr.number)),
 				getPRReviewsAsync(String(pr.number)),
 				getPRConversationCommentsAsync(String(pr.number)),
+				getGitHubUserNameAsync(pr.author.login),
 			]);
 
 			// Check if we have a local worktree for this PR's branch
@@ -337,17 +459,53 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 						sessState = null;
 					}
 					const ss = sessState?.state ?? null;
+					const storedId = ticketId ? (metadata[ticketId]?.session_id ?? null) : null;
+					const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
+					let sessionId: string | null = storedId;
+					if (storedId && ticketId && !sessionCwd) {
+						clearSessionId(repoRoot, ticketId);
+						sessionId = null;
+					}
+					const claudeTodos = sessionId && ss !== "exited" ? readMainAgentTodos(sessionId) : null;
 					worktreeInfo = {
 						path: wt.path,
 						branch: wt.branch,
 						dirty: Boolean(gitStatusOutput),
 						commitsAhead: ahead,
-						sessionId: ticketId ? (metadata[ticketId]?.session_id ?? null) : null,
+						commitsBehind: null,
+						sessionId,
+						sessionCwd,
 						gitStatus: gitStatusOutput,
 						sessionState: ss === "exited" ? null : ss,
 						sessionMessage: sessState?.message ?? null,
 						diffStats: shortstat,
+						claudeTodos,
 					};
+				}
+			}
+
+			// Resolve linked tracker issue. Try inputs in priority order:
+			// branch first (most likely to encode the canonical ID), then PR
+			// title (e.g. `[MSG-4084] …`). Each candidate tracker's
+			// `extractIdFromBranch` regex is unanchored and works on any
+			// text, not just branches — that's the (slightly misnamed but
+			// load-bearing) reuse this fallback depends on.
+			// Stops at the first hit. Failures stay silent.
+			let ticket = null;
+			const idInputs = [branch, pr.title].filter((s): s is string => Boolean(s));
+			outer: for (const cand of candidates) {
+				for (const text of idInputs) {
+					const ticketId = cand.extractIdFromBranch(text);
+					if (!ticketId) continue;
+					try {
+						const res = await cand.getIssue(ticketId, repoRoot);
+						if (res.ok) {
+							ticket = res.value;
+							break outer;
+						}
+					} catch {
+						// swallow — try the next candidate / input
+					}
 				}
 			}
 
@@ -363,6 +521,8 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 				reviews,
 				comments,
 				worktree: worktreeInfo,
+				ticket,
+				authorName,
 			};
 		}),
 	);

@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>📚 <a href="https://santiagotoscanini.github.io/santree/">Read the docs</a></strong>
+  <strong>📚 <a href="https://santree.toscanini.me/">Read the docs</a></strong>
 </p>
 
 ---
@@ -35,7 +35,7 @@ eval "$(santree helpers shell-init zsh)"   # or bash
 santree doctor
 ```
 
-Full setup: [Installation](https://santiagotoscanini.github.io/santree/installation.html).
+Full setup: [Installation](https://santree.toscanini.me/installation.html).
 
 <!-- TODO screenshot: diff overlay (`v` key) with delta enabled — file tree on the left, syntax-highlighted diff on the right. Pick a colorful change (TS file with type changes works well). -->
 
@@ -43,12 +43,12 @@ Full setup: [Installation](https://santiagotoscanini.github.io/santree/installat
 
 ## Where to next
 
-- **[Quickstart](https://santiagotoscanini.github.io/santree/quickstart.html)** — 5-minute end-to-end walkthrough
-- **[Concepts](https://santiagotoscanini.github.io/santree/concepts.html)** — the mental model (worktrees, trackers, multiplexers, AI)
-- **[Dashboard](https://santiagotoscanini.github.io/santree/dashboard.html)** — the TUI tour
-- **[Commands](https://santiagotoscanini.github.io/santree/commands.html)** — full CLI reference
+- **[Quickstart](https://santree.toscanini.me/quickstart.html)** — 5-minute end-to-end walkthrough
+- **[Concepts](https://santree.toscanini.me/concepts.html)** — the mental model (worktrees, trackers, multiplexers, AI)
+- **[Dashboard](https://santree.toscanini.me/dashboard.html)** — the TUI tour
+- **[Commands](https://santree.toscanini.me/commands.html)** — full CLI reference
 
-Everything else — configuration, integrations, contributing — is in the **[docs site](https://santiagotoscanini.github.io/santree/)**.
+Everything else — configuration, integrations, contributing — is in the **[docs site](https://santree.toscanini.me/)**.
 
 ## License
 

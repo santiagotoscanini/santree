@@ -1,0 +1,45 @@
+title: Santree
+description: A beautiful CLI for managing Git worktrees with integrated AI assistance.
+
+# GitHub Pages serves project sites under /<repo>/. The baseurl prefix is
+# what makes relative links resolve correctly on the deployed site.
+url: https://stoscanini.github.io
+baseurl: /santree
+
+# Just the Docs — remote theme works in Pages' safe mode (no Gemfile needed).
+remote_theme: just-the-docs/just-the-docs@v0.10.0
+
+color_scheme: dark
+
+# Sidebar/header nav
+aux_links:
+  GitHub: https://github.com/stoscanini/santree
+  npm: https://www.npmjs.com/package/santree
+aux_links_new_tab: true
+
+# Search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 2
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s\-/]+/
+  rel_url: true
+  button: false
+
+# Mermaid diagrams render client-side via just-the-docs' built-in integration.
+mermaid:
+  version: "10.9.0"
+
+# Heading anchors and footer
+heading_anchors: true
+footer_content: 'Made with care · <a href="https://github.com/stoscanini/santree">santree on GitHub</a>'
+
+# Don't ship the index — Jekyll generates one.
+exclude:
+  - README.md
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor

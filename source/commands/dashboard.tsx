@@ -181,6 +181,46 @@ function runPipedDiff(
 	});
 }
 
+/**
+ * Pipe an in-memory unified diff string through the configured pager. Used by
+ * the reviews-tab PR diff path, which already has per-file content from
+ * `gh pr diff` parsed into a map — no `git diff` to spawn here.
+ */
+function runPagerOnString(input: string, tool: string, themeMode: ThemeMode): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const pagerArgs = tool === "delta" ? [themeMode === "light" ? "--light" : "--dark"] : [];
+		const pagerEnv =
+			tool === "delta"
+				? {
+						...process.env,
+						GIT_CONFIG_PARAMETERS: "'delta.hyperlinks=false' 'delta.line-numbers=false'",
+					}
+				: process.env;
+		const pager = spawn(tool, pagerArgs, {
+			stdio: ["pipe", "pipe", "pipe"],
+			env: pagerEnv,
+		});
+		let out = "";
+		let err = "";
+		pager.stdout.on("data", (d) => {
+			out += d.toString();
+		});
+		pager.stderr.on("data", (d) => {
+			err += d.toString();
+		});
+		pager.on("error", reject);
+		pager.on("close", (code) => {
+			if (code !== 0 && !out) {
+				reject(new Error(err || `${tool} exited with code ${code}`));
+			} else {
+				resolve(splitCombinedSgr(out));
+			}
+		});
+		pager.stdin.write(input);
+		pager.stdin.end();
+	});
+}
+
 function parseNameStatus(raw: string): DiffFile[] {
 	const files: DiffFile[] = [];
 	for (const line of raw.split("\n")) {
@@ -879,7 +919,9 @@ export default function Dashboard() {
 
 	// ── Diff overlay: select content for current file (gh pr diff path) ─
 	// Per-file slices were parsed up front by the file-list effect above —
-	// just pull the right entry out of the map. No subprocess per file.
+	// just pull the right entry out of the map. When SANTREE_DIFF_TOOL is set,
+	// pipe the slice through the pager so reviews-tab diffs get the same
+	// syntax highlighting as worktree diffs.
 	useEffect(() => {
 		if (state.overlay !== "diff" || state.diffPRNumber == null) return;
 		const file = state.diffFiles[state.diffFileIndex];
@@ -887,14 +929,29 @@ export default function Dashboard() {
 			dispatch({ type: "DIFF_CONTENT_LOADED", content: "" });
 			return;
 		}
-		const content = state.diffPRContentByPath[file.path] ?? "";
-		dispatch({ type: "DIFF_CONTENT_LOADED", content });
+		const raw = state.diffPRContentByPath[file.path] ?? "";
+		const tool = getDiffTool();
+		if (!tool || !raw) {
+			dispatch({ type: "DIFF_CONTENT_LOADED", content: raw });
+			return;
+		}
+		dispatch({ type: "DIFF_CONTENT_LOADING" });
+		void (async () => {
+			try {
+				const content = await runPagerOnString(raw, tool, theme.mode);
+				dispatch({ type: "DIFF_CONTENT_LOADED", content });
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				dispatch({ type: "DIFF_CONTENT_LOADED", content: `Error rendering diff: ${msg}` });
+			}
+		})();
 	}, [
 		state.overlay,
 		state.diffPRNumber,
 		state.diffFileIndex,
 		state.diffFiles,
 		state.diffPRContentByPath,
+		theme.mode,
 	]);
 
 	// ── Diff overlay: load content for selected file ──────────────────

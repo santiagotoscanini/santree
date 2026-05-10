@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/santree"><img src="https://img.shields.io/npm/v/santree.svg" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/santree"><img src="https://img.shields.io/npm/dm/santree.svg" alt="npm downloads"></a>
-  <a href="https://github.com/stoscanini/santree/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/santree.svg" alt="license"></a>
+  <a href="https://github.com/santiagotoscanini/santree/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/santree.svg" alt="license"></a>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>📚 <a href="https://stoscanini.github.io/santree/">Read the docs</a></strong>
+  <strong>📚 <a href="https://santiagotoscanini.github.io/santree/">Read the docs</a></strong>
 </p>
 
 ---
@@ -35,7 +35,7 @@ eval "$(santree helpers shell-init zsh)"   # or bash
 santree doctor
 ```
 
-Full setup: [Installation](https://stoscanini.github.io/santree/installation.html).
+Full setup: [Installation](https://santiagotoscanini.github.io/santree/installation.html).
 
 <!-- TODO screenshot: diff overlay (`v` key) with delta enabled — file tree on the left, syntax-highlighted diff on the right. Pick a colorful change (TS file with type changes works well). -->
 
@@ -43,12 +43,12 @@ Full setup: [Installation](https://stoscanini.github.io/santree/installation.htm
 
 ## Where to next
 
-- **[Quickstart](https://stoscanini.github.io/santree/quickstart.html)** — 5-minute end-to-end walkthrough
-- **[Concepts](https://stoscanini.github.io/santree/concepts.html)** — the mental model (worktrees, trackers, multiplexers, AI)
-- **[Dashboard](https://stoscanini.github.io/santree/dashboard.html)** — the TUI tour
-- **[Commands](https://stoscanini.github.io/santree/commands.html)** — full CLI reference
+- **[Quickstart](https://santiagotoscanini.github.io/santree/quickstart.html)** — 5-minute end-to-end walkthrough
+- **[Concepts](https://santiagotoscanini.github.io/santree/concepts.html)** — the mental model (worktrees, trackers, multiplexers, AI)
+- **[Dashboard](https://santiagotoscanini.github.io/santree/dashboard.html)** — the TUI tour
+- **[Commands](https://santiagotoscanini.github.io/santree/commands.html)** — full CLI reference
 
-Everything else — configuration, integrations, contributing — is in the **[docs site](https://stoscanini.github.io/santree/)**.
+Everything else — configuration, integrations, contributing — is in the **[docs site](https://santiagotoscanini.github.io/santree/)**.
 
 ## License
 

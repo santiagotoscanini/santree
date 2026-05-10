@@ -8,6 +8,8 @@ nav_order: 6
 
 `santree dashboard` opens a full-screen TUI to manage all your work in one place. It shows your assigned issues from the active tracker (Linear or GitHub Issues) grouped by project, with live status for worktrees, PRs, CI checks, and reviews.
 
+<!-- TODO screenshot: dashboard hero — Issues tab with several projects, one issue expanded into · diff / · pr / · session sub-rows; right pane showing the description + git status + actions footer. Wide aspect (~140 cols). -->
+
 1. TOC
 {:toc}
 
@@ -64,6 +66,8 @@ The divider is draggable. Mouse, scroll wheel, and keyboard all work everywhere.
 ### Diff overlay
 
 `[v]` opens a full-area, two-pane overlay: file tree (left) + diff content (right). Branch-only diff vs the base branch's merge-base — same scope as a GitHub PR diff (upstream changes don't leak in).
+
+<!-- TODO screenshot: diff overlay with delta enabled — file tree on the left, syntax-highlighted diff on the right. Pick a colorful change (a TS file with type changes works well). -->
 
 | Key | Action |
 |---|---|

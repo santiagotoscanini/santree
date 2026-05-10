@@ -75,11 +75,12 @@ Both directories are `.gitignore`-friendly:
 .santree/session-states/
 ```
 
-(Trailing slash matters — without it, you'd ignore a *file* named `worktrees`, not the directory.)
+{: .important }
+> The trailing slash matters — without it, you'd ignore a *file* named `worktrees`, not the directory.
 
 ---
 
 ## See also
 
-- [Trackers](trackers.html) — Linear / GitHub Issues setup
-- [Integrations](integrations.html) — Claude Code hooks, multiplexers, editors, diff tools
+- [Trackers]({{ site.baseurl }}/trackers.html) — Linear / GitHub Issues setup
+- [Integrations]({{ site.baseurl }}/integrations.html) — Claude Code hooks, multiplexers, editors, diff tools

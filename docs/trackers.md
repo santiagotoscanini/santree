@@ -104,11 +104,13 @@ Issues are listed via `gh search issues --assignee=@me --state=open --repo <owne
 
 ### Empty dashboard?
 
-`gh search issues --assignee=@me` returns nothing if the issues you care about aren't *assigned* to you. GitHub Projects affiliation doesn't count — assignees do. If your team uses Projects without assignees, self-assign the issues you're working on.
+{: .important }
+> `gh search issues --assignee=@me` returns nothing if the issues you care about aren't *assigned* to you. GitHub Projects affiliation doesn't count — assignees do. If your team uses Projects without assignees, self-assign the issues you're working on.
 
 ### Branch naming
 
-GitHub's parser is strict to avoid false positives — see [Branch naming](configuration.html#branch-naming).
+{: .note }
+> GitHub's branch parser is strict to avoid false positives — a commit-style branch like `fix-typo-1` would otherwise match issue 1. See [Branch naming]({{ site.baseurl }}/configuration.html#branch-naming) for the accepted patterns.
 
 ---
 

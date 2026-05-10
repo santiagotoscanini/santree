@@ -101,8 +101,11 @@ There is no env var override — each adapter declares its own runtime check.
 
 cmux is macOS-only and tightly bound to the cmux.app GUI. Two upstream issues affect santree's integration:
 
-- **[manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472)** — programmatically created workspaces have dead PTYs, so `sendCommand` is unimplemented (returns `unsupported`) and post-creation flows degrade. tmux remains the recommended backend until #1472 lands. `santree doctor` surfaces a warning when cmux is active.
-- **[manaflow-ai/cmux#2048](https://github.com/manaflow-ai/cmux/issues/2048)** — cmux ships its own Claude CLI at `/Applications/cmux.app/Contents/Resources/bin/claude`, wired to the active cmux workspace. When santree detects cmux is active, it uses that bundled binary in preference to a globally-installed `claude`.
+{: .warning }
+> **[manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472)** — programmatically created workspaces have dead PTYs, so `sendCommand` is unimplemented (returns `unsupported`) and post-creation flows degrade. **tmux remains the recommended backend until #1472 lands.** `santree doctor` surfaces a warning when cmux is active.
+
+{: .note }
+> **[manaflow-ai/cmux#2048](https://github.com/manaflow-ai/cmux/issues/2048)** — cmux ships its own Claude CLI at `/Applications/cmux.app/Contents/Resources/bin/claude`, wired to the active cmux workspace. When santree detects cmux is active, it uses that bundled binary in preference to a globally-installed `claude`.
 
 ---
 

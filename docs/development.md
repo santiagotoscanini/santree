@@ -16,7 +16,7 @@ Hacking on santree.
 ## Setup
 
 ```bash
-git clone https://github.com/stoscanini/santree.git
+git clone https://github.com/santiagotoscanini/santree.git
 cd santree
 npm install
 ```
@@ -131,4 +131,4 @@ That's it. The dashboard, prompt rendering, and AI flows speak generic terms (`i
 
 ## Contributing
 
-Issues and pull requests welcome. See [github.com/stoscanini/santree](https://github.com/stoscanini/santree).
+Issues and pull requests welcome. See [github.com/santiagotoscanini/santree](https://github.com/santiagotoscanini/santree).

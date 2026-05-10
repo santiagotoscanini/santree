@@ -35,6 +35,8 @@ santree dashboard
 
 You'll see a two-pane TUI: assigned issues on the left, detail on the right. Mouse + keyboard both work — click a row to select, drag the divider to resize, scroll wheel scrolls.
 
+<!-- TODO screenshot: dashboard on first open, fresh install — Issues tab with a few real assigned tickets, no worktrees yet (clean slate). -->
+
 ## 3. Start working on a ticket
 
 Select an issue and press `w`. A mode-select overlay asks plan-vs-implement, then opens a context input where you can add custom instructions to the prompt (`Ctrl+O` to drop into your editor). Press Enter to launch.
@@ -52,7 +54,10 @@ Back in the dashboard, press `[v]` on the issue to open the diff overlay. Left p
 
 The diff is **branch-only** — it uses `git merge-base` against the configured base, so upstream changes you haven't pulled don't leak in. Same scope as a GitHub PR diff.
 
-If you have `delta` installed, `export SANTREE_DIFF_TOOL=delta` to get syntax highlighting in the overlay.
+<!-- TODO screenshot: diff overlay mid-review — file tree with a couple of files selected, syntax-highlighted diff on the right. -->
+
+{: .note }
+> Install [`delta`](https://github.com/dandavison/delta) (`brew install git-delta`) and `export SANTREE_DIFF_TOOL=delta` to get syntax highlighting in the overlay. Works for both worktree diffs and Reviews-tab PR diffs.
 
 ## 5. Commit, push, and PR — without leaving the dashboard
 

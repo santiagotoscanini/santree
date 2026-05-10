@@ -2,26 +2,39 @@
 title: Home
 layout: home
 nav_order: 1
+description: "Santree — a CLI for managing Git worktrees with integrated AI assistance. Linear / GitHub Issues, tmux / cmux, Claude in the loop."
 ---
 
-# Santree
+<p align="center">
+  <img src="{{ site.baseurl }}/assets/icon.png" alt="Santree" width="180" />
+</p>
 
-A beautiful CLI for managing Git worktrees, with integrated AI assistance.
-{: .fs-6 .fw-300 }
+<h1 align="center" style="margin-top: 0;">Santree</h1>
 
-Santree turns "switch tasks" into a one-keystroke operation. It creates isolated worktrees per branch, surfaces them in an interactive dashboard alongside live PR / CI / review status, and launches Claude with full ticket context when you're ready to work.
+<p align="center" style="margin-top: -0.5rem;">
+  <a href="https://www.npmjs.com/package/santree"><img src="https://img.shields.io/npm/v/santree.svg" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/santree"><img src="https://img.shields.io/npm/dm/santree.svg" alt="npm downloads"></a>
+  <a href="https://github.com/santiagotoscanini/santree/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/santree.svg" alt="license"></a>
+  <a href="https://github.com/santiagotoscanini/santree/stargazers"><img src="https://img.shields.io/github/stars/santiagotoscanini/santree?style=social" alt="GitHub stars"></a>
+</p>
 
-[Get started](installation.html){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
-[View on GitHub](https://github.com/stoscanini/santree){: .btn .fs-5 .mb-4 .mb-md-0 }
+<p align="center" class="fs-5 fw-300">
+  Pick an issue, work on it with Claude in an isolated worktree, ship a PR — without leaving your terminal.
+</p>
+
+<p align="center">
+  <a href="installation.html" class="btn btn-primary fs-5 mb-4 mb-md-0 mr-2">Get started →</a>
+  <a href="quickstart.html" class="btn fs-5 mb-4 mb-md-0">5-minute tour</a>
+</p>
 
 ---
 
 ## What's inside
 
-- **Interactive dashboard** — `santree dashboard` shows every assigned issue, the worktrees you have open, PR state, CI checks, review counts, and the live state of any Claude session attached to each worktree.
+- **Interactive dashboard** — every assigned issue in one TUI, with live worktree / PR / CI / review state and the running Claude session per branch.
 - **Pluggable issue trackers** — Linear (OAuth + GraphQL) and GitHub Issues (via `gh`) are first-class. Pick one per repo with `santree issue switch`.
 - **Pluggable terminal multiplexers** — auto-detects tmux or cmux; falls back gracefully when neither is active.
-- **AI built into the loop** — Claude is launched with the rendered ticket + your custom context. PR creation, fix-from-review, and self-review all run the agent against the right inputs.
+- **AI in the loop** — Claude is launched with the rendered ticket + your context. PR creation, review fix-up, and self-review all run the agent with the right inputs pre-staged.
 - **Inline diff overlay** — review your branch the way GitHub does (merge-base scoped) without leaving the dashboard. Pipe through `delta` for syntax highlighting.
 
 ---
@@ -42,17 +55,23 @@ santree doctor
 santree dashboard
 ```
 
+That's it. Walk a real session in [Quickstart](quickstart.html).
+
 ---
 
 ## Where to next
 
 | If you want to… | Go to |
 |---|---|
-| Install and verify | [Installation](installation.html) |
-| See it work end-to-end | [Quickstart](quickstart.html) |
-| Understand the mental model | [Concepts](concepts.html) |
-| Tour the dashboard | [Dashboard](dashboard.html) |
-| Look up a command | [Commands](commands.html) |
-| Wire up Linear or GitHub Issues | [Trackers](trackers.html) |
-| Configure env vars / init scripts | [Configuration](configuration.html) |
-| Hack on santree | [Development](development.html) |
+| Install and verify | [Installation]({{ site.baseurl }}/installation.html) |
+| See it work end-to-end | [Quickstart]({{ site.baseurl }}/quickstart.html) |
+| Understand the mental model | [Concepts]({{ site.baseurl }}/concepts.html) |
+| See the full workflow diagram | [Workflow]({{ site.baseurl }}/workflow.html) |
+| Tour the dashboard | [Dashboard]({{ site.baseurl }}/dashboard.html) |
+| Look up a command | [Commands]({{ site.baseurl }}/commands.html) |
+| Wire up Linear or GitHub Issues | [Trackers]({{ site.baseurl }}/trackers.html) |
+| Configure env vars / init scripts | [Configuration]({{ site.baseurl }}/configuration.html) |
+| Add Claude statusline / hooks / English Tutor | [Integrations]({{ site.baseurl }}/integrations.html) |
+| Compare to alternatives | [Why santree?]({{ site.baseurl }}/comparison.html) |
+| Hack on santree | [Development]({{ site.baseurl }}/development.html) |
+| Troubleshoot | [FAQ]({{ site.baseurl }}/faq.html) |

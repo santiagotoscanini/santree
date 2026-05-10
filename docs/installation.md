@@ -21,6 +21,9 @@ That installs `santree` (and the `st` alias from the shell wrapper, see below).
 
 ## Shell setup (required)
 
+{: .important }
+> Without the shell integration you can still use santree, but commands that change directory (`worktree create`, `worktree switch`) won't follow you back to your shell — you'll need to `cd` manually. Wire it up once and forget it.
+
 Santree commands like `worktree create` and `worktree switch` need to change the directory of the *parent shell*. A child process can't do that on its own, so the shell wrapper reads marker lines from santree's stdout (`SANTREE_CD:<path>`, `SANTREE_WORK:<mode>`) and `cd`s on your behalf.
 
 Add to your `.zshrc` or `.bashrc`:

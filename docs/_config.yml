@@ -1,10 +1,10 @@
 title: Santree
 description: A beautiful CLI for managing Git worktrees, with integrated AI assistance — Linear / GitHub Issues, tmux / cmux, and Claude in the loop.
 
-# GitHub Pages serves project sites under /<repo>/. The baseurl prefix is
-# what makes relative links resolve correctly on the deployed site.
-url: https://santiagotoscanini.github.io
-baseurl: /santree
+# Custom domain — docs live at the root, not under /santree.
+# CNAME file in docs/ binds the GitHub Pages deploy to this domain.
+url: https://santree.toscanini.me
+baseurl: ""
 
 # Just the Docs — remote theme works in Pages' safe mode (no Gemfile needed).
 remote_theme: just-the-docs/just-the-docs@v0.10.0

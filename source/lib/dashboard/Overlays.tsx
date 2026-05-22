@@ -386,6 +386,20 @@ type LegendSection = { title: string; rows: LegendRow[] };
 
 const LEGEND: LegendSection[] = [
 	{
+		title: "Tabs & keys",
+		rows: [
+			{ glyph: "1", color: "cyan", meaning: "Issues tab — backlog / planning" },
+			{ glyph: "2", color: "cyan", meaning: "Trees tab — worktrees in progress" },
+			{ glyph: "3", color: "cyan", meaning: "Reviews tab — PRs awaiting your review" },
+			{ glyph: "Tab", color: "cyan", meaning: "Cycle Issues → Trees → Reviews" },
+			{ glyph: "t", color: "cyan", meaning: "Switch / set up the issue tracker" },
+			{ glyph: "n", color: "cyan", meaning: "New issue (built-in tracker, Issues tab)" },
+			{ glyph: "e", color: "cyan", meaning: "Edit issue (built-in tracker, Issues tab)" },
+			{ glyph: "d", color: "red", meaning: "Delete issue (built-in) / remove worktree (Trees)" },
+			{ glyph: "w", color: "cyan", meaning: "Start work (creates a worktree → Trees tab)" },
+		],
+	},
+	{
 		title: "Issue list",
 		rows: [
 			{ glyph: "▎", color: "red", meaning: "Urgent (P1) priority" },

@@ -33,6 +33,8 @@ import type { DashboardIssue, ProjectGroup, StatusGroup, EnrichedReviewPR } from
 export async function loadDashboardData(repoRoot: string): Promise<{
 	groups: ProjectGroup[];
 	flatIssues: DashboardIssue[];
+	treeGroups: ProjectGroup[];
+	flatTrees: DashboardIssue[];
 }> {
 	// Fetch issues and worktrees in parallel
 	const tracker = getIssueTracker(repoRoot);
@@ -251,16 +253,6 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		childTicketIds.add(ticketId);
 	}
 
-	// Group by project (excluding children — they'll appear nested under parents)
-	const groupMap = new Map<string, DashboardIssue[]>();
-	for (const di of enriched) {
-		if (childTicketIds.has(di.issue.identifier)) continue;
-		const key = di.issue.projectName ?? "No Project";
-		const list = groupMap.get(key) ?? [];
-		list.push(di);
-		groupMap.set(key, list);
-	}
-
 	// Status type priority: started > unstarted > backlog > triage
 	const statusTypePriority: Record<string, number> = {
 		started: 0,
@@ -269,48 +261,35 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		triage: 3,
 	};
 
-	const groups: ProjectGroup[] = [...groupMap.entries()].map(([name, issues]) => {
-		// Sub-group by status
-		const statusMap = new Map<string, StatusGroup>();
+	// Group a set of (non-child) issues by project, then by status.
+	function buildProjectGroups(issues: DashboardIssue[]): ProjectGroup[] {
+		const groupMap = new Map<string, DashboardIssue[]>();
 		for (const di of issues) {
-			const statusName = di.issue.state.name;
-			const existing = statusMap.get(statusName);
-			if (existing) {
-				existing.issues.push(di);
-			} else {
-				statusMap.set(statusName, {
-					name: statusName,
-					type: di.issue.state.type,
-					issues: [di],
-				});
-			}
+			if (childTicketIds.has(di.issue.identifier)) continue;
+			const key = di.issue.projectName ?? "No Project";
+			const list = groupMap.get(key) ?? [];
+			list.push(di);
+			groupMap.set(key, list);
 		}
-
-		// Sort status groups by type priority
-		const statusGroups = [...statusMap.values()].sort(
-			(a, b) => (statusTypePriority[a.type] ?? 99) - (statusTypePriority[b.type] ?? 99),
-		);
-
-		return {
-			name,
-			id: issues[0]?.issue.projectId ?? null,
-			statusGroups,
-		};
-	});
-
-	// Append orphaned worktrees as a separate group at the bottom (excluding children)
-	const topLevelOrphans = orphans.filter((di) => !childTicketIds.has(di.issue.identifier));
-	if (topLevelOrphans.length > 0) {
-		groups.push({
-			name: "Orphaned Worktrees",
-			id: null,
-			statusGroups: [
-				{
-					name: "Orphaned",
-					type: "orphaned",
-					issues: topLevelOrphans,
-				},
-			],
+		return [...groupMap.entries()].map(([name, list]) => {
+			const statusMap = new Map<string, StatusGroup>();
+			for (const di of list) {
+				const statusName = di.issue.state.name;
+				const existing = statusMap.get(statusName);
+				if (existing) {
+					existing.issues.push(di);
+				} else {
+					statusMap.set(statusName, {
+						name: statusName,
+						type: di.issue.state.type,
+						issues: [di],
+					});
+				}
+			}
+			const statusGroups = [...statusMap.values()].sort(
+				(a, b) => (statusTypePriority[a.type] ?? 99) - (statusTypePriority[b.type] ?? 99),
+			);
+			return { name, id: list[0]?.issue.projectId ?? null, statusGroups };
 		});
 	}
 
@@ -324,26 +303,49 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		}
 		return result;
 	}
+	function flatten(g: ProjectGroup[]): DashboardIssue[] {
+		return g.flatMap((grp) =>
+			grp.statusGroups.flatMap((sg) => sg.issues.flatMap(flattenWithChildren)),
+		);
+	}
 
-	const flatIssues = groups.flatMap((g) =>
-		g.statusGroups.flatMap((sg) => sg.issues.flatMap(flattenWithChildren)),
-	);
+	// ── Partition: Issues tab (backlog/planning) vs Trees tab (work in
+	// progress). A tracker issue with no worktree is backlog; once it gains a
+	// worktree it moves to the Trees tab. Children always have a worktree, so
+	// they only ever appear nested in Trees. Main-repo + orphaned worktrees
+	// belong to Trees (they're active checkouts, not backlog).
+	const backlogIssues = enriched.filter((di) => !di.worktree);
+	const treeIssues = enriched.filter((di) => di.worktree);
 
-	// Synthesize a "Main repo" row at the very top so users can commit /
-	// view diffs / inspect drift on whatever branch their main checkout
-	// happens to be on. The row uses the same WorktreeInfo shape but with
-	// state.type === "main" so the renderer can differentiate.
+	const groups = buildProjectGroups(backlogIssues);
+	const flatIssues = flatten(groups);
+
+	const treeGroups = buildProjectGroups(treeIssues);
+	const topLevelOrphans = orphans.filter((di) => !childTicketIds.has(di.issue.identifier));
+	if (topLevelOrphans.length > 0) {
+		treeGroups.push({
+			name: "Orphaned Worktrees",
+			id: null,
+			statusGroups: [{ name: "Orphaned", type: "orphaned", issues: topLevelOrphans }],
+		});
+	}
+	const flatTrees = flatten(treeGroups);
+
+	// Synthesize a "Main repo" row at the top of the Trees tab so users can
+	// commit / view diffs / inspect drift on whatever branch their main
+	// checkout happens to be on. state.type === "main" lets the renderer
+	// differentiate.
 	const mainEntry = await buildMainEntry(repoRoot);
 	if (mainEntry) {
-		groups.unshift({
+		treeGroups.unshift({
 			name: "Main repo",
 			id: null,
 			statusGroups: [{ name: "Main", type: "main", issues: [mainEntry] }],
 		});
-		flatIssues.unshift(mainEntry);
+		flatTrees.unshift(mainEntry);
 	}
 
-	return { groups, flatIssues };
+	return { groups, flatIssues, treeGroups, flatTrees };
 }
 
 /** Build the synthetic dashboard row for the main repo checkout — the

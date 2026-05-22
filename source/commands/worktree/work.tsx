@@ -189,8 +189,7 @@ export default function Work({ options }: Props) {
 						</Text>
 						<Text dimColor>
 							{" "}
-							claude
-							{mode === "plan" ? " --permission-mode plan" : ""}{" "}
+							claude --permission-mode {mode === "plan" ? "plan" : "auto"}{" "}
 							{`"<${getModeLabel(mode)} prompt for ${ticketId}>"`}
 						</Text>
 					</Box>

@@ -19,8 +19,6 @@ export interface Multiplexer {
 
 	selectWindow(name: string): Promise<SessionResult>;
 
-	renameWindow(currentName: string, newName: string): SessionResult;
-
 	sendCommand(name: string, command: string): SessionResult;
 
 	isSessionAlive(ticketId: string): boolean;

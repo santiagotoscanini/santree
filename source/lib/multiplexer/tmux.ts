@@ -40,14 +40,6 @@ export const tmuxMultiplexer: Multiplexer = {
 		return ok ? { ok: true } : { ok: false, reason: "failed" };
 	},
 
-	renameWindow(_currentName: string, newName: string): SessionResult {
-		if (!this.isActive()) return { ok: false, reason: "not-active" };
-		// tmux rename-window operates on the current window when no -t is given, which
-		// matches every existing call site in santree.
-		const ok = tmuxSync(`tmux rename-window ${shellEscape(newName)}`);
-		return ok ? { ok: true } : { ok: false, reason: "failed" };
-	},
-
 	sendCommand(name: string, command: string): SessionResult {
 		if (!this.isActive()) return { ok: false, reason: "not-active" };
 		const ok = tmuxSync(`tmux send-keys -t ${shellEscape(name)} ${shellEscape(command)} Enter`);

@@ -66,24 +66,6 @@ export const cmuxMultiplexer: Multiplexer = {
 		return result.ok ? { ok: true } : { ok: false, reason: "failed" };
 	},
 
-	renameWindow(currentName: string, newName: string): SessionResult {
-		// `workspace-action --action rename --title <text>` defaults to the caller's
-		// workspace via $CMUX_WORKSPACE_ID. When `currentName` is provided we look up
-		// that specific workspace's ref instead.
-		let target = "";
-		if (currentName) {
-			const ws = findWorkspaceByTitle(currentName);
-			if (!ws?.ref) {
-				return { ok: false, reason: "failed", message: "cmux workspace not found" };
-			}
-			target = ` --workspace ${shellEscape(ws.ref)}`;
-		}
-		const result = cmuxRun(
-			`cmux workspace-action --action rename --title ${shellEscape(newName)}${target}`,
-		);
-		return result.ok ? { ok: true } : { ok: false, reason: "failed" };
-	},
-
 	sendCommand(_name: string, _command: string): SessionResult {
 		// Blocked by manaflow-ai/cmux#1472 — programmatically created workspaces have
 		// dead PTYs, so post-creation `cmux send` / `send-key` silently drop input.

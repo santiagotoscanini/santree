@@ -1,6 +1,5 @@
 import * as fs from "fs";
 import * as path from "path";
-import { getMultiplexer } from "./multiplexer/index.js";
 
 export type SessionStateValue = "waiting" | "idle" | "active" | "exited";
 
@@ -25,29 +24,12 @@ export function extractRepoAndTicket(cwd: string): { repoRoot: string; ticketId:
 	return { repoRoot, ticketId };
 }
 
-export function renameSessionWindow(ticketId: string, state: SessionStateValue): void {
-	const mux = getMultiplexer();
-	if (!mux.isActive()) return;
-
-	let name: string;
-	switch (state) {
-		case "waiting":
-			name = `${ticketId} !`;
-			break;
-		case "idle":
-			name = `${ticketId} ~`;
-			break;
-		default:
-			name = ticketId;
-			break;
-	}
-
-	mux.renameWindow("", name);
-}
-
 /**
- * Unified helper: reads stdin, extracts repo/ticket, writes state file,
- * renames the multiplexer window, then exits.
+ * Unified helper: reads stdin, extracts repo/ticket, writes the session-state
+ * file, then exits. The dashboard reads the state file to render its session
+ * badges (◆ waiting / active / idle, ◇ id-only). Window/tab renaming used to
+ * happen here too but was removed — it clobbered names the user had set
+ * manually and added little value once the state file was in place.
  */
 export function signalState(state: SessionStateValue): void {
 	const input = readStdin();
@@ -77,9 +59,6 @@ export function signalState(state: SessionStateValue): void {
 	};
 
 	fs.writeFileSync(stateFile, JSON.stringify(payload, null, 2) + "\n");
-
-	renameSessionWindow(ticketId, state);
-
 	process.exit(0);
 }
 

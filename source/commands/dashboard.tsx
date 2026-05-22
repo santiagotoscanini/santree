@@ -33,7 +33,10 @@ import { shellEscape } from "../lib/multiplexer/types.js";
 import SquirrelLoader from "../lib/squirrel-loader.js";
 import { getPRTemplate } from "../lib/github.js";
 import { renderPrompt, renderDiff, renderTicket } from "../lib/prompts.js";
-import { getIssueTracker } from "../lib/trackers/index.js";
+import { getIssueTracker, isRepoTrackerConfigured, setRepoTracker } from "../lib/trackers/index.js";
+import { setRepoLinearOrg } from "../lib/trackers/linear/index.js";
+import { readLinearAuthStore } from "../lib/trackers/auth-store.js";
+import { getAuthenticatedUser, getCurrentRepoNwo } from "../lib/trackers/github/auth.js";
 import { openUrl } from "../lib/open-url.js";
 import { parseUnifiedDiff } from "../lib/diff-parse.js";
 import * as os from "os";
@@ -317,7 +320,6 @@ let altScreenEntered = false;
 function ensureAltScreen() {
 	if (altScreenEntered) return;
 	altScreenEntered = true;
-	getMultiplexer().renameWindow("", "santree");
 	process.stdout.write("\x1b[?1049h"); // Enter alternate screen buffer
 	process.stdout.write("\x1b[?25l"); // Hide cursor
 }
@@ -519,6 +521,15 @@ export default function Dashboard() {
 		}
 		repoRootRef.current = repoRoot;
 
+		// No tracker configured → show the selection flow instead of letting
+		// getIssueTracker silently fall back to GitHub and then fail auth on
+		// the dead-end error screen. Genuine auth/network failures of a
+		// *configured* tracker still hit the catch → error screen below.
+		if (!isRepoTrackerConfigured(repoRoot)) {
+			dispatch({ type: "TRACKER_SELECT_OPEN" });
+			return;
+		}
+
 		try {
 			// Re-detect terminal theme alongside data fetch so light↔dark
 			// switches propagate within one refresh cycle (≤30s). Skip the
@@ -663,16 +674,20 @@ export default function Dashboard() {
 					return;
 				}
 
-				if (inLeftPane) {
-					// Scroll left pane (issue list)
-					const maxIdx = s.flatIssues.length - 1;
-					if (maxIdx < 0) return;
-					const next = Math.max(0, Math.min(s.selectedIndex + delta, maxIdx));
-					dispatch({ type: "SELECT", index: next });
-				} else {
-					// Scroll right pane (detail)
-					const next = Math.max(0, s.detailScrollOffset + delta);
-					dispatch({ type: "SCROLL_DETAIL", offset: next });
+				{
+					const isTreesTab = s.activeTab === "trees";
+					const flat = isTreesTab ? s.flatTrees : s.flatIssues;
+					const idx = isTreesTab ? s.treeSelectedIndex : s.selectedIndex;
+					const detailOff = isTreesTab ? s.treeDetailScrollOffset : s.detailScrollOffset;
+					if (inLeftPane) {
+						const maxIdx = flat.length - 1;
+						if (maxIdx < 0) return;
+						const next = Math.max(0, Math.min(idx + delta, maxIdx));
+						dispatch({ type: isTreesTab ? "TREE_SELECT" : "SELECT", index: next });
+					} else {
+						const next = Math.max(0, detailOff + delta);
+						dispatch({ type: isTreesTab ? "TREE_SCROLL_DETAIL" : "SCROLL_DETAIL", offset: next });
+					}
 				}
 				return;
 			}
@@ -744,11 +759,17 @@ export default function Dashboard() {
 				return;
 			}
 
-			if (s.flatIssues.length === 0) return;
-			const listRow = s.listScrollOffset + contentRow;
-			const flatIdx = getFlatIndexForListRow(s.groups, s.flatIssues, listRow);
-			if (flatIdx !== null && flatIdx >= 0 && flatIdx < s.flatIssues.length) {
-				dispatch({ type: "SELECT", index: flatIdx });
+			{
+				const isTreesTab = s.activeTab === "trees";
+				const flat = isTreesTab ? s.flatTrees : s.flatIssues;
+				const grps = isTreesTab ? s.treeGroups : s.groups;
+				const scrollOff = isTreesTab ? s.treeListScrollOffset : s.listScrollOffset;
+				if (flat.length === 0) return;
+				const listRow = scrollOff + contentRow;
+				const flatIdx = getFlatIndexForListRow(grps, flat, listRow);
+				if (flatIdx !== null && flatIdx >= 0 && flatIdx < flat.length) {
+					dispatch({ type: isTreesTab ? "TREE_SELECT" : "SELECT", index: flatIdx });
+				}
 			}
 		};
 
@@ -802,6 +823,28 @@ export default function Dashboard() {
 		}
 	}, [state.selectedIndex, state.groups, contentHeight, state.listScrollOffset]);
 
+	// ── Trees list scroll tracking ───────────────────────────────────
+
+	useEffect(() => {
+		const rowIdx = getRowIndexForFlatIndex(
+			state.treeGroups,
+			state.flatTrees,
+			state.treeSelectedIndex,
+		);
+		const maxVisible = contentHeight - LIST_FOOTER_HEIGHT;
+		let offset = state.treeListScrollOffset;
+
+		if (rowIdx < offset) {
+			offset = Math.max(0, rowIdx - 1);
+		} else if (rowIdx >= offset + maxVisible) {
+			offset = rowIdx - maxVisible + 2;
+		}
+
+		if (offset !== state.treeListScrollOffset) {
+			dispatch({ type: "TREE_SCROLL_LIST", offset });
+		}
+	}, [state.treeSelectedIndex, state.treeGroups, contentHeight, state.treeListScrollOffset]);
+
 	// ── Review list scroll tracking ──────────────────────────────────
 
 	useEffect(() => {
@@ -829,6 +872,7 @@ export default function Dashboard() {
 	useEffect(() => {
 		const needsMouseOff =
 			state.overlay === "context-input" ||
+			(state.overlay === "issue-form" && state.issueFormPhase !== "saving") ||
 			(state.overlay === "pr-create" && state.prCreatePhase === "review") ||
 			(state.overlay === "commit" && state.commitPhase === "awaiting-message");
 		if (!needsMouseOff) return;
@@ -836,7 +880,7 @@ export default function Dashboard() {
 		return () => {
 			process.stdout.write("\x1b[?1002h\x1b[?1006h");
 		};
-	}, [state.overlay, state.prCreatePhase, state.commitPhase]);
+	}, [state.overlay, state.issueFormPhase, state.prCreatePhase, state.commitPhase]);
 
 	// ── Diff overlay: load file list when opened (gh pr diff path) ────
 	// Reviews-tab PRs without a local worktree shell out to `gh pr diff <n>`,
@@ -1151,7 +1195,11 @@ export default function Dashboard() {
 
 	const createAndLaunch = useCallback(
 		async (mode: "plan" | "implement", runSetup: boolean, base?: string, contextFile?: string) => {
-			const di = stateRef.current.flatIssues[stateRef.current.selectedIndex];
+			const sref = stateRef.current;
+			const di =
+				sref.activeTab === "trees"
+					? sref.flatTrees[sref.treeSelectedIndex]
+					: sref.flatIssues[sref.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
 			if (!repoRoot) return;
@@ -1273,7 +1321,10 @@ export default function Dashboard() {
 
 	const doWork = useCallback(
 		(mode: "plan" | "implement", customContext?: string) => {
-			const di = state.flatIssues[state.selectedIndex];
+			const di =
+				state.activeTab === "trees"
+					? state.flatTrees[state.treeSelectedIndex]
+					: state.flatIssues[state.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
 			if (!repoRoot) return;
@@ -1299,7 +1350,9 @@ export default function Dashboard() {
 
 				const defaultBranch = getDefaultBranch();
 				const baseOptions = [defaultBranch];
-				for (const fi of state.flatIssues) {
+				// Worktree branches live on the Trees tab now; scan there for
+				// candidate base branches (stacked work).
+				for (const fi of [...state.flatTrees, ...state.flatIssues]) {
 					if (fi.worktree && !baseOptions.includes(fi.worktree.branch)) {
 						baseOptions.push(fi.worktree.branch);
 					}
@@ -1320,12 +1373,154 @@ export default function Dashboard() {
 		[
 			state.flatIssues,
 			state.selectedIndex,
+			state.flatTrees,
+			state.treeSelectedIndex,
+			state.activeTab,
 			exit,
 			launchWorkInTmux,
 			proceedAfterBaseSelect,
 			writeContextFile,
 		],
 	);
+
+	// ── Tracker selection ────────────────────────────────────────────
+	// Mirrors `santree issue setup`. Local needs no account; Linear picks an
+	// authenticated workspace (sub-list when >1); GitHub verifies `gh`.
+	const chooseTracker = useCallback(
+		async (kind: "local" | "linear" | "github") => {
+			const root = repoRootRef.current ?? findMainRepoRoot();
+			if (!root) {
+				dispatch({ type: "SET_ERROR", error: "Not inside a git repository" });
+				return;
+			}
+			repoRootRef.current = root;
+			if (kind === "local") {
+				setRepoTracker(root, "local");
+				dispatch({ type: "TRACKER_SELECT_CLOSE" });
+				refresh();
+				return;
+			}
+			if (kind === "linear") {
+				const store = readLinearAuthStore();
+				const orgs = Object.entries(store).map(([slug, tokens]) => ({
+					slug,
+					name: tokens.org_name,
+				}));
+				if (orgs.length === 0) {
+					dispatch({
+						type: "TRACKER_SELECT_MESSAGE",
+						message: "No authenticated Linear workspaces. Run: santree linear auth",
+					});
+					return;
+				}
+				if (orgs.length === 1) {
+					setRepoLinearOrg(root, orgs[0]!.slug);
+					setRepoTracker(root, "linear");
+					dispatch({ type: "TRACKER_SELECT_CLOSE" });
+					refresh();
+					return;
+				}
+				dispatch({ type: "TRACKER_SELECT_PHASE", phase: "linear-org", orgs });
+				return;
+			}
+			// github
+			const user = await getAuthenticatedUser();
+			if (!user) {
+				dispatch({
+					type: "TRACKER_SELECT_MESSAGE",
+					message: "GitHub CLI not authenticated. Run: santree github auth",
+				});
+				return;
+			}
+			setRepoTracker(root, "github");
+			await getCurrentRepoNwo(root);
+			dispatch({ type: "TRACKER_SELECT_CLOSE" });
+			refresh();
+		},
+		[refresh],
+	);
+
+	const chooseLinearOrg = useCallback(
+		(slug: string) => {
+			const root = repoRootRef.current ?? findMainRepoRoot();
+			if (!root) return;
+			setRepoLinearOrg(root, slug);
+			setRepoTracker(root, "linear");
+			dispatch({ type: "TRACKER_SELECT_CLOSE" });
+			refresh();
+		},
+		[refresh],
+	);
+
+	// ── Issue CRUD (built-in tracker only) ───────────────────────────
+	const submitIssueForm = useCallback(async () => {
+		const s = stateRef.current;
+		const root = repoRootRef.current;
+		if (!root) return;
+		const tracker = getIssueTracker(root);
+		const title = s.issueFormTitle.split("\n")[0]?.trim() ?? "";
+		if (!title) {
+			dispatch({ type: "ISSUE_FORM_ERROR", error: "Title is required" });
+			return;
+		}
+		const description = s.issueFormDescription;
+		dispatch({ type: "ISSUE_FORM_PHASE", phase: "saving" });
+		try {
+			if (s.issueFormMode === "edit" && s.issueFormId && tracker.updateIssue) {
+				const res = await tracker.updateIssue(s.issueFormId, { title, description }, root);
+				if (!res.ok) {
+					dispatch({ type: "ISSUE_FORM_ERROR", error: res.message ?? "Update failed" });
+					return;
+				}
+			} else if (tracker.createIssue) {
+				const res = await tracker.createIssue({ title, description }, root);
+				if (!res.ok) {
+					dispatch({ type: "ISSUE_FORM_ERROR", error: res.message ?? "Create failed" });
+					return;
+				}
+			} else {
+				dispatch({ type: "ISSUE_FORM_ERROR", error: "Tracker does not support editing" });
+				return;
+			}
+			dispatch({ type: "ISSUE_FORM_CLOSE" });
+			dispatch({
+				type: "SET_ACTION_MESSAGE",
+				message: s.issueFormMode === "edit" ? "Issue updated" : "Issue created",
+			});
+			refresh();
+		} catch (e) {
+			dispatch({
+				type: "ISSUE_FORM_ERROR",
+				error: e instanceof Error ? e.message : "Failed to save issue",
+			});
+		}
+	}, [refresh]);
+
+	const deleteSelectedIssue = useCallback(async () => {
+		const s = stateRef.current;
+		const root = repoRootRef.current;
+		if (!root) return;
+		const di = s.flatIssues[s.selectedIndex];
+		if (!di) return;
+		const tracker = getIssueTracker(root);
+		dispatch({ type: "ISSUE_DELETE_CLOSE" });
+		if (!tracker.deleteIssue) return;
+		try {
+			const res = await tracker.deleteIssue(di.issue.identifier, root);
+			dispatch({
+				type: "SET_ACTION_MESSAGE",
+				message: res.ok
+					? `Deleted ${di.issue.identifier}`
+					: `Failed: ${res.message ?? "delete failed"}`,
+			});
+			if (res.ok) refresh();
+		} catch (e) {
+			dispatch({
+				type: "SET_ACTION_MESSAGE",
+				message: e instanceof Error ? e.message : "Delete failed",
+			});
+		}
+	}, [refresh]);
 
 	// ── Commit flow ──────────────────────────────────────────────────
 
@@ -2013,7 +2208,8 @@ export default function Dashboard() {
 			if (state.overlay === "confirm-delete") {
 				if (input === "y") {
 					dispatch({ type: "SET_OVERLAY", overlay: null });
-					const di = state.flatIssues[state.selectedIndex];
+					// Worktree removal is a Trees-tab action.
+					const di = state.flatTrees[state.treeSelectedIndex];
 					if (di?.worktree) {
 						const repoRoot = repoRootRef.current;
 						if (repoRoot) {
@@ -2045,12 +2241,88 @@ export default function Dashboard() {
 				return;
 			}
 
+			// Tracker-selection overlay (shown when no tracker is configured,
+			// or reopened with `t`). Not a text input — outer useInput drives it.
+			if (state.overlay === "tracker-select") {
+				if (state.trackerSelectPhase === "linear-org") {
+					const orgs = state.trackerSelectOrgs;
+					if (input === "j" || key.downArrow) {
+						dispatch({
+							type: "TRACKER_SELECT_MOVE",
+							index: Math.min(state.trackerSelectIndex + 1, orgs.length - 1),
+						});
+						return;
+					}
+					if (input === "k" || key.upArrow) {
+						dispatch({
+							type: "TRACKER_SELECT_MOVE",
+							index: Math.max(state.trackerSelectIndex - 1, 0),
+						});
+						return;
+					}
+					if (key.return) {
+						const org = orgs[state.trackerSelectIndex];
+						if (org) chooseLinearOrg(org.slug);
+						return;
+					}
+					if (key.escape) {
+						dispatch({ type: "TRACKER_SELECT_PHASE", phase: "root" });
+						return;
+					}
+					return;
+				}
+				const TRACKER_KINDS = ["local", "linear", "github"] as const;
+				if (input === "j" || key.downArrow) {
+					dispatch({
+						type: "TRACKER_SELECT_MOVE",
+						index: Math.min(state.trackerSelectIndex + 1, TRACKER_KINDS.length - 1),
+					});
+					return;
+				}
+				if (input === "k" || key.upArrow) {
+					dispatch({
+						type: "TRACKER_SELECT_MOVE",
+						index: Math.max(state.trackerSelectIndex - 1, 0),
+					});
+					return;
+				}
+				if (key.return) {
+					void chooseTracker(TRACKER_KINDS[state.trackerSelectIndex] ?? "local");
+					return;
+				}
+				if (input === "q" || key.escape) {
+					// Can't proceed without a tracker — leave the dashboard.
+					exit();
+					return;
+				}
+				return;
+			}
+
+			// Confirm-delete-issue overlay (built-in tracker only)
+			if (state.overlay === "confirm-delete-issue") {
+				if (input === "y") {
+					void deleteSelectedIssue();
+					return;
+				}
+				if (input === "n" || key.escape || input === "q") {
+					dispatch({ type: "ISSUE_DELETE_CLOSE" });
+					return;
+				}
+				return;
+			}
+
+			// Issue create/edit form. Title/description phases are owned by
+			// MultilineTextArea (outer useInput disabled via isActive); only
+			// the "saving" phase reaches here — swallow all keys.
+			if (state.overlay === "issue-form") {
+				return;
+			}
+
 			// Tab switching (only when no overlay is active)
+			const TAB_ORDER: Array<typeof state.activeTab> = ["issues", "trees", "reviews"];
 			if (key.tab) {
-				dispatch({
-					type: "SET_TAB",
-					tab: state.activeTab === "issues" ? "reviews" : "issues",
-				});
+				const idx = TAB_ORDER.indexOf(state.activeTab);
+				dispatch({ type: "SET_TAB", tab: TAB_ORDER[(idx + 1) % TAB_ORDER.length]! });
 				return;
 			}
 			if (input === "1") {
@@ -2058,7 +2330,16 @@ export default function Dashboard() {
 				return;
 			}
 			if (input === "2") {
+				dispatch({ type: "SET_TAB", tab: "trees" });
+				return;
+			}
+			if (input === "3") {
 				dispatch({ type: "SET_TAB", tab: "reviews" });
+				return;
+			}
+			// Reopen tracker selection from any tab.
+			if (input === "t") {
+				dispatch({ type: "TRACKER_SELECT_OPEN" });
 				return;
 			}
 
@@ -2321,36 +2602,113 @@ export default function Dashboard() {
 				return; // prevent fallthrough to issues actions
 			}
 
-			const maxIndex = state.flatIssues.length - 1;
+			// Issues tab = backlog/planning; Trees tab = worktrees in
+			// progress. Both reuse the same list/detail UI and worktree action
+			// handlers below — only the backing data + selection slice differ.
+			const isTrees = state.activeTab === "trees";
+			const viewFlat = isTrees ? state.flatTrees : state.flatIssues;
+			const viewIndex = isTrees ? state.treeSelectedIndex : state.selectedIndex;
+			const viewDetailScroll = isTrees ? state.treeDetailScrollOffset : state.detailScrollOffset;
+			const selectAction = isTrees ? ("TREE_SELECT" as const) : ("SELECT" as const);
+			const scrollDetailAction = isTrees
+				? ("TREE_SCROLL_DETAIL" as const)
+				: ("SCROLL_DETAIL" as const);
+			const maxIndex = viewFlat.length - 1;
 
 			// Navigation
 			if (input === "j" || (key.downArrow && !key.shift)) {
-				const next = Math.min(state.selectedIndex + 1, maxIndex);
-				dispatch({ type: "SELECT", index: next });
+				dispatch({ type: selectAction, index: Math.min(viewIndex + 1, maxIndex) });
 				return;
 			}
 			if (input === "k" || (key.upArrow && !key.shift)) {
-				const prev = Math.max(state.selectedIndex - 1, 0);
-				dispatch({ type: "SELECT", index: prev });
+				dispatch({ type: selectAction, index: Math.max(viewIndex - 1, 0) });
 				return;
 			}
 
 			// Detail scroll
 			if (key.shift && key.downArrow) {
-				dispatch({ type: "SCROLL_DETAIL", offset: state.detailScrollOffset + 3 });
+				dispatch({ type: scrollDetailAction, offset: viewDetailScroll + 3 });
 				return;
 			}
 			if (key.shift && key.upArrow) {
-				dispatch({
-					type: "SCROLL_DETAIL",
-					offset: Math.max(0, state.detailScrollOffset - 3),
-				});
+				dispatch({ type: scrollDetailAction, offset: Math.max(0, viewDetailScroll - 3) });
 				return;
 			}
 
-			const di = state.flatIssues[state.selectedIndex];
+			const di = viewFlat[viewIndex];
 			if (!di) return;
 
+			// ── Issues tab: backlog actions only (no worktree ops) ──────
+			if (!isTrees) {
+				const tracker = getIssueTracker(repoRootRef.current);
+				const canMutate = tracker.canMutate === true;
+				if (input === "w") {
+					if (di.worktree?.sessionId) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: "Session active — switch to the Trees tab to resume.",
+						});
+						return;
+					}
+					dispatch({ type: "SET_OVERLAY", overlay: "mode-select" });
+					return;
+				}
+				if (input === "n") {
+					if (!canMutate) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: `${tracker.displayName} issues can't be created from santree`,
+						});
+						return;
+					}
+					dispatch({
+						type: "ISSUE_FORM_OPEN",
+						mode: "create",
+						id: null,
+						title: "",
+						description: "",
+					});
+					return;
+				}
+				if (input === "e") {
+					if (!canMutate) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: `${tracker.displayName} issues can't be edited from santree`,
+						});
+						return;
+					}
+					dispatch({
+						type: "ISSUE_FORM_OPEN",
+						mode: "edit",
+						id: di.issue.identifier,
+						title: di.issue.title,
+						description: di.issue.description ?? "",
+					});
+					return;
+				}
+				if (input === "d") {
+					if (!canMutate) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "Nothing to delete here" });
+						return;
+					}
+					dispatch({ type: "ISSUE_DELETE_OPEN" });
+					return;
+				}
+				if (input === "o") {
+					if (!di.issue.url) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "No issue URL available" });
+						return;
+					}
+					if (openUrl(di.issue.url)) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened in browser" });
+					}
+					return;
+				}
+				return; // backlog has no worktree/PR actions
+			}
+
+			// ── Trees tab: worktree-in-progress actions ─────────────────
 			// Work
 			if (input === "w") {
 				if (di.worktree?.sessionId) {
@@ -2579,6 +2937,10 @@ export default function Dashboard() {
 		{
 			isActive:
 				state.overlay !== "context-input" &&
+				// Issue form title/description are owned by MultilineTextArea;
+				// only the "saving" phase needs the outer handler (a no-op
+				// swallow), so disabling it for the whole overlay is fine.
+				state.overlay !== "issue-form" &&
 				(state.overlay !== "pr-create" || state.prCreatePhase !== "review") &&
 				(state.overlay !== "commit" || state.commitPhase !== "awaiting-message"),
 		},
@@ -2609,8 +2971,13 @@ export default function Dashboard() {
 		);
 	}
 
-	const selectedIssue = state.flatIssues[state.selectedIndex] ?? null;
+	// The active issue/tree row drives the detail pane and action row.
+	const selectedIssue =
+		(state.activeTab === "trees"
+			? state.flatTrees[state.treeSelectedIndex]
+			: state.flatIssues[state.selectedIndex]) ?? null;
 	const selectedReview = state.flatReviews[state.reviewSelectedIndex] ?? null;
+	const activeTracker = getIssueTracker(repoRootRef.current);
 
 	return (
 		<Box width={columns} height={rows} flexDirection="column">
@@ -2660,8 +3027,14 @@ export default function Dashboard() {
 				/>
 				<Text> </Text>
 				<Tab
+					active={state.activeTab === "trees"}
+					label={`2 Trees (${state.flatTrees.length})`}
+					mode={theme.mode}
+				/>
+				<Text> </Text>
+				<Tab
 					active={state.activeTab === "reviews"}
-					label={`2 Reviews (${state.flatReviews.length})`}
+					label={`3 Reviews (${state.flatReviews.length})`}
 					mode={theme.mode}
 				/>
 			</Box>
@@ -2671,6 +3044,152 @@ export default function Dashboard() {
 				{/* Main content */}
 				{state.overlay === "help" ? (
 					<HelpOverlay width={innerWidth} height={contentHeight} />
+				) : state.overlay === "tracker-select" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box
+							flexDirection="column"
+							borderStyle="round"
+							borderColor="cyan"
+							paddingX={3}
+							paddingY={1}
+						>
+							{state.trackerSelectPhase === "linear-org" ? (
+								<>
+									<Text bold>Select a Linear workspace:</Text>
+									<Text> </Text>
+									{state.trackerSelectOrgs.map((org, i) => {
+										const sel = i === state.trackerSelectIndex;
+										return (
+											<Text key={org.slug} color={sel ? "cyan" : undefined} bold={sel}>
+												{sel ? "> " : "  "}
+												{org.name} ({org.slug})
+											</Text>
+										);
+									})}
+									<Text> </Text>
+									<Text dimColor>j/k to navigate, Enter to link, ESC to go back</Text>
+								</>
+							) : (
+								<>
+									<Text bold>Select an issue tracker for this repo:</Text>
+									<Text> </Text>
+									{[
+										{ label: "Local", hint: "built-in, file-based — no account needed" },
+										{ label: "Linear", hint: "OAuth workspace" },
+										{ label: "GitHub", hint: "GitHub Issues via gh CLI" },
+									].map((t, i) => {
+										const sel = i === state.trackerSelectIndex;
+										return (
+											<Text key={t.label}>
+												<Text color={sel ? "cyan" : undefined} bold={sel}>
+													{sel ? "> " : "  "}
+													{t.label}
+												</Text>
+												<Text dimColor> — {t.hint}</Text>
+											</Text>
+										);
+									})}
+									<Text> </Text>
+									{state.trackerSelectMessage ? (
+										<Text color="yellow">{state.trackerSelectMessage}</Text>
+									) : null}
+									<Text dimColor>j/k to navigate, Enter to select, q to quit</Text>
+								</>
+							)}
+						</Box>
+					</Box>
+				) : state.overlay === "confirm-delete-issue" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box
+							flexDirection="column"
+							borderStyle="round"
+							borderColor="red"
+							paddingX={3}
+							paddingY={1}
+						>
+							<Text bold color="red">
+								Delete issue?
+							</Text>
+							<Text> </Text>
+							<Text>
+								{selectedIssue?.issue.identifier}
+								{"  "}
+								{selectedIssue?.issue.title}
+							</Text>
+							<Text dimColor>This removes the issue file from .santree/issues/</Text>
+							<Text> </Text>
+							<Text>
+								<Text color="red" bold>
+									y
+								</Text>
+								{"  Confirm"}
+							</Text>
+							<Text>
+								<Text color="cyan" bold>
+									n
+								</Text>
+								{"  Cancel"}
+							</Text>
+						</Box>
+					</Box>
+				) : state.overlay === "issue-form" ? (
+					<Box flexGrow={1} justifyContent="center" alignItems="center">
+						<Box flexDirection="column" paddingX={2} width={Math.min(columns - 8, 100)}>
+							<Text bold color="cyan">
+								{state.issueFormMode === "edit" ? `Edit ${state.issueFormId}` : "New issue"}
+								{" · "}
+								{state.issueFormPhase === "title"
+									? "title"
+									: state.issueFormPhase === "description"
+										? "description"
+										: "saving…"}
+							</Text>
+							{state.issueFormError ? (
+								<Text color="red">{state.issueFormError}</Text>
+							) : (
+								<Text dimColor>
+									{state.issueFormPhase === "title"
+										? "First line is the title"
+										: "Markdown body — Ctrl+D to save"}
+								</Text>
+							)}
+							<Text> </Text>
+							{state.issueFormPhase === "saving" ? (
+								<Text color="cyan">Saving…</Text>
+							) : state.issueFormPhase === "title" ? (
+								<MultilineTextArea
+									value={state.issueFormTitle}
+									onChange={(v) => dispatch({ type: "ISSUE_FORM_TITLE", title: v })}
+									onSubmit={() => dispatch({ type: "ISSUE_FORM_PHASE", phase: "description" })}
+									onCancel={() => dispatch({ type: "ISSUE_FORM_CLOSE" })}
+									width={Math.min(columns - 8, 100)}
+									height={3}
+									placeholder="Issue title…"
+								/>
+							) : (
+								<MultilineTextArea
+									value={state.issueFormDescription}
+									onChange={(v) => dispatch({ type: "ISSUE_FORM_DESC", description: v })}
+									onSubmit={() => void submitIssueForm()}
+									onCancel={() => dispatch({ type: "ISSUE_FORM_CLOSE" })}
+									width={Math.min(columns - 8, 100)}
+									height={10}
+									placeholder="Description (optional)…"
+								/>
+							)}
+							<Text> </Text>
+							<Text dimColor>
+								<Text color="cyan" bold>
+									Ctrl+D
+								</Text>
+								{state.issueFormPhase === "title" ? " next  ·  " : " save  ·  "}
+								<Text color="cyan" bold>
+									Ctrl+G
+								</Text>
+								{" cancel"}
+							</Text>
+						</Box>
+					</Box>
 				) : state.overlay === "mode-select" ? (
 					<Box flexGrow={1} justifyContent="center" alignItems="center">
 						<Box
@@ -2855,21 +3374,34 @@ export default function Dashboard() {
 									width={leftWidth}
 									selectionBg={theme.selectionBg}
 								/>
-							) : state.flatIssues.length === 0 ? (
+							) : (state.activeTab === "trees" ? state.flatTrees : state.flatIssues).length ===
+							  0 ? (
 								<Box
 									width={leftWidth}
 									height={contentHeight}
 									justifyContent="center"
 									alignItems="center"
+									flexDirection="column"
 								>
-									<Text color="yellow">No active issues</Text>
+									<Text color="yellow">
+										{state.activeTab === "trees" ? "No worktrees yet" : "No active issues"}
+									</Text>
+									{state.activeTab === "issues" && activeTracker.canMutate ? (
+										<Text dimColor>Press n to create one</Text>
+									) : null}
 								</Box>
 							) : (
 								<IssueList
-									groups={state.groups}
-									flatIssues={state.flatIssues}
-									selectedIndex={state.selectedIndex}
-									scrollOffset={state.listScrollOffset}
+									groups={state.activeTab === "trees" ? state.treeGroups : state.groups}
+									flatIssues={state.activeTab === "trees" ? state.flatTrees : state.flatIssues}
+									selectedIndex={
+										state.activeTab === "trees" ? state.treeSelectedIndex : state.selectedIndex
+									}
+									scrollOffset={
+										state.activeTab === "trees"
+											? state.treeListScrollOffset
+											: state.listScrollOffset
+									}
 									height={contentHeight}
 									width={leftWidth}
 									selectionBg={theme.selectionBg}
@@ -2938,7 +3470,11 @@ export default function Dashboard() {
 							) : (
 								<DetailPanel
 									issue={selectedIssue}
-									scrollOffset={state.detailScrollOffset}
+									scrollOffset={
+										state.activeTab === "trees"
+											? state.treeDetailScrollOffset
+											: state.detailScrollOffset
+									}
 									height={contentHeight}
 									width={rightWidth}
 									creatingForTicket={state.creatingForTicket}
@@ -2970,7 +3506,8 @@ export default function Dashboard() {
 									selectedIssue={selectedIssue}
 									selectedReview={selectedReview}
 									overlay={state.overlay}
-									trackerName={getIssueTracker(repoRootRef.current).displayName}
+									trackerName={activeTracker.displayName}
+									canMutate={activeTracker.canMutate === true}
 								/>
 							</Box>
 						</>
@@ -2992,12 +3529,14 @@ function ActionRow({
 	selectedReview,
 	overlay,
 	trackerName,
+	canMutate,
 }: {
-	activeTab: "issues" | "reviews";
+	activeTab: import("../lib/dashboard/types.js").DashboardTab;
 	selectedIssue: DashboardIssue | null;
 	selectedReview: import("../lib/dashboard/types.js").EnrichedReviewPR | null;
 	overlay: import("../lib/dashboard/types.js").ActionOverlay;
 	trackerName: string;
+	canMutate: boolean;
 }) {
 	// During the diff overlay, none of the per-issue actions apply (View diff
 	// is what got us here, Commit/PR/etc. need the detail panel context). Keep
@@ -3010,7 +3549,7 @@ function ActionRow({
 				? buildReviewActions(selectedReview)
 				: []
 			: selectedIssue
-				? buildIssueActions(selectedIssue, trackerName)
+				? buildIssueActions(selectedIssue, trackerName, { tab: activeTab, canMutate })
 				: [];
 
 	if (items.length === 0) return <Text> </Text>;

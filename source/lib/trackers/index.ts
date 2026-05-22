@@ -1,5 +1,6 @@
 import { linearTracker } from "./linear/index.js";
 import { githubTracker } from "./github/index.js";
+import { localTracker } from "./local/index.js";
 import { readTrackerConfig } from "./config.js";
 import { readLinearAuthStore } from "./auth-store.js";
 import type { IssueTracker, IssueTrackerKind } from "./types.js";
@@ -28,16 +29,38 @@ export function getIssueTracker(repoRoot: string | null): IssueTracker {
 	const explicit = process.env["SANTREE_TRACKER"]?.toLowerCase();
 	if (explicit === "linear") return linearTracker;
 	if (explicit === "github") return githubTracker;
+	if (explicit === "local") return localTracker;
 
 	if (repoRoot) {
 		const cfg = readTrackerConfig(repoRoot);
 		if (cfg.kind === "linear") return linearTracker;
 		if (cfg.kind === "github") return githubTracker;
+		if (cfg.kind === "local") return localTracker;
 		if (cfg.legacyLinearOrg) return linearTracker;
 	}
 
 	if (Object.keys(readLinearAuthStore()).length > 0) return linearTracker;
 	return githubTracker;
+}
+
+/**
+ * True when the repo has an *explicit* tracker choice — env override,
+ * per-repo `_tracker.kind`, legacy `_linear.org`, or any stored Linear
+ * credentials (the old auto-detect signal). When false, callers (the
+ * dashboard) should present the tracker-selection flow instead of letting
+ * `getIssueTracker` silently fall back to GitHub and then fail auth.
+ *
+ * Pure detection — does not alter `getIssueTracker`'s fallback, so existing
+ * non-dashboard call sites keep working unchanged.
+ */
+export function isRepoTrackerConfigured(repoRoot: string | null): boolean {
+	const explicit = process.env["SANTREE_TRACKER"]?.toLowerCase();
+	if (explicit === "linear" || explicit === "github" || explicit === "local") return true;
+	if (repoRoot) {
+		const cfg = readTrackerConfig(repoRoot);
+		if (cfg.kind || cfg.legacyLinearOrg) return true;
+	}
+	return Object.keys(readLinearAuthStore()).length > 0;
 }
 
 export function getActiveTrackerKind(repoRoot: string | null): IssueTrackerKind {

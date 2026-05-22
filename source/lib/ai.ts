@@ -244,6 +244,10 @@ export function launchAgent(
 
 	const args: string[] = [];
 
+	// Plan mode uses Claude Code's `--permission-mode plan` (read-only,
+	// restrictive); implement runs use `auto`. Auto-acceptance of non-mutating
+	// tools while planning is governed by the user's `useAutoModeDuringPlan`
+	// setting in ~/.claude/settings.json, not by santree.
 	args.push("--permission-mode", opts?.planMode ? "plan" : "auto");
 
 	if (opts?.sessionId) {

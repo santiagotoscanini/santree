@@ -64,7 +64,7 @@ The diff is **branch-only** — it uses `git merge-base` against the configured 
 | Key | Action |
 |---|---|
 | `[C]` | Stage + commit + push (inline message input or `--fill` from Claude) |
-| `[c]` | Create the PR (fill template via Claude, or open the new-PR page in the browser) |
+| `[c]` | Create the PR (fill template via Claude with a draft/ready toggle, or open the new-PR page pre-filled in the browser) |
 | `[r]` | Self-review the PR with Claude |
 | `[f]` | Apply review comments / CI failures with Claude |
 

@@ -58,6 +58,7 @@ function ciIndicator(checks: PRCheck[] | null): { glyph: string; color: string }
 }
 
 export type ListRow =
+	| { kind: "spacer" }
 	| { kind: "header"; name: string; count: number; isFirst: boolean }
 	| { kind: "status-header"; name: string; type: string; count: number }
 	| { kind: "issue"; issue: DashboardIssue; flatIndex: number; depth: number };
@@ -82,6 +83,10 @@ export function buildIssueListRows(
 
 	groups.forEach((group, gi) => {
 		const totalIssues = group.statusGroups.reduce((sum, sg) => sum + sg.issues.length, 0);
+		// Blank line between projects. Modelled as a real row (not a render-only
+		// `marginTop`) so `rows[]` indices line up 1:1 with rendered rows —
+		// otherwise the dashboard's click→row mapping drifts by one per project.
+		if (gi > 0) rows.push({ kind: "spacer" });
 		rows.push({ kind: "header", name: group.name, count: totalIssues, isFirst: gi === 0 });
 		for (const sg of group.statusGroups) {
 			rows.push({ kind: "status-header", name: sg.name, type: sg.type, count: sg.issues.length });
@@ -122,6 +127,10 @@ export default function IssueList({
 			{/* List content */}
 			<Box flexDirection="column" height={height}>
 				{visible.map((row, i) => {
+					if (row.kind === "spacer") {
+						return <Box key={`sp-${i}`} height={1} />;
+					}
+
 					if (row.kind === "header") {
 						// On the first project header, also render the WT/CI column
 						// labels right-aligned to the worktree/CI glyph columns —
@@ -134,7 +143,7 @@ export default function IssueList({
 							? Math.max(2, width - namePart.length - labelText.length)
 							: 0;
 						return (
-							<Box key={`h-${i}`} marginTop={i === 0 ? 0 : 1}>
+							<Box key={`h-${i}`}>
 								<Text bold>{row.name}</Text>
 								<Text dimColor>
 									{"  "}

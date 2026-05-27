@@ -165,15 +165,20 @@ export default function DetailPanel({
 		const contentRows = height - 1;
 		const startIdx = Math.max(0, logLines.length - contentRows);
 		const visible = logLines.slice(startIdx, startIdx + contentRows);
+		// Setup-script output is arbitrary-length; clamp each line to the pane
+		// width so long lines truncate instead of wrapping/overflowing into the
+		// left pane. Ink's default soft-wrap would push the box past `height`.
+		const clampLine = (s: string) =>
+			s.length > width ? s.slice(0, Math.max(0, width - 1)) + "…" : s;
 
 		return (
 			<Box flexDirection="column" width={width} height={height}>
 				<Text color="yellow" bold>
-					Setting up worktree for {creatingForTicket}...
+					{clampLine(`Setting up worktree for ${creatingForTicket}...`)}
 				</Text>
 				{visible.map((line, i) => (
 					<Box key={i}>
-						<Text dimColor>{line}</Text>
+						<Text dimColor>{clampLine(line)}</Text>
 					</Box>
 				))}
 			</Box>

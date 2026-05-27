@@ -20,7 +20,7 @@ How to point santree at your tools, workflows, and conventions.
 | `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, falls back to repo config → legacy `_linear.org` → auto-detect. |
 | `SANTREE_EDITOR` | Editor used by `[e]` (open in editor) actions in the dashboard, and by `Ctrl+O` in the multi-line context input. Defaults to `code`. Examples: `cursor`, `zed`, `code`, `nvim`. GUI editors get `--wait` automatically. |
 | `SANTREE_DIFF_TOOL` | Pager used by `worktree diff` (CLI) and the dashboard `[v]` overlay. Passed to git as `-c core.pager=<tool>` for the CLI, and used to pipe content for the overlay. Examples: `delta`, `diff-so-fancy`. Must accept a unified diff on stdin. Names are restricted to `[A-Za-z0-9_\-/.+]`. |
-| `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In `auto` mode, santree queries the terminal's background via OSC 11 and re-detects on each refresh cycle so theme switches propagate within ~30s. Set explicitly when your terminal doesn't respond to OSC 11. |
+| `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In `auto` mode, santree queries the terminal's background via OSC 11 and re-detects on each refresh cycle so theme switches propagate within ~5 minutes (or sooner on a manual `R`). Set explicitly when your terminal doesn't respond to OSC 11. |
 
 Santree always launches Claude with `--permission-mode auto` (Claude Code's auto mode), or `plan` when invoked in plan mode. Worktree-scoped automation is the default — there is no opt-in flag.
 

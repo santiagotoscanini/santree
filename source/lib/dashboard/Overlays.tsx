@@ -187,6 +187,7 @@ interface PrCreateOverlayProps {
 	url: string | null;
 	body: string | null;
 	title: string | null;
+	draft: boolean;
 	dispatch: React.Dispatch<DashboardAction>;
 }
 
@@ -200,6 +201,7 @@ export function PrCreateOverlay({
 	url,
 	body,
 	title,
+	draft,
 	dispatch,
 }: PrCreateOverlayProps) {
 	return (
@@ -290,7 +292,10 @@ export function PrCreateOverlay({
 			)}
 			{phase === "confirm" && (
 				<>
-					<Text bold>Create this PR?</Text>
+					<Text bold>
+						Create this PR?{" "}
+						<Text color={draft ? "yellow" : "green"}>({draft ? "draft" : "ready for review"})</Text>
+					</Text>
 					<Text> </Text>
 					<Text>
 						<Text dimColor>title: </Text>
@@ -322,6 +327,10 @@ export function PrCreateOverlay({
 							Enter
 						</Text>
 						{"  create   "}
+						<Text color="yellow" bold>
+							d
+						</Text>
+						{`  ${draft ? "mark ready" : "mark draft"}   `}
 						<Text color="yellow" bold>
 							e
 						</Text>

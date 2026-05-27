@@ -4,6 +4,10 @@
 
 Santree is a CLI for managing Git worktrees with integrated AI assistance. It creates isolated development environments for feature branches, integrating with GitHub PRs and pluggable issue trackers (Linear or GitHub Issues today, more behind the same interface tomorrow).
 
+## Documentation
+
+The `docs/` folder is the user-facing documentation (GitHub Pages site, live at santree.toscanini.me). **Any change that affects user-visible behavior — new commands, flags, env vars, keybindings, or workflow changes — must be reflected in `docs/` in the same change.** Treat the docs as part of the deliverable, not a follow-up: if a code change makes a `docs/` page stale, update that page before considering the work done.
+
 ## Build Commands
 
 ```bash
@@ -166,7 +170,7 @@ Full-screen interactive dashboard showing all issues assigned to the user from t
 - **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a new window
 - **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in a new window
 
-**Data fetching**: `loadDashboardData()` calls `getIssueTracker(repoRoot).listAssigned(repoRoot)` and enriches each issue with worktree info (git status, commits ahead, session ID, **diff shortstat vs merge-base**), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 30s. `getDiffShortstatAsync()` in `lib/git.ts` runs `git diff --shortstat $(git merge-base <base> HEAD)`.
+**Data fetching**: `loadDashboardData()` calls `getIssueTracker(repoRoot).listAssigned(repoRoot)` and enriches each issue with worktree info (git status, commits ahead, session ID, **diff shortstat vs merge-base**), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 5 minutes (each refresh fans out into several GraphQL-backed `gh pr view`/`gh pr checks` calls per PR; the interval is spaced to stay within GitHub's hourly GraphQL rate limit). `getDiffShortstatAsync()` in `lib/git.ts` runs `git diff --shortstat $(git merge-base <base> HEAD)`.
 
 **Alt screen lifecycle**: `ensureAltScreen()` enters alt screen before first render. Cleanup in `useEffect` return exits alt screen — `exit()` triggers unmount which triggers cleanup (do not write escape sequences before `exit()` or Ink's final render leaks to normal buffer).
 
@@ -183,7 +187,7 @@ Full-screen interactive dashboard showing all issues assigned to the user from t
 |---|---|
 | `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, the factory falls back to repo config → legacy `_linear.org` → auto-detect (any Linear creds → Linear, else GitHub). |
 | `SANTREE_DIFF_TOOL` | Diff pager for `worktree diff` (CLI) and the dashboard `[v]` overlay. CLI passes `-c core.pager=<tool>` to git (the pager handles render + scroll, as usual). The dashboard captures `git diff --color=always \| <tool>` stdout as a string and handles scrolling itself in Ink — the pager's render half is what we want there, the scroll half is bypassed. Validated against `[A-Za-z0-9_\-/.+]` in `getDiffTool()` to keep the spawn arg surface tight. |
-| `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In auto mode, `detectTerminalTheme()` in `lib/dashboard/theme.ts` queries the terminal background via OSC 11 (`\x1b]11;?\x07`), parses the RGB response, and picks light/dark by Rec. 709 luminance. Re-runs alongside `loadDashboardData()` on every refresh so theme switches propagate within ~30s. Falls back to `dark` on non-TTY or 150ms timeout. Affects `selectionBg` (only theme-sensitive style — terminal-native foreground colors render correctly on either background). |
+| `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In auto mode, `detectTerminalTheme()` in `lib/dashboard/theme.ts` queries the terminal background via OSC 11 (`\x1b]11;?\x07`), parses the RGB response, and picks light/dark by Rec. 709 luminance. Re-runs alongside `loadDashboardData()` on every refresh so theme switches propagate within ~5 minutes (or sooner on a manual `R`). Falls back to `dark` on non-TTY or 150ms timeout. Affects `selectionBg` (only theme-sensitive style — terminal-native foreground colors render correctly on either background). |
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. |
 
 Santree always launches Claude with `--permission-mode auto` (or `plan` for plan mode), Claude Code's auto mode. There is no opt-in env var — worktree-scoped automation is the default. Set `--permission-mode default` upstream if you ever need stricter prompting.

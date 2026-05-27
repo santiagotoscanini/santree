@@ -161,6 +161,7 @@ export interface DashboardState {
 	prCreateUrl: string | null;
 	prCreateBody: string | null;
 	prCreateTitle: string | null;
+	prCreateDraft: boolean;
 	setupMode: "plan" | "implement" | null;
 	baseSelectOptions: string[];
 	baseSelectIndex: number;
@@ -231,6 +232,7 @@ export type DashboardAction =
 	| { type: "PR_CREATE_BODY_CHANGE"; body: string }
 	| { type: "PR_CREATE_CONFIRM" }
 	| { type: "PR_CREATE_EDIT" }
+	| { type: "PR_CREATE_TOGGLE_DRAFT" }
 	| { type: "PR_CREATE_DONE"; url: string }
 	| { type: "PR_CREATE_CANCEL" }
 	| { type: "SETUP_CONFIRM_SHOW"; mode: "plan" | "implement" }
@@ -317,6 +319,7 @@ export const initialState: DashboardState = {
 	prCreateUrl: null,
 	prCreateBody: null,
 	prCreateTitle: null,
+	prCreateDraft: false,
 	setupMode: null,
 	baseSelectOptions: [],
 	baseSelectIndex: 0,
@@ -451,6 +454,7 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				prCreateBranch: action.branch,
 				prCreateError: null,
 				prCreateUrl: null,
+				prCreateDraft: false,
 			};
 		case "PR_CREATE_PHASE":
 			return { ...state, prCreatePhase: action.phase };
@@ -468,6 +472,8 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 			return { ...state, prCreateBody: action.body };
 		case "PR_CREATE_CONFIRM":
 			return { ...state, prCreatePhase: "confirm" };
+		case "PR_CREATE_TOGGLE_DRAFT":
+			return { ...state, prCreateDraft: !state.prCreateDraft };
 		case "PR_CREATE_EDIT":
 			return { ...state, prCreatePhase: "review" };
 		case "PR_CREATE_DONE":

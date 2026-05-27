@@ -30,6 +30,7 @@ import { getInstalledClaudeVersion } from "../lib/version.js";
 import { extractTicketId, getStagedDiffContent } from "../lib/git.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
 import { shellEscape } from "../lib/multiplexer/types.js";
+import Spinner from "ink-spinner";
 import SquirrelLoader from "../lib/squirrel-loader.js";
 import { getPRTemplate } from "../lib/github.js";
 import { renderPrompt, renderDiff, renderTicket } from "../lib/prompts.js";
@@ -521,7 +522,8 @@ export default function Dashboard() {
 
 		try {
 			// Re-detect terminal theme alongside data fetch so light↔dark
-			// switches propagate within one refresh cycle (≤30s). Skip the
+			// switches propagate within one refresh cycle (≤5min, or sooner
+			// on a manual `R`). Skip the
 			// OSC 11 query when a text-input overlay is active — the
 			// terminal's response would otherwise leak into the user's
 			// commit/PR/context message via Ink's stdin handler.
@@ -762,16 +764,21 @@ export default function Dashboard() {
 		};
 		init();
 
-		// Auto-refresh every 30s. While the diff overlay is open, also bump
-		// the diff refresh tick so new/removed files (created or deleted
-		// outside the dashboard) eventually show up. Stage/unstage already
-		// patch XY in place, so this is purely about file-set drift.
+		// Auto-refresh every 5 minutes. Each refresh fans out into several
+		// `gh pr view`/`gh pr checks` calls per worktree-PR plus the reviews
+		// tab, all on the GraphQL API (5000-point/hour budget) — a 30s cadence
+		// drained it within the hour when the dashboard was left open. Press
+		// `R` for an on-demand refresh between cycles. While the diff overlay
+		// is open, also bump the diff refresh tick so new/removed files
+		// (created or deleted outside the dashboard) eventually show up.
+		// Stage/unstage already patch XY in place, so this is purely about
+		// file-set drift.
 		refreshTimerRef.current = setInterval(() => {
 			refresh();
 			if (stateRef.current.overlay === "diff") {
 				dispatch({ type: "DIFF_REFRESH_FILES" });
 			}
-		}, 30_000);
+		}, 300_000);
 
 		return () => {
 			if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
@@ -1601,8 +1608,9 @@ export default function Dashboard() {
 			const bodyFile = path.join(os.tmpdir(), `santree-pr-${Date.now()}.md`);
 			fs.writeFileSync(bodyFile, s.prCreateBody);
 
+			const draftFlag = s.prCreateDraft ? " --draft" : "";
 			const { stdout } = await execAsync(
-				`gh pr create --title "${s.prCreateTitle.replace(/"/g, '\\"')}" --base "${base}" --head "${s.prCreateBranch}" --body-file "${bodyFile}"`,
+				`gh pr create --title "${s.prCreateTitle.replace(/"/g, '\\"')}" --base "${base}" --head "${s.prCreateBranch}" --body-file "${bodyFile}"${draftFlag}`,
 				{ cwd },
 			);
 
@@ -1628,8 +1636,25 @@ export default function Dashboard() {
 		const base = getBaseBranch(s.prCreateBranch);
 		const cwd = s.prCreateWorktreePath;
 
+		// Carry the edited title/body into GitHub's compose page so the browser
+		// opens pre-filled (gh passes them as URL query params). Without this,
+		// the fill→"open in browser" path would drop everything the user just
+		// reviewed. Note: very long bodies can be truncated by GitHub's URL
+		// length limit — gh's documented `--web` behavior; the editable compose
+		// page is the fallback. Draft selection lives in the browser dropdown,
+		// since `gh --web` doesn't accept `--draft`.
+		let bodyFile: string | null = null;
 		try {
-			await execAsync(`gh pr create --web --base "${base}" --head "${s.prCreateBranch}"`, { cwd });
+			let cmd = `gh pr create --web --base "${base}" --head "${s.prCreateBranch}"`;
+			if (s.prCreateTitle) {
+				cmd += ` --title "${s.prCreateTitle.replace(/"/g, '\\"')}"`;
+			}
+			if (s.prCreateBody) {
+				bodyFile = path.join(os.tmpdir(), `santree-pr-${Date.now()}.md`);
+				fs.writeFileSync(bodyFile, s.prCreateBody);
+				cmd += ` --body-file "${bodyFile}"`;
+			}
+			await execAsync(cmd, { cwd });
 			dispatch({ type: "PR_CREATE_DONE", url: "" });
 			setTimeout(() => {
 				dispatch({ type: "PR_CREATE_CANCEL" });
@@ -1638,6 +1663,12 @@ export default function Dashboard() {
 		} catch (e: any) {
 			const msg = e?.stderr?.trim() || e?.message || "Failed to open in browser";
 			dispatch({ type: "PR_CREATE_ERROR", error: msg });
+		} finally {
+			if (bodyFile) {
+				try {
+					fs.unlinkSync(bodyFile);
+				} catch {}
+			}
 		}
 	}, [refresh]);
 
@@ -1724,6 +1755,10 @@ export default function Dashboard() {
 				if (state.prCreatePhase === "confirm") {
 					if (input === "y" || key.return) {
 						confirmPrCreate();
+						return;
+					}
+					if (input === "d") {
+						dispatch({ type: "PR_CREATE_TOGGLE_DRAFT" });
 						return;
 					}
 					if (input === "e") {
@@ -2641,7 +2676,13 @@ export default function Dashboard() {
 						{latestClaudeVersion}
 					</Text>
 				) : null}
-				{state.refreshing ? <Text dimColor>{"  ·  refreshing…"}</Text> : null}
+				{state.refreshing ? (
+					<Text dimColor>
+						{"  ·  "}
+						<Spinner type="dots" />
+						{" refreshing"}
+					</Text>
+				) : null}
 				{state.actionMessage ? (
 					<Text color="yellow">
 						{"  ·  "}
@@ -2933,6 +2974,7 @@ export default function Dashboard() {
 									url={state.prCreateUrl}
 									body={state.prCreateBody}
 									title={state.prCreateTitle}
+									draft={state.prCreateDraft}
 									dispatch={dispatch}
 								/>
 							) : (

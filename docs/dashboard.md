@@ -42,7 +42,7 @@ The divider is draggable. Mouse, scroll wheel, and keyboard all work everywhere.
 | `Enter` | Resume Claude session in tmux (or switch to worktree if no session) |
 | `?` | Toggle the help overlay (glyph legend + key reference) |
 | `q` / `Esc` | Close overlay; from the root view, quit |
-| `R` | Force refresh (auto-refresh runs every 30s) |
+| `R` | Force refresh (auto-refresh runs every 5 minutes) |
 
 ### Worktree actions
 
@@ -58,7 +58,7 @@ The divider is draggable. Mouse, scroll wheel, and keyboard all work everywhere.
 | Key | Action |
 |---|---|
 | `C` | Inline commit & push — choose mode (manual message / `--fill` via Claude) |
-| `c` | Create the PR (fill template from commits via Claude, or open the new-PR page in browser) |
+| `c` | Create the PR — fill the template via Claude (review/edit the body, toggle draft vs ready with `d`, then create), or open the new-PR page pre-filled in the browser |
 | `p` | Open the PR in the browser |
 | `f` | Apply PR review comments + CI failures with Claude (in tmux) |
 | `r` | Self-review the PR with Claude (in tmux) |
@@ -83,7 +83,7 @@ The Reviews-tab diff path uses `gh pr diff` for branches that don't exist locall
 
 ## Theme
 
-Set with `SANTREE_THEME=light|dark|auto` (default `auto`). In auto mode, santree queries the terminal background via OSC 11 on first paint and on every refresh, so theme switches propagate within ~30s. Falls back to dark on non-TTY or 150 ms timeout.
+Set with `SANTREE_THEME=light|dark|auto` (default `auto`). In auto mode, santree queries the terminal background via OSC 11 on first paint and on every refresh, so theme switches propagate within ~5 minutes (or sooner if you press `R`). Falls back to dark on non-TTY or 150 ms timeout.
 
 Only the selection background is theme-sensitive; foreground colors are terminal-native and read on either background.
 
@@ -102,4 +102,4 @@ Inline flows never leave the dashboard. New-window flows hand off to a multiplex
 
 ## Behind the scenes
 
-The dashboard fetches issues via `getIssueTracker(repoRoot).listAssigned(repoRoot)` and enriches each one in parallel — worktree status, PR info, checks, reviews, diff shortstat — via `Promise.all`. Auto-refreshes every 30s. Use `R` to force-refresh.
+The dashboard fetches issues via `getIssueTracker(repoRoot).listAssigned(repoRoot)` and enriches each one in parallel — worktree status, PR info, checks, reviews, diff shortstat — via `Promise.all`. Auto-refreshes every 5 minutes. Use `R` to force-refresh.

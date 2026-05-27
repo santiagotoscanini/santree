@@ -60,7 +60,7 @@ That's [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472) 
 
 ## My terminal theme switched but the dashboard didn't follow
 
-`SANTREE_THEME=auto` polls the terminal background via OSC 11 on each refresh (every ~30s). If your terminal doesn't respond to OSC 11 — some legacy terminals don't — set the theme explicitly:
+`SANTREE_THEME=auto` polls the terminal background via OSC 11 on each refresh (every ~5 minutes, or when you press `R`). If your terminal doesn't respond to OSC 11 — some legacy terminals don't — set the theme explicitly:
 
 ```bash
 export SANTREE_THEME=light    # or dark
@@ -72,7 +72,7 @@ export SANTREE_THEME=light    # or dark
 
 ## How do I stop the auto-refresh?
 
-You can't, but it's cheap. The dashboard fetches issues + worktree status + PR info + checks + reviews every 30s in parallel. Force a refresh anytime with `R`.
+You can't, but it's infrequent. The dashboard fetches issues + worktree status + PR info + checks + reviews every 5 minutes in parallel — spaced out so the per-PR `gh` calls (which hit GitHub's GraphQL API) don't exhaust the hourly rate limit. Force a refresh anytime with `R`.
 
 ## I want a different prompt
 

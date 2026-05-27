@@ -122,14 +122,18 @@ The metadata-file r/w helpers (`readAllMetadata`/`writeAllMetadata`/`getSantreeD
 
 ### Issue tracker abstraction (`lib/trackers/`)
 
-Santree supports pluggable issue trackers — Linear (OAuth PKCE + GraphQL) and GitHub Issues (via the `gh` CLI) ship today. Selection is driven by, in order:
+Santree supports pluggable issue trackers — Linear (OAuth PKCE + GraphQL), GitHub Issues (via the `gh` CLI), and **Local** (built-in, file-based) ship today. Selection is driven by, in order:
 
-1. `SANTREE_TRACKER` env var (`linear` | `github`) — overrides everything; useful for one-offs.
-2. Per-repo `_tracker.kind` in `.santree/metadata.json` — set by `santree issue switch <kind>`, or as a side effect of `santree linear auth` / `santree github auth`.
+1. `SANTREE_TRACKER` env var (`linear` | `github` | `local`) — overrides everything; useful for one-offs.
+2. Per-repo `_tracker.kind` in `.santree/metadata.json` — set by `santree issue switch <kind>` / `santree issue setup` (or the dashboard's `t` tracker-select overlay), or as a side effect of `santree linear auth` / `santree github auth`.
 3. Legacy `_linear.org` (no `_tracker.kind`) — treated as `kind: "linear"` so existing repos keep working.
 4. Auto-detect: any Linear creds in `~/.config/santree/auth.json` → Linear, else GitHub (since `gh` is a hard dep).
 
-The `IssueTracker` interface (`lib/trackers/types.ts`) exposes: `kind`, `displayName` ("Linear"/"GitHub"), `issueNoun` ("ticket"/"issue"), `getAuthStatus(repoRoot)`, `signOut(repoRoot)`, `extractIdFromBranch(branch)`, `cleanupCache(id)`, `listAssigned(repoRoot)`, `getIssue(id, repoRoot)`. Both list/get methods return `IssueTrackerResult<T>` (`{ ok: true, value } | { ok: false, reason: "unauthenticated"|"not-found"|"network", message? }`). Use `getIssueTracker(repoRoot)` from `lib/trackers/index.js` at every call site — never reach into a concrete tracker module.
+`isRepoTrackerConfigured(repoRoot)` reports whether any *explicit* signal exists (1–4 minus the GitHub fallback). The dashboard uses it to show the tracker-selection flow on first run instead of dead-ending on an auth error; it does not change `getIssueTracker`'s fallback.
+
+The `IssueTracker` interface (`lib/trackers/types.ts`) exposes: `kind`, `displayName` ("Linear"/"GitHub"/"Local"), `issueNoun` ("ticket"/"issue"), `getAuthStatus(repoRoot)`, `signOut(repoRoot)`, `extractIdFromBranch(branch)`, `cleanupCache(id)`, `listAssigned(repoRoot)`, `getIssue(id, repoRoot)`. Read methods return `IssueTrackerResult<T>` (`{ ok: true, value } | { ok: false, reason: "unauthenticated"|"not-found"|"network", message? }`). Optional **mutation** capability — `canMutate?: true` plus `createIssue`/`updateIssue`/`deleteIssue` — is implemented only by the Local tracker; UI gates CRUD on `tracker.canMutate === true` (feature-detect, never a `kind === "local"` check). Use `getIssueTracker(repoRoot)` from `lib/trackers/index.js` at every call site — never reach into a concrete tracker module.
+
+**Local tracker** (`lib/trackers/local/`) — one Markdown file per issue at `.santree/issues/LOCAL-<n>.md` (YAML-ish frontmatter via the hand-rolled `frontmatter.ts`; no YAML dep). `.santree/issues/` is **not** gitignored, so issues are version-controlled by default — do not add it to `.gitignore`. IDs are monotonic and never recycled: `allocateId()` persists a high-water mark in `_local.lastId` in metadata.json (git-ignored / per-machine, which is the right scope — the collision avoided is with stale *local* `feature/LOCAL-<n>-*` worktrees; a fresh clone rebuilds the counter from committed files). No auth, no comments in v1 (`comments: []`). Branch regex: `/(?:^|[/_-])local-(\d+)(?:-|$)/i` → `LOCAL-<n>`, compatible with the dashboard's `feature/${ticketId}-${slug}` builder.
 
 **Generic data shape** — `Issue`/`AssignedIssue` carry the union of fields actually consumed by UI + prompts: `identifier`, `title`, `description`, `url`, `priority` (number), `priorityLabel`, `state: { name, type }`, `labels`, `projectId`, `projectName`. Each tracker maps its native API to that shape: GitHub derives priority from `P0`/`P1`/etc. labels, projectName from `repository.nameWithOwner`. Adding a third tracker = one new directory under `lib/trackers/`, one entry in the `IssueTrackerKind` union, one branch in `getIssueTracker()`. Nothing else changes.
 
@@ -141,7 +145,7 @@ The `IssueTracker` interface (`lib/trackers/types.ts`) exposes: `kind`, `display
 
 Santree supports pluggable terminal multiplexers (currently tmux and cmux; zellij planned). Selection is fully auto-detected — `getMultiplexer()` iterates over the adapter list and picks the first whose `isActive()` returns true (tmux: `$TMUX` set; cmux: `$CMUX_SURFACE_ID` set), falling back to the no-op `noneMultiplexer`. Each adapter owns its own detection; there is no env-var override.
 
-The `Multiplexer` interface (`lib/multiplexer/types.ts`) exposes: `isActive()`, `createWindow({name, cwd, command})`, `selectWindow(name)`, `renameWindow(currentName, newName)`, `sendCommand(name, command)`, and `isSessionAlive(ticketId)`. All ops return a `SessionResult` (`{ ok: true } | { ok: false, reason, message? }`). Use `getMultiplexer()` from `lib/multiplexer/index.js` at call sites.
+The `Multiplexer` interface (`lib/multiplexer/types.ts`) exposes: `isActive()`, `createWindow({name, cwd, command})`, `selectWindow(name)`, `sendCommand(name, command)`, and `isSessionAlive(ticketId)`. All ops return a `SessionResult` (`{ ok: true } | { ok: false, reason, message? }`). Use `getMultiplexer()` from `lib/multiplexer/index.js` at call sites. Window/tab names are set once at `createWindow` time and not touched afterwards, so user-set names stick.
 
 **cmux caveat**: cmux is macOS-only and requires the cmux.app GUI running. Upstream issue [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472) — programmatically created workspaces have dead PTYs, so `sendCommand` is unimplemented (returns `unsupported`) and post-creation flows degrade. tmux remains the recommended backend until #1472 lands. `santree doctor` surfaces the warning when cmux is active.
 
@@ -155,9 +159,11 @@ Special command — no Ink UI. Reads JSON from stdin (Claude Code statusline hoo
 
 Full-screen interactive dashboard showing all issues assigned to the user from the active tracker (see [Issue tracker abstraction](#issue-tracker-abstraction-libtrackers)). Runs in the terminal alternate screen with mouse support (click-to-select, drag-to-resize panes, scroll wheel).
 
+**Three tabs** (`1`/`2`/`3` or `Tab` to cycle): **Issues** = backlog/planning (tracker issues with no worktree; supports `n`/`e`/`d` create/edit/delete when `tracker.canMutate`, and `w` to start work which creates a worktree and moves the row to Trees), **Trees** = worktrees in progress (issues that have a worktree, plus the synthetic Main-repo row and orphaned worktrees; commit/PR/fix/diff/remove live here), **Reviews** = PRs awaiting your review. `loadDashboardData` partitions one enriched pass into `flatIssues`/`groups` (backlog) and `flatTrees`/`treeGroups` (work in progress); each tab has its own selection/scroll slices in `DashboardState`. When no tracker is configured (`!isRepoTrackerConfigured`), the `tracker-select` overlay (also reachable anytime via `t`) appears instead of the error screen — Local enters immediately, Linear picks an authenticated workspace, GitHub verifies `gh`.
+
 **Layout**: Two-pane split — left pane (`IssueList`) shows issues grouped by project. Each issue with a worktree expands into one or more nested **detail sub-rows** below its title (`· diff`, `· pr`, `· session`); issues without worktrees stay as a single row. The shared row builder `buildIssueListRows()` is exported from `IssueList.tsx` and used by both the renderer and the dashboard's mouse-click row→issue mapper, so click coordinates always resolve to the correct parent issue (sub-rows resolve to the parent's `flatIndex`). Right pane (`DetailPanel`) shows issue detail with description, git status, PR info, checks, reviews, and context-aware actions.
 
-**State management**: `useReducer` with `DashboardState`/`DashboardAction` (defined in `lib/dashboard/types.ts`). Right-pane overlays (`mode-select`, `confirm-delete`, `commit`, `pr-create`) replace just the right pane; full-area overlays (`context-input`, `diff`, `base-select`, `confirm-setup`) replace the entire content area below the tab bar.
+**State management**: `useReducer` with `DashboardState`/`DashboardAction` (defined in `lib/dashboard/types.ts`). Right-pane overlays (`mode-select`, `confirm-delete`, `commit`, `pr-create`) replace just the right pane; full-area overlays (`context-input`, `diff`, `base-select`, `confirm-setup`, `tracker-select`, `issue-form`, `confirm-delete-issue`) replace the entire content area below the tab bar. `issue-form` reuses `MultilineTextArea` in two steps (title → description, Ctrl+D advance/save, Ctrl+G cancel) like `context-input`, so the outer `useInput` is disabled and SGR mouse tracking is suppressed while it (and its title/description phases) is mounted.
 
 **Inline flows** (never leave the dashboard):
 
@@ -185,12 +191,12 @@ Full-screen interactive dashboard showing all issues assigned to the user from t
 
 | Variable | Effect |
 |---|---|
-| `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, the factory falls back to repo config → legacy `_linear.org` → auto-detect (any Linear creds → Linear, else GitHub). |
+| `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear`, `github`, or `local`. Takes precedence over the per-repo `_tracker.kind`. If unset, the factory falls back to repo config → legacy `_linear.org` → auto-detect (any Linear creds → Linear, else GitHub). |
 | `SANTREE_DIFF_TOOL` | Diff pager for `worktree diff` (CLI) and the dashboard `[v]` overlay. CLI passes `-c core.pager=<tool>` to git (the pager handles render + scroll, as usual). The dashboard captures `git diff --color=always \| <tool>` stdout as a string and handles scrolling itself in Ink — the pager's render half is what we want there, the scroll half is bypassed. Validated against `[A-Za-z0-9_\-/.+]` in `getDiffTool()` to keep the spawn arg surface tight. |
 | `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In auto mode, `detectTerminalTheme()` in `lib/dashboard/theme.ts` queries the terminal background via OSC 11 (`\x1b]11;?\x07`), parses the RGB response, and picks light/dark by Rec. 709 luminance. Re-runs alongside `loadDashboardData()` on every refresh so theme switches propagate within ~5 minutes (or sooner on a manual `R`). Falls back to `dark` on non-TTY or 150ms timeout. Affects `selectionBg` (only theme-sensitive style — terminal-native foreground colors render correctly on either background). |
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. |
 
-Santree always launches Claude with `--permission-mode auto` (or `plan` for plan mode), Claude Code's auto mode. There is no opt-in env var — worktree-scoped automation is the default. Set `--permission-mode default` upstream if you ever need stricter prompting.
+Santree launches Claude with `--permission-mode auto` for implement runs and `--permission-mode plan` for plan-mode runs (`st worktree work --plan`). Auto-acceptance of non-mutating tools while planning is governed by Claude Code's `useAutoModeDuringPlan` setting in `~/.claude/settings.json`, not by santree. There is no opt-in env var — worktree-scoped automation is the default. Set `--permission-mode default` upstream if you ever need stricter prompting.
 
 ## External Dependencies
 
@@ -201,7 +207,9 @@ Optional:
 
 ### Issue tracker setup
 
-Each repo picks one tracker. Pick once with `santree issue switch <linear|github>`, or let one of the auth commands set it as a side effect.
+Each repo picks one tracker. Pick once with `santree issue switch <linear|github|local>`, the interactive `santree issue setup`, or the dashboard's `t` overlay; or let one of the auth commands set it as a side effect.
+
+**Local (built-in)** — no auth, no SaaS. `santree issue switch local` (or pick "Local" in `issue setup` / the dashboard). Issues live as version-controlled Markdown files in `.santree/issues/LOCAL-<n>.md`. Create/edit/delete from the dashboard Issues tab (`n`/`e`/`d`); CLI CRUD is not exposed yet (dashboard-only by design). Start work with `w` exactly like Linear/GitHub issues — the branch is `feature/LOCAL-<n>-<slug>`.
 
 **Linear** — OAuth PKCE + GraphQL. Run `santree linear auth` to authenticate (opens browser, stores tokens in `$XDG_CONFIG_HOME/santree/auth.json`, defaults to `~/.config/santree/auth.json`), and links the org to the current repo. Ticket data (title, description, comments, images) is injected into prompts before launching Claude. Auth tokens auto-refresh; images are downloaded to `/tmp/santree-images-{ticketId}/`.
 

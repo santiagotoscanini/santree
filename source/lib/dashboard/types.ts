@@ -76,7 +76,7 @@ export interface EnrichedReviewPR {
 	authorName: string | null;
 }
 
-export type DashboardTab = "issues" | "reviews";
+export type DashboardTab = "issues" | "trees" | "reviews";
 
 export type ActionOverlay =
 	| "mode-select"
@@ -88,7 +88,24 @@ export type ActionOverlay =
 	| "pr-create"
 	| "diff"
 	| "help"
+	| "tracker-select"
+	| "issue-form"
+	| "confirm-delete-issue"
 	| null;
+
+/** Tracker-selection overlay sub-phase: pick a tracker, then (for Linear with
+ * multiple authenticated workspaces) pick the org. */
+export type TrackerSelectPhase = "root" | "linear-org";
+
+/** Issue create/edit form sub-phase. Title and description are captured in
+ * two sequential MultilineTextArea steps (reusing the context-input pattern);
+ * "saving" blocks input while the tracker writes the file. */
+export type IssueFormPhase = "title" | "description" | "saving";
+
+export interface TrackerOrgOption {
+	slug: string;
+	name: string;
+}
 
 export type DiffFileStatus = "M" | "A" | "D" | "R" | "C" | "U" | "?";
 
@@ -137,6 +154,26 @@ export interface DashboardState {
 	reviewSelectedIndex: number;
 	reviewListScrollOffset: number;
 	reviewDetailScrollOffset: number;
+	// Trees tab — worktree-in-progress view (issues that have a worktree,
+	// plus the synthetic main-repo row and orphaned worktrees). Mirrors the
+	// issues-tab slices.
+	treeGroups: ProjectGroup[];
+	flatTrees: DashboardIssue[];
+	treeSelectedIndex: number;
+	treeListScrollOffset: number;
+	treeDetailScrollOffset: number;
+	// Tracker-selection overlay
+	trackerSelectPhase: TrackerSelectPhase;
+	trackerSelectIndex: number;
+	trackerSelectOrgs: TrackerOrgOption[];
+	trackerSelectMessage: string | null;
+	// Issue create/edit form (built-in tracker only)
+	issueFormMode: "create" | "edit" | null;
+	issueFormPhase: IssueFormPhase;
+	issueFormId: string | null;
+	issueFormTitle: string;
+	issueFormDescription: string;
+	issueFormError: string | null;
 	loading: boolean;
 	refreshing: boolean;
 	error: string | null;
@@ -195,8 +232,36 @@ export interface DashboardState {
 }
 
 export type DashboardAction =
-	| { type: "SET_DATA"; groups: ProjectGroup[]; flatIssues: DashboardIssue[] }
+	| {
+			type: "SET_DATA";
+			groups: ProjectGroup[];
+			flatIssues: DashboardIssue[];
+			treeGroups: ProjectGroup[];
+			flatTrees: DashboardIssue[];
+	  }
 	| { type: "SELECT"; index: number }
+	| { type: "TREE_SELECT"; index: number }
+	| { type: "TREE_SCROLL_LIST"; offset: number }
+	| { type: "TREE_SCROLL_DETAIL"; offset: number }
+	| { type: "TRACKER_SELECT_OPEN" }
+	| { type: "TRACKER_SELECT_MOVE"; index: number }
+	| { type: "TRACKER_SELECT_PHASE"; phase: TrackerSelectPhase; orgs?: TrackerOrgOption[] }
+	| { type: "TRACKER_SELECT_MESSAGE"; message: string | null }
+	| { type: "TRACKER_SELECT_CLOSE" }
+	| {
+			type: "ISSUE_FORM_OPEN";
+			mode: "create" | "edit";
+			id: string | null;
+			title: string;
+			description: string;
+	  }
+	| { type: "ISSUE_FORM_PHASE"; phase: IssueFormPhase }
+	| { type: "ISSUE_FORM_TITLE"; title: string }
+	| { type: "ISSUE_FORM_DESC"; description: string }
+	| { type: "ISSUE_FORM_ERROR"; error: string }
+	| { type: "ISSUE_FORM_CLOSE" }
+	| { type: "ISSUE_DELETE_OPEN" }
+	| { type: "ISSUE_DELETE_CLOSE" }
 	| { type: "SCROLL_LIST"; offset: number }
 	| { type: "SCROLL_DETAIL"; offset: number }
 	| { type: "REFRESH_START" }
@@ -295,6 +360,21 @@ export const initialState: DashboardState = {
 	reviewSelectedIndex: 0,
 	reviewListScrollOffset: 0,
 	reviewDetailScrollOffset: 0,
+	treeGroups: [],
+	flatTrees: [],
+	treeSelectedIndex: 0,
+	treeListScrollOffset: 0,
+	treeDetailScrollOffset: 0,
+	trackerSelectPhase: "root",
+	trackerSelectIndex: 0,
+	trackerSelectOrgs: [],
+	trackerSelectMessage: null,
+	issueFormMode: null,
+	issueFormPhase: "title",
+	issueFormId: null,
+	issueFormTitle: "",
+	issueFormDescription: "",
+	issueFormError: null,
 	loading: true,
 	refreshing: false,
 	error: null,
@@ -347,24 +427,100 @@ export const initialState: DashboardState = {
 export function reducer(state: DashboardState, action: DashboardAction): DashboardState {
 	switch (action.type) {
 		case "SET_DATA": {
-			// Preserve selection by identifier if possible
+			// Preserve selection by identifier if possible (both tabs)
 			const prevId = state.flatIssues[state.selectedIndex]?.issue.identifier;
 			let newIndex = 0;
 			if (prevId) {
 				const found = action.flatIssues.findIndex((d) => d.issue.identifier === prevId);
 				if (found >= 0) newIndex = found;
 			}
+			const prevTreeId = state.flatTrees[state.treeSelectedIndex]?.issue.identifier;
+			let newTreeIndex = 0;
+			if (prevTreeId) {
+				const found = action.flatTrees.findIndex((d) => d.issue.identifier === prevTreeId);
+				if (found >= 0) newTreeIndex = found;
+			}
 			return {
 				...state,
 				groups: action.groups,
 				flatIssues: action.flatIssues,
+				treeGroups: action.treeGroups,
+				flatTrees: action.flatTrees,
 				selectedIndex: newIndex,
+				treeSelectedIndex: newTreeIndex,
 				loading: false,
 				refreshing: false,
 				error: null,
 				detailScrollOffset: 0,
+				treeDetailScrollOffset: 0,
 			};
 		}
+		case "TREE_SELECT":
+			return { ...state, treeSelectedIndex: action.index, treeDetailScrollOffset: 0 };
+		case "TREE_SCROLL_LIST":
+			return { ...state, treeListScrollOffset: action.offset };
+		case "TREE_SCROLL_DETAIL":
+			return { ...state, treeDetailScrollOffset: action.offset };
+		case "TRACKER_SELECT_OPEN":
+			return {
+				...state,
+				overlay: "tracker-select",
+				trackerSelectPhase: "root",
+				trackerSelectIndex: 0,
+				trackerSelectOrgs: [],
+				trackerSelectMessage: null,
+				loading: false,
+				refreshing: false,
+				error: null,
+			};
+		case "TRACKER_SELECT_MOVE":
+			return { ...state, trackerSelectIndex: action.index };
+		case "TRACKER_SELECT_PHASE":
+			return {
+				...state,
+				trackerSelectPhase: action.phase,
+				trackerSelectIndex: 0,
+				trackerSelectOrgs: action.orgs ?? state.trackerSelectOrgs,
+				trackerSelectMessage: null,
+			};
+		case "TRACKER_SELECT_MESSAGE":
+			return { ...state, trackerSelectMessage: action.message };
+		case "TRACKER_SELECT_CLOSE":
+			return { ...state, overlay: null, trackerSelectMessage: null };
+		case "ISSUE_FORM_OPEN":
+			return {
+				...state,
+				overlay: "issue-form",
+				issueFormMode: action.mode,
+				issueFormPhase: "title",
+				issueFormId: action.id,
+				issueFormTitle: action.title,
+				issueFormDescription: action.description,
+				issueFormError: null,
+			};
+		case "ISSUE_FORM_PHASE":
+			return { ...state, issueFormPhase: action.phase };
+		case "ISSUE_FORM_TITLE":
+			return { ...state, issueFormTitle: action.title };
+		case "ISSUE_FORM_DESC":
+			return { ...state, issueFormDescription: action.description };
+		case "ISSUE_FORM_ERROR":
+			return { ...state, issueFormPhase: "description", issueFormError: action.error };
+		case "ISSUE_FORM_CLOSE":
+			return {
+				...state,
+				overlay: null,
+				issueFormMode: null,
+				issueFormPhase: "title",
+				issueFormId: null,
+				issueFormTitle: "",
+				issueFormDescription: "",
+				issueFormError: null,
+			};
+		case "ISSUE_DELETE_OPEN":
+			return { ...state, overlay: "confirm-delete-issue" };
+		case "ISSUE_DELETE_CLOSE":
+			return { ...state, overlay: null };
 		case "SELECT":
 			return { ...state, selectedIndex: action.index, detailScrollOffset: 0 };
 		case "SCROLL_LIST":

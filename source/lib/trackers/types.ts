@@ -1,4 +1,4 @@
-export type IssueTrackerKind = "linear" | "github";
+export type IssueTrackerKind = "linear" | "github" | "local";
 
 export interface Comment {
 	author: string;
@@ -41,6 +41,24 @@ export type IssueTrackerResult<T> =
 	| { ok: true; value: T }
 	| { ok: false; reason: "unauthenticated" | "not-found" | "network"; message?: string };
 
+/** Fields accepted when creating a new issue. Only the built-in Local tracker
+ * supports mutation today (see `IssueTracker.canMutate`). */
+export interface NewIssueInput {
+	title: string;
+	description: string;
+	priority?: number;
+	labels?: string[];
+}
+
+/** Partial patch for an existing issue. Omitted fields are left unchanged. */
+export interface IssuePatch {
+	title?: string;
+	description?: string;
+	priority?: number;
+	labels?: string[];
+	state?: State;
+}
+
 export interface IssueTracker {
 	readonly kind: IssueTrackerKind;
 	readonly displayName: string;
@@ -54,4 +72,18 @@ export interface IssueTracker {
 
 	listAssigned(repoRoot: string): Promise<IssueTrackerResult<AssignedIssue[]>>;
 	getIssue(identifier: string, repoRoot: string): Promise<IssueTrackerResult<Issue>>;
+
+	/** When true, the tracker implements createIssue/updateIssue/deleteIssue.
+	 * Read-only trackers (Linear, GitHub) leave this undefined; UI surfaces
+	 * gate every mutation path on `tracker.canMutate === true` (feature
+	 * detection — never a `kind === "local"` string check, per the
+	 * no-tracker-conditionals-outside-the-factory policy). */
+	readonly canMutate?: boolean;
+	createIssue?(input: NewIssueInput, repoRoot: string): Promise<IssueTrackerResult<Issue>>;
+	updateIssue?(
+		identifier: string,
+		patch: IssuePatch,
+		repoRoot: string,
+	): Promise<IssueTrackerResult<Issue>>;
+	deleteIssue?(identifier: string, repoRoot: string): Promise<IssueTrackerResult<void>>;
 }

@@ -17,10 +17,6 @@ export const noneMultiplexer: Multiplexer = {
 		return NOT_ACTIVE;
 	},
 
-	renameWindow(): SessionResult {
-		return NOT_ACTIVE;
-	},
-
 	sendCommand(): SessionResult {
 		return NOT_ACTIVE;
 	},

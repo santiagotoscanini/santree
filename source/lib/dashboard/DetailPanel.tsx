@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import type { DashboardIssue } from "./types.js";
+import type { DashboardIssue, DashboardTab } from "./types.js";
 
 interface Props {
 	issue: DashboardIssue | null;
@@ -81,9 +81,31 @@ function fileColor(xy: string): string | undefined {
  * `trackerName` is the active tracker's `displayName` ("Linear" / "GitHub"),
  * surfaced as the open-in-browser action label so the panel doesn't hardcode
  * a vendor name. */
-export function buildIssueActions(di: DashboardIssue, trackerName: string): IssueActionItem[] {
+export function buildIssueActions(
+	di: DashboardIssue,
+	trackerName: string,
+	opts?: { tab?: DashboardTab; canMutate?: boolean },
+): IssueActionItem[] {
 	const { worktree, pr, issue } = di;
 	const items: IssueActionItem[] = [];
+
+	// Issues tab = backlog/planning. No worktree actions here (commit / PR /
+	// diff / fix live on the Trees tab). Offer Work (start → creates a
+	// worktree, moving the row to Trees) plus issue CRUD when the active
+	// tracker supports mutation (built-in Local only — feature-detected via
+	// `canMutate`, never a kind string check).
+	if (opts?.tab === "issues") {
+		items.push({ key: "w", label: "Work", color: "cyan" });
+		if (opts.canMutate) {
+			items.push({ key: "n", label: "New", color: "cyan" });
+			items.push({ key: "e", label: "Edit", color: "cyan" });
+			items.push({ key: "d", label: "Delete", color: "red" });
+		}
+		if (issue.url) {
+			items.push({ key: "o", label: trackerName, color: "gray" });
+		}
+		return items;
+	}
 
 	// The synthetic "Main repo" row is special: no PR/Switch/Resume/Remove,
 	// no work-launching (you're already on it). Only commit / diff /

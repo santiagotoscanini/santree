@@ -11,7 +11,7 @@ export function readTrackerConfig(repoRoot: string): TrackerConfig {
 	const tracker = all._tracker as { kind?: string } | undefined;
 	const linear = all._linear as { org?: string } | undefined;
 	let kind: IssueTrackerKind | null = null;
-	if (tracker?.kind === "linear" || tracker?.kind === "github") {
+	if (tracker?.kind === "linear" || tracker?.kind === "github" || tracker?.kind === "local") {
 		kind = tracker.kind;
 	}
 	return { kind, legacyLinearOrg: linear?.org ?? null };

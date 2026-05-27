@@ -8,10 +8,10 @@ import { setRepoTracker, getIssueTracker } from "../../lib/trackers/index.js";
 export const description = "Switch the active issue tracker for this repo";
 
 export const args = z.tuple([
-	z.enum(["linear", "github"]).describe(
+	z.enum(["linear", "github", "local"]).describe(
 		argument({
 			name: "kind",
-			description: "Tracker kind: linear or github",
+			description: "Tracker kind: linear, github, or local (built-in)",
 		}),
 	),
 ]);

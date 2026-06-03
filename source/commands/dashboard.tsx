@@ -3922,6 +3922,7 @@ export default function Dashboard() {
 									width={leftWidth}
 									selectionBg={theme.selectionBg}
 									deletingIds={state.activeTab === "trees" ? deletingIds : undefined}
+									variant={state.activeTab === "issues" ? "issues" : "default"}
 								/>
 							)}
 						</Box>

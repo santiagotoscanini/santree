@@ -12,6 +12,24 @@ export interface State {
 	type: string;
 }
 
+/** Readiness of an issue given its blocking dependencies:
+ *   "ready"   — no unresolved blockers (or none at all)
+ *   "blocked" — at least one blocker isn't done yet
+ *   "unknown" — the tracker doesn't expose dependency data */
+export type Readiness = "ready" | "blocked" | "unknown";
+
+export function issueReadiness(blockedBy: IssueRef[] | undefined): Readiness {
+	if (blockedBy === undefined) return "unknown";
+	return blockedBy.some((b) => !b.done) ? "blocked" : "ready";
+}
+
+/** A lightweight reference to a related issue, with whether it's resolved
+ * (state.type is completed/canceled). Used for dependency (blocks) relations. */
+export interface IssueRef {
+	identifier: string;
+	done: boolean;
+}
+
 export interface AssignedIssue {
 	identifier: string;
 	title: string;
@@ -23,6 +41,12 @@ export interface AssignedIssue {
 	labels: string[];
 	projectId: string | null;
 	projectName: string | null;
+	/** Issues that block this one ("blocked by"). An issue is ready to start when
+	 * every blocker is `done`. `undefined` when the tracker doesn't expose
+	 * dependency relations (only Linear does); `[]` means no blockers. */
+	blockedBy?: IssueRef[];
+	/** Issues this one blocks (downstream dependents). */
+	blocking?: IssueRef[];
 	/** Due date as an ISO `YYYY-MM-DD` string, or null when none is set.
 	 * Only trackers with a native due-date concept populate it (Linear today);
 	 * others leave it undefined. Surfaced on the Triage tab as a colored,

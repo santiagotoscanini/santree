@@ -32,7 +32,11 @@ When the Triage tab is present it leads, so the number keys are `1` Triage, `2` 
 - `· pr` — number, state, CI summary, review count
 - `· session` — Claude session state (`active` / `waiting` / `idle` / `exited`) + session ID
 
-The far-right `WT CI` columns give an at-a-glance worktree-exists / checks-pass status without expanding rows. On the **Triage** tab those columns are replaced by a single right-aligned **`DUE`** column: a colored due-date badge — red when overdue or due today, yellow when due within two days, gray otherwise.
+The far-right `WT CI` columns give an at-a-glance worktree-exists / checks-pass status without expanding rows. The right column changes per tab:
+
+- **Trees** — `WT CI` (worktree exists / checks status).
+- **Triage** — a `DUE` due-date badge: red when overdue or due today, yellow when due within two days, gray otherwise.
+- **Issues** — a `RDY` readiness glyph driven by the issue's blocking dependencies: **`✓` green = ready to start** (no open blockers), **`⊘` yellow = blocked** by an unfinished dependency. Lets you spot which backlog tasks are startable right now without opening each one. The detail pane shows the full **Dependencies** section — what blocks this issue (with each blocker's done/open state) and what it blocks. Dependency data comes from Linear's "blocks" issue relations; other trackers show a neutral dot.
 
 **Right pane** — context-aware detail. Issue description, worktree git status (staged / unstaged / untracked, with diff stats vs merge-base), PR body, CI checks ordered fail → pending → pass, reviews, conversation comments, the live Claude todo list for the active session, and the action footer.
 

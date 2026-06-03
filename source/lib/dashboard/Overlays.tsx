@@ -432,6 +432,12 @@ const LEGEND: LegendSection[] = [
 			{ glyph: "·", color: "gray", meaning: "CI column: no PR or no checks" },
 			{ glyph: "◷", color: "red", meaning: "DUE column (Triage): overdue / due today" },
 			{ glyph: "◷", color: "yellow", meaning: "DUE column (Triage): due within 2 days" },
+			{ glyph: "✓", color: "green", meaning: "RDY column (Issues): ready — no open blockers" },
+			{
+				glyph: "⊘",
+				color: "yellow",
+				meaning: "RDY column (Issues): blocked by an open dependency",
+			},
 		],
 	},
 	{

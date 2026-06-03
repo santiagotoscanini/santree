@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 import type { Comment, DashboardIssue, DashboardTab, DeleteStatus } from "./types.js";
 import { formatDueDate } from "./due.js";
+import { issueReadiness } from "../trackers/types.js";
 
 interface Props {
 	issue: DashboardIssue | null;
@@ -342,6 +343,45 @@ export default function DetailPanel({
 		lines.push({ text: "" });
 		for (const dLine of li.description.trimEnd().split("\n")) {
 			lines.push({ text: dLine });
+		}
+	}
+
+	// ── Dependencies ──────────────────────────────────────────────────
+	// Blocking relations from the tracker. Header carries a readiness badge so
+	// the user can tell at a glance whether the issue is startable.
+	const blockedBy = li.blockedBy ?? [];
+	const blocking = li.blocking ?? [];
+	if (!triage && (blockedBy.length > 0 || blocking.length > 0)) {
+		const readiness = issueReadiness(li.blockedBy);
+		lines.push(ruleLine);
+		const headerSegs: Segment[] = [
+			{ text: "⇄ ", color: "cyan", bold: true },
+			{ text: "Dependencies", bold: true },
+			{ text: "   " },
+			readiness === "ready"
+				? { text: "✓ ready to start", color: "green", bold: true }
+				: { text: "⊘ blocked", color: "yellow", bold: true },
+		];
+		lines.push({ text: "", segments: headerSegs });
+		if (blockedBy.length > 0) {
+			lines.push({ text: "  blocked by", dim: true });
+			for (const b of blockedBy) {
+				lines.push({
+					text: "",
+					segments: [
+						{ text: `    ${b.done ? "✓" : "○"} `, color: b.done ? "green" : "yellow" },
+						{ text: b.identifier, color: b.done ? undefined : "yellow", dim: b.done },
+						...(b.done ? [{ text: "  done", dim: true }] : []),
+					],
+				});
+			}
+		}
+		if (blocking.length > 0) {
+			lines.push({ text: "  blocks", dim: true });
+			lines.push({
+				text: "",
+				segments: [{ text: "    " }, { text: blocking.map((b) => b.identifier).join(", ") }],
+			});
 		}
 	}
 

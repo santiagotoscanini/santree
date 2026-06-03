@@ -1,4 +1,11 @@
-import type { AssignedIssue, Comment, Issue, TriageSchedule, TriageShift } from "../types.js";
+import type {
+	AssignedIssue,
+	Comment,
+	Issue,
+	IssueRef,
+	TriageSchedule,
+	TriageShift,
+} from "../types.js";
 
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 
@@ -90,6 +97,8 @@ query AssignedIssues {
         state { name type }
         labels { nodes { name } }
         project { id name }
+        relations(first: 10) { nodes { type relatedIssue { identifier state { type } } } }
+        inverseRelations(first: 10) { nodes { type issue { identifier state { type } } } }
       }
     }
   }
@@ -113,6 +122,16 @@ interface LinearCommentNode {
 	children?: { nodes?: LinearCommentNode[] };
 }
 
+interface LinearRelatedIssue {
+	identifier: string;
+	state?: { type?: string };
+}
+interface LinearRelationNode {
+	type: string;
+	relatedIssue?: LinearRelatedIssue;
+	issue?: LinearRelatedIssue;
+}
+
 interface LinearIssueNode {
 	identifier: string;
 	title: string;
@@ -124,6 +143,14 @@ interface LinearIssueNode {
 	labels?: { nodes?: LinearLabelNode[] };
 	project?: { id?: string; name?: string } | null;
 	comments?: { nodes?: LinearCommentNode[] };
+	relations?: { nodes?: LinearRelationNode[] };
+	inverseRelations?: { nodes?: LinearRelationNode[] };
+}
+
+const TERMINAL_STATE_TYPES = new Set(["completed", "canceled"]);
+function refOf(issue: LinearRelatedIssue | undefined): IssueRef | null {
+	if (!issue?.identifier) return null;
+	return { identifier: issue.identifier, done: TERMINAL_STATE_TYPES.has(issue.state?.type ?? "") };
 }
 
 function mapAssigned(issue: LinearIssueNode): AssignedIssue {
@@ -142,6 +169,23 @@ function mapAssigned(issue: LinearIssueNode): AssignedIssue {
 		labels: (issue.labels?.nodes ?? []).map((l) => l.name),
 		projectId: issue.project?.id ?? null,
 		projectName: issue.project?.name ?? null,
+		// Dependency relations. `inverseRelations` of type "blocks" point at this
+		// issue → those are its blockers; `relations` of type "blocks" point away
+		// → those are what it blocks. Left undefined when the query didn't fetch
+		// relations (e.g. the single-issue ISSUE_QUERY) so callers can tell
+		// "no blockers" from "unknown".
+		blockedBy: issue.inverseRelations
+			? (issue.inverseRelations.nodes ?? [])
+					.filter((r) => r.type === "blocks")
+					.map((r) => refOf(r.issue))
+					.filter((r): r is IssueRef => r !== null)
+			: undefined,
+		blocking: issue.relations
+			? (issue.relations.nodes ?? [])
+					.filter((r) => r.type === "blocks")
+					.map((r) => refOf(r.relatedIssue))
+					.filter((r): r is IssueRef => r !== null)
+			: undefined,
 	};
 }
 

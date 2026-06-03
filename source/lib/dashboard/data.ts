@@ -35,6 +35,8 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 	flatIssues: DashboardIssue[];
 	treeGroups: ProjectGroup[];
 	flatTrees: DashboardIssue[];
+	triageGroups: ProjectGroup[];
+	flatTriage: DashboardIssue[];
 }> {
 	// Fetch issues and worktrees in parallel
 	const tracker = getIssueTracker(repoRoot);
@@ -309,16 +311,38 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		);
 	}
 
-	// ── Partition: Issues tab (backlog/planning) vs Trees tab (work in
-	// progress). A tracker issue with no worktree is backlog; once it gains a
+	// ── Partition: Triage / Issues (backlog) / Trees (work in progress).
+	// A tracker issue with no worktree is backlog — unless the active tracker
+	// has a triage inbox and the issue sits in it (state.type === "triage"), in
+	// which case it goes to the Triage tab instead. Once any issue gains a
 	// worktree it moves to the Trees tab. Children always have a worktree, so
 	// they only ever appear nested in Trees. Main-repo + orphaned worktrees
 	// belong to Trees (they're active checkouts, not backlog).
-	const backlogIssues = enriched.filter((di) => !di.worktree);
+	const triageEnabled = tracker.supportsTriage === true;
+	const isTriage = (di: DashboardIssue) =>
+		triageEnabled && !di.worktree && di.issue.state.type === "triage";
+	const triageIssues = enriched.filter(isTriage);
+	const backlogIssues = enriched.filter((di) => !di.worktree && !isTriage(di));
 	const treeIssues = enriched.filter((di) => di.worktree);
+
+	// Surface the most pressing triage items first: by due date ascending
+	// (overdue/soonest first), undated last. `dueDate` is `YYYY-MM-DD` so a
+	// plain string compare is chronological. buildProjectGroups preserves this
+	// order within each status group.
+	triageIssues.sort((a, b) => {
+		const da = a.issue.dueDate ?? null;
+		const db = b.issue.dueDate ?? null;
+		if (da && db) return da < db ? -1 : da > db ? 1 : 0;
+		if (da) return -1;
+		if (db) return 1;
+		return 0;
+	});
 
 	const groups = buildProjectGroups(backlogIssues);
 	const flatIssues = flatten(groups);
+
+	const triageGroups = buildProjectGroups(triageIssues);
+	const flatTriage = flatten(triageGroups);
 
 	const treeGroups = buildProjectGroups(treeIssues);
 	const topLevelOrphans = orphans.filter((di) => !childTicketIds.has(di.issue.identifier));
@@ -345,7 +369,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 		flatTrees.unshift(mainEntry);
 	}
 
-	return { groups, flatIssues, treeGroups, flatTrees };
+	return { groups, flatIssues, treeGroups, flatTrees, triageGroups, flatTriage };
 }
 
 /** Build the synthetic dashboard row for the main repo checkout — the

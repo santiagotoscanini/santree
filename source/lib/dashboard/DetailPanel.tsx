@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
-import type { DashboardIssue, DashboardTab } from "./types.js";
+import type { Comment, DashboardIssue, DashboardTab, DeleteStatus } from "./types.js";
+import { formatDueDate } from "./due.js";
 
 interface Props {
 	issue: DashboardIssue | null;
@@ -8,6 +9,22 @@ interface Props {
 	width: number;
 	creatingForTicket: string | null;
 	creationLogs: string;
+	/** Deletion progress for the selected worktree, when one is being removed. */
+	deleteStatus?: DeleteStatus;
+	/** Triage mode: hide worktree/PR/checks sections (they never apply to an
+	 * inbox issue) and show the discussion instead. */
+	triage?: boolean;
+	/** Comments for the selected triage issue. `undefined` = not yet loaded
+	 * (shows "loading…"); an array (possibly empty) = loaded. Only consulted in
+	 * triage mode. */
+	comments?: Comment[];
+	/** Compact triage on-call summary, shown as the first line in triage mode. */
+	onCall?: {
+		currentName: string | null;
+		currentIsMe: boolean;
+		/** Formatted start of the viewer's next shift (e.g. "Jun 5"), if any. */
+		myNext: string | null;
+	};
 }
 
 type Segment = { text: string; color?: string; bold?: boolean; dim?: boolean };
@@ -107,6 +124,19 @@ export function buildIssueActions(
 		return items;
 	}
 
+	// Triage tab = the incoming inbox. Read the discussion, ask Claude a
+	// clarifying question, and — once it looks fixable — send it to a tree
+	// (`w`, same worktree-creation flow as the Issues tab).
+	if (opts?.tab === "triage") {
+		items.push({ key: "w", label: "Send to tree", color: "cyan" });
+		items.push({ key: "a", label: "Ask", color: "cyan" });
+		items.push({ key: "s", label: "Schedule", color: "cyan" });
+		if (issue.url) {
+			items.push({ key: "o", label: trackerName, color: "gray" });
+		}
+		return items;
+	}
+
 	// The synthetic "Main repo" row is special: no PR/Switch/Resume/Remove,
 	// no work-launching (you're already on it). Only commit / diff /
 	// editor — the actions that make sense for "I have changes in main and
@@ -180,7 +210,43 @@ export default function DetailPanel({
 	width,
 	creatingForTicket,
 	creationLogs,
+	deleteStatus,
+	triage = false,
+	comments,
+	onCall,
 }: Props) {
+	// Show deletion progress when the selected worktree is being removed.
+	if (issue && deleteStatus) {
+		const logLines = deleteStatus.logs.split("\n");
+		const contentRows = height - 1;
+		const startIdx = Math.max(0, logLines.length - contentRows);
+		const visible = logLines.slice(startIdx, startIdx + contentRows);
+		const clampLine = (s: string) =>
+			s.length > width ? s.slice(0, Math.max(0, width - 1)) + "…" : s;
+		const headerColor = deleteStatus.phase === "error" ? "red" : "yellow";
+		const header =
+			deleteStatus.phase === "error"
+				? `Failed to remove ${issue.issue.identifier}`
+				: deleteStatus.phase === "done"
+					? `Removed ${issue.issue.identifier}`
+					: `Removing worktree for ${issue.issue.identifier}…`;
+		return (
+			<Box flexDirection="column" width={width} height={height}>
+				<Text color={deleteStatus.phase === "done" ? "green" : headerColor} bold>
+					{clampLine(header)}
+				</Text>
+				{visible.map((line, i) => (
+					<Box key={i}>
+						<Text dimColor>{clampLine(line)}</Text>
+					</Box>
+				))}
+				{deleteStatus.phase === "error" && deleteStatus.error ? (
+					<Text color="red">{clampLine(deleteStatus.error)}</Text>
+				) : null}
+			</Box>
+		);
+	}
+
 	// Show creation logs when selected issue is being created
 	if (issue && issue.issue.identifier === creatingForTicket) {
 		const logLines = creationLogs.split("\n");
@@ -220,6 +286,28 @@ export default function DetailPanel({
 	const rule = "─".repeat(width);
 	const ruleLine: LineData = { text: rule, dim: true };
 
+	// ── Triage on-call (compact) ───────────────────────────────────────
+	// First line in triage mode: who's on call now + when the viewer is next up.
+	// The full rotation lives behind the [s] schedule overlay.
+	if (triage && onCall && onCall.currentName) {
+		const segs: Segment[] = [
+			{ text: "◷ ", color: onCall.currentIsMe ? "cyan" : "green", bold: true },
+			{ text: "on call: ", dim: true },
+			{
+				text: onCall.currentName,
+				color: onCall.currentIsMe ? "cyan" : "green",
+				bold: true,
+			},
+		];
+		if (onCall.myNext) {
+			segs.push({ text: "   ·   you're up ", dim: true });
+			segs.push({ text: onCall.myNext, color: "cyan" });
+		}
+		segs.push({ text: "   ·   [s] schedule", dim: true });
+		lines.push({ text: "", segments: segs });
+		lines.push(ruleLine);
+	}
+
 	// ── Hero: identifier + title, then a status pill row ───────────────
 	lines.push({ text: `${li.identifier}  ${li.title}`, bold: true });
 	const sc = stateColor(li.state.type);
@@ -235,12 +323,61 @@ export default function DetailPanel({
 	}
 	lines.push({ text: "", segments: heroSegs });
 
+	// ── Due date ──────────────────────────────────────────────────────
+	// Urgency-coded; shown whenever the issue carries one (most relevant on the
+	// Triage tab, harmless elsewhere).
+	const due = formatDueDate(li.dueDate);
+	if (due) {
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "◷ ", color: due.color, bold: due.urgent },
+				{ text: due.label, color: due.color, bold: due.urgent },
+			],
+		});
+	}
+
 	// ── Description ───────────────────────────────────────────────────
 	if (li.description) {
 		lines.push({ text: "" });
 		for (const dLine of li.description.trimEnd().split("\n")) {
 			lines.push({ text: dLine });
 		}
+	}
+
+	// ── Triage: discussion only ───────────────────────────────────────
+	// Triage issues live in the inbox — no worktree/PR/checks apply yet. Show
+	// the comment thread (lazily fetched by the dashboard) so the user can read
+	// the back-and-forth before deciding to ask a question or send it to a tree.
+	if (triage) {
+		lines.push(ruleLine);
+		lines.push(sectionHeader("≡", "Comments", "cyan"));
+		if (comments === undefined) {
+			lines.push({ text: "  loading…", dim: true });
+		} else if (comments.length === 0) {
+			lines.push({ text: "  no comments", dim: true });
+		} else {
+			const renderComment = (c: Comment, depth: number) => {
+				const indent = "  ".repeat(depth + 1);
+				lines.push({
+					text: "",
+					segments: [
+						{ text: indent },
+						{ text: c.author, color: "cyan", bold: true },
+						{ text: `  ${new Date(c.createdAt).toLocaleDateString()}`, dim: true },
+					],
+				});
+				for (const bodyLine of c.body.trimEnd().split("\n")) {
+					lines.push({ text: `${indent}${bodyLine}` });
+				}
+				lines.push({ text: "" });
+				for (const child of c.children) renderComment(child, depth + 1);
+			};
+			for (const c of comments) renderComment(c, 0);
+		}
+
+		// Skip the worktree/PR/checks/reviews sections entirely for triage.
+		return renderLines(lines, scrollOffset, height, width);
 	}
 
 	// ── Worktree ──────────────────────────────────────────────────────
@@ -531,6 +668,12 @@ export default function DetailPanel({
 	// Action footer is rendered by the dashboard one row outside the panel,
 	// alongside the global command bar, so left- and right-pane key hints sit
 	// on the same row. The panel itself uses its full height for content.
+	return renderLines(lines, scrollOffset, height, width);
+}
+
+/** Scroll-clamp a built line list and render it into the panel box. Shared by
+ * the full detail view and the triage (discussion-only) view. */
+function renderLines(lines: LineData[], scrollOffset: number, height: number, width: number) {
 	const totalLines = lines.length;
 	const canScroll = totalLines > height;
 	const contentRows = canScroll ? height - 2 : height;

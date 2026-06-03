@@ -4,10 +4,11 @@ import type {
 	Issue,
 	IssueTracker,
 	IssueTrackerResult,
+	TriageSchedule,
 } from "../types.js";
 import { readLinearAuthStore } from "../auth-store.js";
 import { getRepoLinearOrg, getValidTokens, removeRepoLinearOrg, revokeTokens } from "./auth.js";
-import { fetchAssignedIssues, fetchIssue } from "./api.js";
+import { fetchAssignedIssues, fetchIssue, fetchTriageSchedules } from "./api.js";
 import { cleanupLinearImages, rewriteLinearImages } from "./images.js";
 
 export {
@@ -80,6 +81,18 @@ async function listAssigned(repoRoot: string): Promise<IssueTrackerResult<Assign
 	return { ok: true, value: issues };
 }
 
+async function getTriageSchedules(repoRoot: string): Promise<TriageSchedule[]> {
+	const orgSlug = getRepoLinearOrg(repoRoot);
+	if (!orgSlug) return [];
+	const tokens = await getValidTokens(orgSlug);
+	if (!tokens) return [];
+	try {
+		return await fetchTriageSchedules(tokens.access_token);
+	} catch {
+		return [];
+	}
+}
+
 async function getIssue(identifier: string, repoRoot: string): Promise<IssueTrackerResult<Issue>> {
 	const orgSlug = getRepoLinearOrg(repoRoot);
 	if (!orgSlug) {
@@ -119,6 +132,7 @@ export const linearTracker: IssueTracker = {
 	kind: "linear",
 	displayName: "Linear",
 	issueNoun: "ticket",
+	supportsTriage: true,
 
 	getAuthStatus,
 	signOut,
@@ -126,4 +140,5 @@ export const linearTracker: IssueTracker = {
 	cleanupCache: cleanupLinearImages,
 	listAssigned,
 	getIssue,
+	getTriageSchedules,
 };

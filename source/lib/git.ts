@@ -223,7 +223,9 @@ export async function removeWorktree(
 	branchName: string,
 	repoRoot: string,
 	force = false,
+	onProgress?: (message: string) => void,
 ): Promise<{ success: boolean; error?: string }> {
+	const report = onProgress ?? (() => {});
 	// Find the worktree by branch name using git's worktree tracking
 	const worktreePath = getWorktreePath(branchName);
 
@@ -232,6 +234,7 @@ export async function removeWorktree(
 	}
 
 	try {
+		report("Removing worktree…");
 		const forceFlag = force ? "--force" : "";
 		await execAsync(`git worktree remove ${forceFlag} "${worktreePath}"`, {
 			cwd: repoRoot,
@@ -240,6 +243,7 @@ export async function removeWorktree(
 		// Clean up any remaining files (untracked files, node_modules, etc.)
 		// git worktree remove doesn't delete untracked files
 		if (fs.existsSync(worktreePath)) {
+			report("Cleaning up leftover files…");
 			// Fix permissions first (node_modules often has restricted perms)
 			try {
 				execSync(`chmod -R u+w "${worktreePath}"`, { stdio: "ignore" });
@@ -261,6 +265,7 @@ export async function removeWorktree(
 		}
 
 		// Also delete the branch
+		report("Deleting branch…");
 		const deleteFlag = force ? "-D" : "-d";
 		try {
 			await execAsync(`git branch ${deleteFlag} "${branchName}"`, {
@@ -268,8 +273,10 @@ export async function removeWorktree(
 			});
 		} catch {
 			// Branch deletion failed, but worktree was removed
+			report("Worktree removed (branch delete skipped)");
 		}
 
+		report("Done");
 		return { success: true };
 	} catch (e) {
 		return {

@@ -12,6 +12,24 @@ export interface State {
 	type: string;
 }
 
+/** Readiness of an issue given its blocking dependencies:
+ *   "ready"   — no unresolved blockers (or none at all)
+ *   "blocked" — at least one blocker isn't done yet
+ *   "unknown" — the tracker doesn't expose dependency data */
+export type Readiness = "ready" | "blocked" | "unknown";
+
+export function issueReadiness(blockedBy: IssueRef[] | undefined): Readiness {
+	if (blockedBy === undefined) return "unknown";
+	return blockedBy.some((b) => !b.done) ? "blocked" : "ready";
+}
+
+/** A lightweight reference to a related issue, with whether it's resolved
+ * (state.type is completed/canceled). Used for dependency (blocks) relations. */
+export interface IssueRef {
+	identifier: string;
+	done: boolean;
+}
+
 export interface AssignedIssue {
 	identifier: string;
 	title: string;
@@ -23,10 +41,47 @@ export interface AssignedIssue {
 	labels: string[];
 	projectId: string | null;
 	projectName: string | null;
+	/** Issues that block this one ("blocked by"). An issue is ready to start when
+	 * every blocker is `done`. `undefined` when the tracker doesn't expose
+	 * dependency relations (only Linear does); `[]` means no blockers. */
+	blockedBy?: IssueRef[];
+	/** Issues this one blocks (downstream dependents). */
+	blocking?: IssueRef[];
+	/** Due date as an ISO `YYYY-MM-DD` string, or null when none is set.
+	 * Only trackers with a native due-date concept populate it (Linear today);
+	 * others leave it undefined. Surfaced on the Triage tab as a colored,
+	 * urgency-coded badge. */
+	dueDate?: string | null;
 }
 
 export interface Issue extends AssignedIssue {
 	comments: Comment[];
+}
+
+/** One slot in a triage on-call rotation. */
+export interface TriageShift {
+	startsAt: string; // ISO timestamp
+	endsAt: string; // ISO timestamp
+	/** Resolved display name (falls back to email, then "Unknown"). */
+	name: string;
+	/** True when this shift covers the current moment. */
+	isCurrent: boolean;
+	/** True when this shift belongs to the authenticated viewer. */
+	isMe: boolean;
+}
+
+/** A team's triage responsibility rotation (Linear "Triage responsibility"
+ * backed by a time schedule). */
+export interface TriageSchedule {
+	teamKey: string;
+	teamName: string;
+	scheduleName: string;
+	/** Display name of whoever is on call right now, if known. */
+	currentName: string | null;
+	/** Whether the viewer is the one currently on call. */
+	currentIsMe: boolean;
+	/** Chronological list of shifts. */
+	shifts: TriageShift[];
 }
 
 export interface AuthStatus {
@@ -72,6 +127,19 @@ export interface IssueTracker {
 
 	listAssigned(repoRoot: string): Promise<IssueTrackerResult<AssignedIssue[]>>;
 	getIssue(identifier: string, repoRoot: string): Promise<IssueTrackerResult<Issue>>;
+
+	/** When true, this tracker has a native triage concept (incoming issues in
+	 * a `state.type === "triage"` inbox). The dashboard surfaces a dedicated
+	 * Triage tab only when the active tracker sets this — feature detection,
+	 * never a `kind === "linear"` string check, per the
+	 * no-tracker-conditionals-outside-the-factory policy. Linear sets it;
+	 * GitHub/Local leave it undefined. */
+	readonly supportsTriage?: boolean;
+
+	/** Triage on-call rotations for the viewer's teams. Optional — implemented
+	 * only by trackers with a triage scheduling concept (Linear). Returns an
+	 * empty array on failure or when no schedules exist; never throws. */
+	getTriageSchedules?(repoRoot: string): Promise<TriageSchedule[]>;
 
 	/** When true, the tracker implements createIssue/updateIssue/deleteIssue.
 	 * Read-only trackers (Linear, GitHub) leave this undefined; UI surfaces

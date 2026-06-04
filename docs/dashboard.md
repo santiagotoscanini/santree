@@ -17,7 +17,14 @@ nav_order: 6
 
 ## Layout
 
-**Tabs (top)** — switch between **Issues** (your assigned tickets in this repo) and **Reviews** (PRs where your review is requested). Press `Tab` or `1`/`2`.
+**Tabs (top)** — press `Tab` to cycle or a number key:
+
+- **Triage** — incoming issues awaiting triage (a `triage`-state inbox). Shown only when the active tracker has a triage concept (Linear today).
+- **Issues** — your assigned tickets in this repo that don't have a worktree yet (backlog / planning).
+- **Trees** — worktrees in progress, plus the synthetic main-repo row and any orphaned worktrees.
+- **Reviews** — PRs where your review is requested.
+
+When the Triage tab is present it leads, so the number keys are `1` Triage, `2` Issues, `3` Trees, `4` Reviews; without it they shift down by one.
 
 **Left pane** — the list. Issues without worktrees show as a single row (priority + ID + title). Issues with worktrees expand into nested sub-rows below the title:
 
@@ -25,7 +32,11 @@ nav_order: 6
 - `· pr` — number, state, CI summary, review count
 - `· session` — Claude session state (`active` / `waiting` / `idle` / `exited`) + session ID
 
-The far-right `WT CI` columns give an at-a-glance worktree-exists / checks-pass status without expanding rows.
+The far-right `WT CI` columns give an at-a-glance worktree-exists / checks-pass status without expanding rows. The right column changes per tab:
+
+- **Trees** — `WT CI` (worktree exists / checks status).
+- **Triage** — a `DUE` due-date badge: red when overdue or due today, yellow when due within two days, gray otherwise.
+- **Issues** — a `RDY` readiness glyph driven by the issue's blocking dependencies: **`✓` green = ready to start** (no open blockers), **`⊘` yellow = blocked** by an unfinished dependency. Lets you spot which backlog tasks are startable right now without opening each one. The detail pane shows the full **Dependencies** section — what blocks this issue (with each blocker's done/open state) and what it blocks. Dependency data comes from Linear's "blocks" issue relations; other trackers show a neutral dot.
 
 **Right pane** — context-aware detail. Issue description, worktree git status (staged / unstaged / untracked, with diff stats vs merge-base), PR body, CI checks ordered fail → pending → pass, reviews, conversation comments, the live Claude todo list for the active session, and the action footer.
 
@@ -37,12 +48,23 @@ The divider is draggable. Mouse, scroll wheel, and keyboard all work everywhere.
 
 | Key | Action |
 |---|---|
-| `Tab` / `1` / `2` | Switch between Issues / Reviews tabs |
+| `Tab` / `1`–`4` | Switch tabs (Triage / Issues / Trees / Reviews) |
 | `↑ ↓` / `j k` | Move selection |
 | `Enter` | Resume Claude session in tmux (or switch to worktree if no session) |
 | `?` | Toggle the help overlay (glyph legend + key reference) |
 | `q` / `Esc` | Close overlay; from the root view, quit |
 | `R` | Force refresh (auto-refresh runs every 5 minutes) |
+
+### Triage actions
+
+The Triage tab is where you assess incoming issues before committing to them. The right pane shows the due date, description, and the full comment thread, and — when your team has a Linear triage on-call rotation — a one-line **on-call summary** at the top (who's on call now, and when you're next up). These keys act on the selected issue:
+
+| Key | Action |
+|---|---|
+| `a` | Ask Claude a clarifying question about the issue + all its comments — inline, read-only Q&A (Claude may inspect the codebase to judge whether it's fixable). The answer appears in place; press `a` again to ask another, `q`/`Esc` to close. |
+| `w` | Send it to a tree — creates a worktree and starts work, exactly like the Issues tab. The issue moves to the Trees tab. |
+| `s` | Open the **triage on-call schedule** — the full weekly rotation for your team(s), pulled from Linear's "Triage responsibility" (current shift highlighted, your own shifts marked). Works even when the inbox is empty. `q`/`Esc` to close. |
+| `o` | Open the issue in the active tracker (Linear) |
 
 ### Worktree actions
 
@@ -50,7 +72,7 @@ The divider is draggable. Mouse, scroll wheel, and keyboard all work everywhere.
 |---|---|
 | `w` | Create worktree & start working — opens mode-select (plan / implement) → context input → launch |
 | `e` | Open the worktree in your editor (`SANTREE_EDITOR`, defaults to `code`) |
-| `d` | Remove the worktree and its branch |
+| `d` | Remove the worktree and its branch — confirm, then it runs in the background (staged progress in the right pane when that row is selected). Fire several in a row without waiting; each in-progress row is marked `⌫` in the WT column. |
 | `o` | Open the issue in the active tracker (Linear / GitHub) |
 
 ### PR actions
@@ -94,6 +116,7 @@ Only the selection background is theme-sensitive; foreground colors are terminal
 | `[C]` commit + push | `[w]` work (plan / implement) |
 | `[c]` PR create | `[f]` fix PR |
 | `[v]` diff overlay | `[r]` self-review PR |
+| `[a]` ask Claude (Triage) | |
 | `[?]` help | |
 
 Inline flows never leave the dashboard. New-window flows hand off to a multiplexer window so you can interact with Claude directly.

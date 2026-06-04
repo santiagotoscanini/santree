@@ -1,8 +1,8 @@
 import type { PRInfo, PRCheck, PRReview, PRConversationComment, SearchPR } from "../github.js";
 import type { ClaudeTodo } from "../claude-todos.js";
-import type { AssignedIssue, Issue } from "../trackers/types.js";
+import type { AssignedIssue, Comment, Issue, TriageSchedule } from "../trackers/types.js";
 
-export type { AssignedIssue, Issue } from "../trackers/types.js";
+export type { AssignedIssue, Comment, Issue, TriageSchedule } from "../trackers/types.js";
 
 export interface WorktreeInfo {
 	path: string;
@@ -76,7 +76,7 @@ export interface EnrichedReviewPR {
 	authorName: string | null;
 }
 
-export type DashboardTab = "issues" | "trees" | "reviews";
+export type DashboardTab = "triage" | "issues" | "trees" | "reviews";
 
 export type ActionOverlay =
 	| "mode-select"
@@ -91,7 +91,13 @@ export type ActionOverlay =
 	| "tracker-select"
 	| "issue-form"
 	| "confirm-delete-issue"
+	| "triage-ask"
+	| "triage-schedule"
 	| null;
+
+/** Triage "ask Claude" flow sub-phase. "input" is owned by MultilineTextArea
+ * (Ctrl+D submit / Ctrl+G cancel); the rest are driven by the outer handler. */
+export type TriageAskPhase = "input" | "running" | "answer" | "error";
 
 /** Tracker-selection overlay sub-phase: pick a tracker, then (for Linear with
  * multiple authenticated workspaces) pick the org. */
@@ -143,6 +149,16 @@ export type PrCreatePhase =
 	| "done"
 	| "error";
 
+/** Per-worktree deletion progress. Deletions run concurrently (fire `d`, move
+ * on, fire `d` again) so each tracks its own staged log + phase; the detail
+ * pane renders the entry for the selected worktree. Entries are pruned on the
+ * next data refresh once the worktree is gone (see SET_DATA). */
+export interface DeleteStatus {
+	logs: string;
+	phase: "removing" | "done" | "error";
+	error: string | null;
+}
+
 export interface DashboardState {
 	activeTab: DashboardTab;
 	groups: ProjectGroup[];
@@ -162,6 +178,30 @@ export interface DashboardState {
 	treeSelectedIndex: number;
 	treeListScrollOffset: number;
 	treeDetailScrollOffset: number;
+	// Triage tab — incoming tracker issues in the triage inbox (Linear only;
+	// gated on `tracker.supportsTriage`). Mirrors the issues-tab slices, plus a
+	// per-issue comment cache so the detail panel can show the discussion
+	// without a blocking fetch on every selection.
+	triageGroups: ProjectGroup[];
+	flatTriage: DashboardIssue[];
+	triageSelectedIndex: number;
+	triageListScrollOffset: number;
+	triageDetailScrollOffset: number;
+	/** Lazily-fetched comments per triage issue identifier. Absent = not yet
+	 * loaded (detail panel shows "loading…"); present (possibly empty) = loaded. */
+	triageCommentsById: Record<string, Comment[]>;
+	/** Triage on-call rotations for the viewer's teams (Linear). Loaded on
+	 * refresh; shown via the `triage-schedule` overlay and a compact line in the
+	 * triage detail pane. */
+	triageSchedules: TriageSchedule[];
+	triageScheduleScrollOffset: number;
+	// Triage "ask Claude" flow (inline, one-shot Q&A over the issue + comments)
+	triageAskTicketId: string | null;
+	triageAskPhase: TriageAskPhase;
+	triageAskQuestion: string;
+	triageAskAnswer: string | null;
+	triageAskError: string | null;
+	triageAskScrollOffset: number;
 	// Tracker-selection overlay
 	trackerSelectPhase: TrackerSelectPhase;
 	trackerSelectIndex: number;
@@ -182,7 +222,8 @@ export interface DashboardState {
 	creatingForTicket: string | null;
 	creationLogs: string;
 	creationError: string | null;
-	deletingForTicket: string | null;
+	/** In-flight (and just-finished) worktree deletions, keyed by ticket id. */
+	deletingTickets: Record<string, DeleteStatus>;
 	commitPhase: CommitPhase;
 	commitMessage: string;
 	commitError: string | null;
@@ -238,11 +279,28 @@ export type DashboardAction =
 			flatIssues: DashboardIssue[];
 			treeGroups: ProjectGroup[];
 			flatTrees: DashboardIssue[];
+			triageGroups: ProjectGroup[];
+			flatTriage: DashboardIssue[];
 	  }
 	| { type: "SELECT"; index: number }
 	| { type: "TREE_SELECT"; index: number }
 	| { type: "TREE_SCROLL_LIST"; offset: number }
 	| { type: "TREE_SCROLL_DETAIL"; offset: number }
+	| { type: "TRIAGE_SELECT"; index: number }
+	| { type: "TRIAGE_SCROLL_LIST"; offset: number }
+	| { type: "TRIAGE_SCROLL_DETAIL"; offset: number }
+	| { type: "TRIAGE_COMMENTS_LOADED"; id: string; comments: Comment[] }
+	| { type: "SET_TRIAGE_SCHEDULES"; schedules: TriageSchedule[] }
+	| { type: "TRIAGE_SCHEDULE_OPEN" }
+	| { type: "TRIAGE_SCHEDULE_SCROLL"; offset: number }
+	| { type: "TRIAGE_SCHEDULE_CLOSE" }
+	| { type: "TRIAGE_ASK_OPEN"; ticketId: string }
+	| { type: "TRIAGE_ASK_CHANGE"; value: string }
+	| { type: "TRIAGE_ASK_RUN" }
+	| { type: "TRIAGE_ASK_ANSWER"; answer: string }
+	| { type: "TRIAGE_ASK_ERROR"; error: string }
+	| { type: "TRIAGE_ASK_SCROLL"; offset: number }
+	| { type: "TRIAGE_ASK_CLOSE" }
 	| { type: "TRACKER_SELECT_OPEN" }
 	| { type: "TRACKER_SELECT_MOVE"; index: number }
 	| { type: "TRACKER_SELECT_PHASE"; phase: TrackerSelectPhase; orgs?: TrackerOrgOption[] }
@@ -275,7 +333,9 @@ export type DashboardAction =
 	| { type: "CREATION_DONE" }
 	| { type: "CREATION_ERROR"; error: string }
 	| { type: "DELETE_START"; ticketId: string }
-	| { type: "DELETE_DONE" }
+	| { type: "DELETE_LOG"; ticketId: string; logs: string }
+	| { type: "DELETE_DONE"; ticketId: string }
+	| { type: "DELETE_ERROR"; ticketId: string; error: string }
 	| {
 			type: "COMMIT_START";
 			/** Null when committing on a non-ticket branch (e.g. the main
@@ -365,6 +425,20 @@ export const initialState: DashboardState = {
 	treeSelectedIndex: 0,
 	treeListScrollOffset: 0,
 	treeDetailScrollOffset: 0,
+	triageGroups: [],
+	flatTriage: [],
+	triageSelectedIndex: 0,
+	triageListScrollOffset: 0,
+	triageDetailScrollOffset: 0,
+	triageCommentsById: {},
+	triageSchedules: [],
+	triageScheduleScrollOffset: 0,
+	triageAskTicketId: null,
+	triageAskPhase: "input",
+	triageAskQuestion: "",
+	triageAskAnswer: null,
+	triageAskError: null,
+	triageAskScrollOffset: 0,
 	trackerSelectPhase: "root",
 	trackerSelectIndex: 0,
 	trackerSelectOrgs: [],
@@ -383,7 +457,7 @@ export const initialState: DashboardState = {
 	creatingForTicket: null,
 	creationLogs: "",
 	creationError: null,
-	deletingForTicket: null,
+	deletingTickets: {},
 	commitPhase: "idle",
 	commitMessage: "",
 	commitError: null,
@@ -440,19 +514,37 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				const found = action.flatTrees.findIndex((d) => d.issue.identifier === prevTreeId);
 				if (found >= 0) newTreeIndex = found;
 			}
+			const prevTriageId = state.flatTriage[state.triageSelectedIndex]?.issue.identifier;
+			let newTriageIndex = 0;
+			if (prevTriageId) {
+				const found = action.flatTriage.findIndex((d) => d.issue.identifier === prevTriageId);
+				if (found >= 0) newTriageIndex = found;
+			}
+			// Prune delete-progress entries whose worktree is gone (a successful
+			// removal). In-progress ("removing") and failed ("error") deletions
+			// keep their row, so their entries survive and stay visible.
+			const presentTreeIds = new Set(action.flatTrees.map((d) => d.issue.identifier));
+			const deletingTickets = Object.fromEntries(
+				Object.entries(state.deletingTickets).filter(([id]) => presentTreeIds.has(id)),
+			);
 			return {
 				...state,
 				groups: action.groups,
 				flatIssues: action.flatIssues,
 				treeGroups: action.treeGroups,
 				flatTrees: action.flatTrees,
+				triageGroups: action.triageGroups,
+				flatTriage: action.flatTriage,
+				deletingTickets,
 				selectedIndex: newIndex,
 				treeSelectedIndex: newTreeIndex,
+				triageSelectedIndex: newTriageIndex,
 				loading: false,
 				refreshing: false,
 				error: null,
 				detailScrollOffset: 0,
 				treeDetailScrollOffset: 0,
+				triageDetailScrollOffset: 0,
 			};
 		}
 		case "TREE_SELECT":
@@ -461,6 +553,62 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 			return { ...state, treeListScrollOffset: action.offset };
 		case "TREE_SCROLL_DETAIL":
 			return { ...state, treeDetailScrollOffset: action.offset };
+		case "TRIAGE_SELECT":
+			return { ...state, triageSelectedIndex: action.index, triageDetailScrollOffset: 0 };
+		case "TRIAGE_SCROLL_LIST":
+			return { ...state, triageListScrollOffset: action.offset };
+		case "TRIAGE_SCROLL_DETAIL":
+			return { ...state, triageDetailScrollOffset: action.offset };
+		case "TRIAGE_COMMENTS_LOADED":
+			return {
+				...state,
+				triageCommentsById: { ...state.triageCommentsById, [action.id]: action.comments },
+			};
+		case "SET_TRIAGE_SCHEDULES":
+			return { ...state, triageSchedules: action.schedules };
+		case "TRIAGE_SCHEDULE_OPEN":
+			return { ...state, overlay: "triage-schedule", triageScheduleScrollOffset: 0 };
+		case "TRIAGE_SCHEDULE_SCROLL":
+			return { ...state, triageScheduleScrollOffset: action.offset };
+		case "TRIAGE_SCHEDULE_CLOSE":
+			return { ...state, overlay: null };
+		case "TRIAGE_ASK_OPEN":
+			return {
+				...state,
+				overlay: "triage-ask",
+				triageAskTicketId: action.ticketId,
+				triageAskPhase: "input",
+				triageAskQuestion: "",
+				triageAskAnswer: null,
+				triageAskError: null,
+				triageAskScrollOffset: 0,
+			};
+		case "TRIAGE_ASK_CHANGE":
+			return { ...state, triageAskQuestion: action.value };
+		case "TRIAGE_ASK_RUN":
+			return { ...state, triageAskPhase: "running", triageAskError: null };
+		case "TRIAGE_ASK_ANSWER":
+			return {
+				...state,
+				triageAskPhase: "answer",
+				triageAskAnswer: action.answer,
+				triageAskScrollOffset: 0,
+			};
+		case "TRIAGE_ASK_ERROR":
+			return { ...state, triageAskPhase: "error", triageAskError: action.error };
+		case "TRIAGE_ASK_SCROLL":
+			return { ...state, triageAskScrollOffset: action.offset };
+		case "TRIAGE_ASK_CLOSE":
+			return {
+				...state,
+				overlay: null,
+				triageAskTicketId: null,
+				triageAskPhase: "input",
+				triageAskQuestion: "",
+				triageAskAnswer: null,
+				triageAskError: null,
+				triageAskScrollOffset: 0,
+			};
 		case "TRACKER_SELECT_OPEN":
 			return {
 				...state,
@@ -565,9 +713,45 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				baseSelectChosen: null,
 			};
 		case "DELETE_START":
-			return { ...state, deletingForTicket: action.ticketId };
-		case "DELETE_DONE":
-			return { ...state, deletingForTicket: null };
+			return {
+				...state,
+				deletingTickets: {
+					...state.deletingTickets,
+					[action.ticketId]: { logs: "", phase: "removing", error: null },
+				},
+			};
+		case "DELETE_LOG": {
+			const prev = state.deletingTickets[action.ticketId];
+			if (!prev) return state;
+			return {
+				...state,
+				deletingTickets: {
+					...state.deletingTickets,
+					[action.ticketId]: { ...prev, logs: prev.logs + action.logs },
+				},
+			};
+		}
+		case "DELETE_DONE": {
+			const prev = state.deletingTickets[action.ticketId];
+			if (!prev) return state;
+			return {
+				...state,
+				deletingTickets: {
+					...state.deletingTickets,
+					[action.ticketId]: { ...prev, phase: "done" },
+				},
+			};
+		}
+		case "DELETE_ERROR": {
+			const prev = state.deletingTickets[action.ticketId] ?? { logs: "" };
+			return {
+				...state,
+				deletingTickets: {
+					...state.deletingTickets,
+					[action.ticketId]: { logs: prev.logs, phase: "error", error: action.error },
+				},
+			};
+		}
 		case "COMMIT_START":
 			return {
 				...state,

@@ -397,15 +397,22 @@ const LEGEND: LegendSection[] = [
 	{
 		title: "Tabs & keys",
 		rows: [
-			{ glyph: "1", color: "cyan", meaning: "Issues tab — backlog / planning" },
-			{ glyph: "2", color: "cyan", meaning: "Trees tab — worktrees in progress" },
-			{ glyph: "3", color: "cyan", meaning: "Reviews tab — PRs awaiting your review" },
-			{ glyph: "Tab", color: "cyan", meaning: "Cycle Issues → Trees → Reviews" },
+			{ glyph: "1–4", color: "cyan", meaning: "Switch tab by number (Tab cycles)" },
+			{
+				glyph: "Triage",
+				color: "cyan",
+				meaning: "Incoming inbox — due dates + comments (Linear only)",
+			},
+			{ glyph: "Issues", color: "cyan", meaning: "Backlog / planning" },
+			{ glyph: "Trees", color: "cyan", meaning: "Worktrees in progress" },
+			{ glyph: "Reviews", color: "cyan", meaning: "PRs awaiting your review" },
 			{ glyph: "t", color: "cyan", meaning: "Switch / set up the issue tracker" },
 			{ glyph: "n", color: "cyan", meaning: "New issue (built-in tracker, Issues tab)" },
 			{ glyph: "e", color: "cyan", meaning: "Edit issue (built-in tracker, Issues tab)" },
 			{ glyph: "d", color: "red", meaning: "Delete issue (built-in) / remove worktree (Trees)" },
-			{ glyph: "w", color: "cyan", meaning: "Start work (creates a worktree → Trees tab)" },
+			{ glyph: "w", color: "cyan", meaning: "Start work / send to tree (creates a worktree)" },
+			{ glyph: "a", color: "cyan", meaning: "Ask Claude about the issue + comments (Triage tab)" },
+			{ glyph: "s", color: "cyan", meaning: "Triage on-call schedule (Triage tab)" },
 		],
 	},
 	{
@@ -423,6 +430,14 @@ const LEGEND: LegendSection[] = [
 			{ glyph: "✗", color: "red", meaning: "CI column: a check is failing" },
 			{ glyph: "●", color: "yellow", meaning: "CI column: checks pending / running" },
 			{ glyph: "·", color: "gray", meaning: "CI column: no PR or no checks" },
+			{ glyph: "◷", color: "red", meaning: "DUE column (Triage): overdue / due today" },
+			{ glyph: "◷", color: "yellow", meaning: "DUE column (Triage): due within 2 days" },
+			{ glyph: "✓", color: "green", meaning: "RDY column (Issues): ready — no open blockers" },
+			{
+				glyph: "⊘",
+				color: "yellow",
+				meaning: "RDY column (Issues): blocked by an open dependency",
+			},
 		],
 	},
 	{

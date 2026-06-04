@@ -25,7 +25,7 @@ import {
 	discardFile,
 } from "../lib/git.js";
 import { run, spawnAsync } from "../lib/exec.js";
-import { resolveAgentBinary, fillCommitMessage } from "../lib/ai.js";
+import { resolveAgentBinary, fillCommitMessage, askTicketQuestion } from "../lib/ai.js";
 import { getInstalledClaudeVersion } from "../lib/version.js";
 import { extractTicketId, getStagedDiffContent } from "../lib/git.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
@@ -52,6 +52,9 @@ import {
 	type ThemeMode,
 } from "../lib/dashboard/theme.js";
 import DetailPanel, { buildIssueActions } from "../lib/dashboard/DetailPanel.js";
+import TriageScheduleOverlay, {
+	buildScheduleLines,
+} from "../lib/dashboard/TriageScheduleOverlay.js";
 import ReviewList from "../lib/dashboard/ReviewList.js";
 import ReviewDetailPanel, { buildReviewActions } from "../lib/dashboard/ReviewDetailPanel.js";
 import { CommitOverlay, PrCreateOverlay, HelpOverlay } from "../lib/dashboard/Overlays.js";
@@ -442,6 +445,10 @@ export default function Dashboard() {
 	// `.code-workspace` file (VSCode/Cursor) AND such a file exists in the
 	// repo root. Recomputed alongside the data refresh.
 	const [hasWorkspaceFile, setHasWorkspaceFile] = useState(false);
+	// Whether the active tracker has a triage inbox (Linear). Drives whether the
+	// Triage tab appears at all. Recomputed on every data refresh — feature
+	// detection via `tracker.supportsTriage`, never a kind check.
+	const [supportsTriage, setSupportsTriage] = useState(false);
 	const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const repoRootRef = useRef<string | null>(null);
 	const stateRef = useRef(state);
@@ -541,6 +548,7 @@ export default function Dashboard() {
 			const overlay = stateRef.current.overlay;
 			const inTextInput =
 				overlay === "context-input" ||
+				(overlay === "triage-ask" && stateRef.current.triageAskPhase === "input") ||
 				(overlay === "pr-create" && stateRef.current.prCreatePhase === "review") ||
 				(overlay === "commit" && stateRef.current.commitPhase === "awaiting-message");
 			const themeP = inTextInput ? Promise.resolve<null>(null) : detectTerminalTheme();
@@ -564,8 +572,18 @@ export default function Dashboard() {
 				}
 			}
 			setHasWorkspaceFile(hasWs);
+			const tracker = getIssueTracker(repoRoot);
+			setSupportsTriage(tracker.supportsTriage === true);
 			dispatch({ type: "SET_DATA", ...data });
 			dispatch({ type: "SET_REVIEWS_DATA", flatReviews: reviewData.flatReviews });
+			// Triage on-call rotations (Linear). Best-effort, non-blocking — never
+			// fails the refresh.
+			if (tracker.getTriageSchedules) {
+				tracker
+					.getTriageSchedules(repoRoot)
+					.then((schedules) => dispatch({ type: "SET_TRIAGE_SCHEDULES", schedules }))
+					.catch(() => {});
+			}
 		} catch (e) {
 			dispatch({
 				type: "SET_ERROR",
@@ -677,18 +695,37 @@ export default function Dashboard() {
 				}
 
 				{
-					const isTreesTab = s.activeTab === "trees";
-					const flat = isTreesTab ? s.flatTrees : s.flatIssues;
-					const idx = isTreesTab ? s.treeSelectedIndex : s.selectedIndex;
-					const detailOff = isTreesTab ? s.treeDetailScrollOffset : s.detailScrollOffset;
+					const tab = s.activeTab;
+					const flat =
+						tab === "trees" ? s.flatTrees : tab === "triage" ? s.flatTriage : s.flatIssues;
+					const idx =
+						tab === "trees"
+							? s.treeSelectedIndex
+							: tab === "triage"
+								? s.triageSelectedIndex
+								: s.selectedIndex;
+					const detailOff =
+						tab === "trees"
+							? s.treeDetailScrollOffset
+							: tab === "triage"
+								? s.triageDetailScrollOffset
+								: s.detailScrollOffset;
+					const selectType =
+						tab === "trees" ? "TREE_SELECT" : tab === "triage" ? "TRIAGE_SELECT" : "SELECT";
+					const scrollType =
+						tab === "trees"
+							? "TREE_SCROLL_DETAIL"
+							: tab === "triage"
+								? "TRIAGE_SCROLL_DETAIL"
+								: "SCROLL_DETAIL";
 					if (inLeftPane) {
 						const maxIdx = flat.length - 1;
 						if (maxIdx < 0) return;
 						const next = Math.max(0, Math.min(idx + delta, maxIdx));
-						dispatch({ type: isTreesTab ? "TREE_SELECT" : "SELECT", index: next });
+						dispatch({ type: selectType, index: next });
 					} else {
 						const next = Math.max(0, detailOff + delta);
-						dispatch({ type: isTreesTab ? "TREE_SCROLL_DETAIL" : "SCROLL_DETAIL", offset: next });
+						dispatch({ type: scrollType, offset: next });
 					}
 				}
 				return;
@@ -744,6 +781,9 @@ export default function Dashboard() {
 			// Left-click press: select item in left pane (cols 2..lw+1)
 			const s = stateRef.current;
 			if (s.loading || s.error) return;
+			// Full-area triage overlays cover the content area — don't let a click
+			// fall through to the (hidden) list underneath.
+			if (s.overlay === "triage-ask" || s.overlay === "triage-schedule") return;
 			if (col < 2 || col > lw + 1) return;
 
 			// Row 1 = title, row 2 = tab strip, row 3 = top border, content starts at row 4 (1-based)
@@ -762,15 +802,22 @@ export default function Dashboard() {
 			}
 
 			{
-				const isTreesTab = s.activeTab === "trees";
-				const flat = isTreesTab ? s.flatTrees : s.flatIssues;
-				const grps = isTreesTab ? s.treeGroups : s.groups;
-				const scrollOff = isTreesTab ? s.treeListScrollOffset : s.listScrollOffset;
+				const tab = s.activeTab;
+				const flat = tab === "trees" ? s.flatTrees : tab === "triage" ? s.flatTriage : s.flatIssues;
+				const grps = tab === "trees" ? s.treeGroups : tab === "triage" ? s.triageGroups : s.groups;
+				const scrollOff =
+					tab === "trees"
+						? s.treeListScrollOffset
+						: tab === "triage"
+							? s.triageListScrollOffset
+							: s.listScrollOffset;
+				const selectType =
+					tab === "trees" ? "TREE_SELECT" : tab === "triage" ? "TRIAGE_SELECT" : "SELECT";
 				if (flat.length === 0) return;
 				const listRow = scrollOff + contentRow;
 				const flatIdx = getFlatIndexForListRow(grps, flat, listRow);
 				if (flatIdx !== null && flatIdx >= 0 && flatIdx < flat.length) {
-					dispatch({ type: isTreesTab ? "TREE_SELECT" : "SELECT", index: flatIdx });
+					dispatch({ type: selectType, index: flatIdx });
 				}
 			}
 		};
@@ -852,6 +899,74 @@ export default function Dashboard() {
 		}
 	}, [state.treeSelectedIndex, state.treeGroups, contentHeight, state.treeListScrollOffset]);
 
+	// ── Triage list scroll tracking ──────────────────────────────────
+
+	useEffect(() => {
+		const rowIdx = getRowIndexForFlatIndex(
+			state.triageGroups,
+			state.flatTriage,
+			state.triageSelectedIndex,
+		);
+		const maxVisible = contentHeight - LIST_FOOTER_HEIGHT;
+		let offset = state.triageListScrollOffset;
+
+		if (rowIdx < offset) {
+			offset = Math.max(0, rowIdx - 1);
+		} else if (rowIdx >= offset + maxVisible) {
+			offset = rowIdx - maxVisible + 2;
+		}
+
+		if (offset !== state.triageListScrollOffset) {
+			dispatch({ type: "TRIAGE_SCROLL_LIST", offset });
+		}
+	}, [state.triageSelectedIndex, state.triageGroups, contentHeight, state.triageListScrollOffset]);
+
+	// ── Triage comment lazy-load ─────────────────────────────────────
+	// The assigned-issues list query doesn't include comments — fetch the full
+	// issue (with discussion) for the selected triage row on demand and cache it
+	// by identifier so the detail panel can show the thread without re-fetching
+	// on every keypress.
+	useEffect(() => {
+		if (state.activeTab !== "triage") return;
+		const di = state.flatTriage[state.triageSelectedIndex];
+		if (!di) return;
+		const id = di.issue.identifier;
+		if (state.triageCommentsById[id] !== undefined) return;
+		const root = repoRootRef.current;
+		if (!root) return;
+		let cancelled = false;
+		void (async () => {
+			try {
+				const tracker = getIssueTracker(root);
+				const res = await tracker.getIssue(id, root);
+				if (cancelled) return;
+				dispatch({
+					type: "TRIAGE_COMMENTS_LOADED",
+					id,
+					comments: res.ok ? res.value.comments : [],
+				});
+			} catch {
+				if (!cancelled) dispatch({ type: "TRIAGE_COMMENTS_LOADED", id, comments: [] });
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [state.activeTab, state.triageSelectedIndex, state.flatTriage, state.triageCommentsById]);
+
+	// ── Keep activeTab valid ─────────────────────────────────────────
+	// The Triage tab can disappear when the tracker is switched away from one
+	// that supports it. If the active tab is no longer in the order, fall back
+	// to the first tab so the strip + content don't end up on a dead tab.
+	useEffect(() => {
+		const order = supportsTriage
+			? ["triage", "issues", "trees", "reviews"]
+			: ["issues", "trees", "reviews"];
+		if (!order.includes(state.activeTab)) {
+			dispatch({ type: "SET_TAB", tab: order[0] as typeof state.activeTab });
+		}
+	}, [supportsTriage, state.activeTab]);
+
 	// ── Review list scroll tracking ──────────────────────────────────
 
 	useEffect(() => {
@@ -879,6 +994,7 @@ export default function Dashboard() {
 	useEffect(() => {
 		const needsMouseOff =
 			state.overlay === "context-input" ||
+			(state.overlay === "triage-ask" && state.triageAskPhase === "input") ||
 			(state.overlay === "issue-form" && state.issueFormPhase !== "saving") ||
 			(state.overlay === "pr-create" && state.prCreatePhase === "review") ||
 			(state.overlay === "commit" && state.commitPhase === "awaiting-message");
@@ -887,7 +1003,13 @@ export default function Dashboard() {
 		return () => {
 			process.stdout.write("\x1b[?1002h\x1b[?1006h");
 		};
-	}, [state.overlay, state.issueFormPhase, state.prCreatePhase, state.commitPhase]);
+	}, [
+		state.overlay,
+		state.triageAskPhase,
+		state.issueFormPhase,
+		state.prCreatePhase,
+		state.commitPhase,
+	]);
 
 	// ── Diff overlay: load file list when opened (gh pr diff path) ────
 	// Reviews-tab PRs without a local worktree shell out to `gh pr diff <n>`,
@@ -1206,7 +1328,9 @@ export default function Dashboard() {
 			const di =
 				sref.activeTab === "trees"
 					? sref.flatTrees[sref.treeSelectedIndex]
-					: sref.flatIssues[sref.selectedIndex];
+					: sref.activeTab === "triage"
+						? sref.flatTriage[sref.triageSelectedIndex]
+						: sref.flatIssues[sref.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
 			if (!repoRoot) return;
@@ -1331,7 +1455,9 @@ export default function Dashboard() {
 			const di =
 				state.activeTab === "trees"
 					? state.flatTrees[state.treeSelectedIndex]
-					: state.flatIssues[state.selectedIndex];
+					: state.activeTab === "triage"
+						? state.flatTriage[state.triageSelectedIndex]
+						: state.flatIssues[state.selectedIndex];
 			if (!di) return;
 			const repoRoot = repoRootRef.current;
 			if (!repoRoot) return;
@@ -1382,6 +1508,8 @@ export default function Dashboard() {
 			state.selectedIndex,
 			state.flatTrees,
 			state.treeSelectedIndex,
+			state.flatTriage,
+			state.triageSelectedIndex,
 			state.activeTab,
 			exit,
 			launchWorkInTmux,
@@ -1389,6 +1517,53 @@ export default function Dashboard() {
 			writeContextFile,
 		],
 	);
+
+	// ── Triage: ask Claude a clarifying question ─────────────────────
+	// One-shot, read-only Q&A over the selected triage issue plus its full
+	// comment thread. Runs non-interactively (async so the spinner keeps
+	// animating) and shows the answer in the overlay.
+	const doAsk = useCallback(async (question: string) => {
+		const s = stateRef.current;
+		const di = s.flatTriage[s.triageSelectedIndex];
+		const root = repoRootRef.current;
+		if (!di || !root) return;
+		dispatch({ type: "TRIAGE_ASK_RUN" });
+		try {
+			const tracker = getIssueTracker(root);
+			const res = await tracker.getIssue(di.issue.identifier, root);
+			if (!res.ok) {
+				dispatch({
+					type: "TRIAGE_ASK_ERROR",
+					error: res.message ?? `Could not load ${di.issue.identifier}`,
+				});
+				return;
+			}
+			// Cache the freshly-fetched comments so the detail panel reflects them too.
+			dispatch({
+				type: "TRIAGE_COMMENTS_LOADED",
+				id: di.issue.identifier,
+				comments: res.value.comments,
+			});
+			const result = await askTicketQuestion({
+				ticket: res.value,
+				trackerName: tracker.displayName,
+				question,
+			});
+			if (!result.success || !result.output) {
+				dispatch({
+					type: "TRIAGE_ASK_ERROR",
+					error: result.output || "Claude returned no answer (is the CLI authenticated?)",
+				});
+				return;
+			}
+			dispatch({ type: "TRIAGE_ASK_ANSWER", answer: result.output });
+		} catch (e) {
+			dispatch({
+				type: "TRIAGE_ASK_ERROR",
+				error: e instanceof Error ? e.message : "Ask failed",
+			});
+		}
+	}, []);
 
 	// ── Tracker selection ────────────────────────────────────────────
 	// Mirrors `santree issue setup`. Local needs no account; Linear picks an
@@ -1663,6 +1838,30 @@ export default function Dashboard() {
 		}
 	}, []);
 
+	// ── Worktree removal ─────────────────────────────────────────────
+	// Runs a single deletion to completion, streaming staged progress into
+	// `deletingTickets[ticketId]` (rendered in the detail pane). Designed to be
+	// fired without awaiting so several worktrees can be removed concurrently —
+	// all args are captured, nothing is read from state inside.
+	const removeWorktreeWithProgress = useCallback(
+		async (ticketId: string, branch: string, repoRoot: string, force: boolean) => {
+			dispatch({ type: "DELETE_START", ticketId });
+			const result = await removeWorktree(branch, repoRoot, force, (msg) =>
+				dispatch({ type: "DELETE_LOG", ticketId, logs: `${msg}\n` }),
+			);
+			if (result.success) {
+				dispatch({ type: "DELETE_DONE", ticketId });
+				dispatch({ type: "SET_ACTION_MESSAGE", message: `Removed worktree for ${ticketId}` });
+				refresh();
+			} else {
+				const error = result.error ?? "Unknown error";
+				dispatch({ type: "DELETE_ERROR", ticketId, error });
+				dispatch({ type: "SET_ACTION_MESSAGE", message: `Failed to remove ${ticketId}: ${error}` });
+			}
+		},
+		[refresh],
+	);
+
 	// ── PR create flow ───────────────────────────────────────────────
 
 	const doPrCreate = useCallback(
@@ -1869,6 +2068,12 @@ export default function Dashboard() {
 
 	// ── Keyboard ──────────────────────────────────────────────────────
 
+	// Tab order + numeric keybinds. Triage leads (it's the inbox) but only
+	// appears when the active tracker has a triage concept.
+	const tabOrder: Array<typeof state.activeTab> = supportsTriage
+		? ["triage", "issues", "trees", "reviews"]
+		: ["issues", "trees", "reviews"];
+
 	useInput(
 		(input, key) => {
 			// Clear action messages on any keypress
@@ -2052,6 +2257,61 @@ export default function Dashboard() {
 			// disabled via isActive below). Submit launches directly; cancel
 			// closes the overlay.
 			if (state.overlay === "context-input") {
+				return;
+			}
+
+			// Triage "ask Claude" overlay. The input phase is owned by
+			// MultilineTextArea (outer disabled via isActive); running swallows
+			// keys; answer/error are navigable + closable here.
+			if (state.overlay === "triage-ask") {
+				if (state.triageAskPhase === "input" || state.triageAskPhase === "running") return;
+				if (key.escape || input === "q") {
+					dispatch({ type: "TRIAGE_ASK_CLOSE" });
+					return;
+				}
+				if (input === "a") {
+					// Ask another question about the same issue (resets to input).
+					dispatch({ type: "TRIAGE_ASK_OPEN", ticketId: state.triageAskTicketId ?? "" });
+					return;
+				}
+				if (state.triageAskPhase === "answer") {
+					if ((key.shift && key.downArrow) || input === "j") {
+						dispatch({ type: "TRIAGE_ASK_SCROLL", offset: state.triageAskScrollOffset + 3 });
+						return;
+					}
+					if ((key.shift && key.upArrow) || input === "k") {
+						dispatch({
+							type: "TRIAGE_ASK_SCROLL",
+							offset: Math.max(0, state.triageAskScrollOffset - 3),
+						});
+						return;
+					}
+				}
+				return;
+			}
+
+			// Triage on-call schedule overlay — read-only; scroll + close.
+			if (state.overlay === "triage-schedule") {
+				if (key.escape || input === "q") {
+					dispatch({ type: "TRIAGE_SCHEDULE_CLOSE" });
+					return;
+				}
+				const total = buildScheduleLines(state.triageSchedules).length;
+				const maxOffset = Math.max(0, total - Math.max(1, contentHeight - 3));
+				if (input === "j" || key.downArrow) {
+					dispatch({
+						type: "TRIAGE_SCHEDULE_SCROLL",
+						offset: Math.min(maxOffset, state.triageScheduleScrollOffset + 3),
+					});
+					return;
+				}
+				if (input === "k" || key.upArrow) {
+					dispatch({
+						type: "TRIAGE_SCHEDULE_SCROLL",
+						offset: Math.max(0, state.triageScheduleScrollOffset - 3),
+					});
+					return;
+				}
 				return;
 			}
 
@@ -2243,29 +2503,17 @@ export default function Dashboard() {
 			if (state.overlay === "confirm-delete") {
 				if (input === "y") {
 					dispatch({ type: "SET_OVERLAY", overlay: null });
-					// Worktree removal is a Trees-tab action.
+					// Worktree removal is a Trees-tab action. Fire-and-forget so the
+					// user can immediately confirm another deletion — each removal
+					// closes over its own ticket/branch and streams progress into
+					// `deletingTickets[ticketId]`, rendered in the detail pane.
 					const di = state.flatTrees[state.treeSelectedIndex];
-					if (di?.worktree) {
-						const repoRoot = repoRootRef.current;
-						if (repoRoot) {
-							dispatch({ type: "DELETE_START", ticketId: di.issue.identifier });
-							const force = di.worktree.dirty;
-							removeWorktree(di.worktree.branch, repoRoot, force).then((result) => {
-								dispatch({ type: "DELETE_DONE" });
-								if (result.success) {
-									dispatch({
-										type: "SET_ACTION_MESSAGE",
-										message: `Removed worktree for ${di.issue.identifier}`,
-									});
-									refresh();
-								} else {
-									dispatch({
-										type: "SET_ACTION_MESSAGE",
-										message: `Failed: ${result.error ?? "Unknown error"}`,
-									});
-								}
-							});
-						}
+					const repoRoot = repoRootRef.current;
+					if (di?.worktree && repoRoot) {
+						const ticketId = di.issue.identifier;
+						const branch = di.worktree.branch;
+						const force = di.worktree.dirty;
+						void removeWorktreeWithProgress(ticketId, branch, repoRoot, force);
 					}
 					return;
 				}
@@ -2353,24 +2601,20 @@ export default function Dashboard() {
 				return;
 			}
 
-			// Tab switching (only when no overlay is active)
-			const TAB_ORDER: Array<typeof state.activeTab> = ["issues", "trees", "reviews"];
+			// Tab switching (only when no overlay is active). Order/count depend on
+			// whether the Triage tab is present (`tabOrder`).
 			if (key.tab) {
-				const idx = TAB_ORDER.indexOf(state.activeTab);
-				dispatch({ type: "SET_TAB", tab: TAB_ORDER[(idx + 1) % TAB_ORDER.length]! });
+				const idx = tabOrder.indexOf(state.activeTab);
+				dispatch({ type: "SET_TAB", tab: tabOrder[(idx + 1) % tabOrder.length]! });
 				return;
 			}
-			if (input === "1") {
-				dispatch({ type: "SET_TAB", tab: "issues" });
-				return;
-			}
-			if (input === "2") {
-				dispatch({ type: "SET_TAB", tab: "trees" });
-				return;
-			}
-			if (input === "3") {
-				dispatch({ type: "SET_TAB", tab: "reviews" });
-				return;
+			if (input >= "1" && input <= "9") {
+				const n = Number(input) - 1;
+				const tab = tabOrder[n];
+				if (tab) {
+					dispatch({ type: "SET_TAB", tab });
+					return;
+				}
 			}
 			// Reopen tracker selection from any tab.
 			if (input === "t") {
@@ -2620,20 +2864,86 @@ export default function Dashboard() {
 					if (!repoRoot) return;
 					const ticketId = extractTicketId(ri.branch);
 					if (!ticketId) return;
-					dispatch({ type: "DELETE_START", ticketId });
-					const force = ri.worktree.dirty;
-					removeWorktree(ri.branch, repoRoot, force).then((result) => {
-						dispatch({ type: "DELETE_DONE" });
-						if (result.success) {
-							dispatch({ type: "SET_ACTION_MESSAGE", message: `Removed worktree` });
-							refresh();
-						} else {
-							dispatch({ type: "SET_ACTION_MESSAGE", message: `Failed: ${result.error}` });
-						}
+					void removeWorktreeWithProgress(ticketId, ri.branch, repoRoot, ri.worktree.dirty);
+					return;
+				}
+
+				return; // prevent fallthrough to issues actions
+			}
+
+			// ── Triage tab keyboard ──────────────────────────────────
+			// Inbox issues: navigate, read comments (detail pane), ask Claude a
+			// question (`a`), or send it to a tree (`w`, same as Issues tab).
+			if (state.activeTab === "triage") {
+				const maxIdx = state.flatTriage.length - 1;
+				if (input === "j" || (key.downArrow && !key.shift)) {
+					dispatch({
+						type: "TRIAGE_SELECT",
+						index: Math.min(state.triageSelectedIndex + 1, maxIdx),
+					});
+					return;
+				}
+				if (input === "k" || (key.upArrow && !key.shift)) {
+					dispatch({
+						type: "TRIAGE_SELECT",
+						index: Math.max(state.triageSelectedIndex - 1, 0),
+					});
+					return;
+				}
+				if (key.shift && key.downArrow) {
+					dispatch({
+						type: "TRIAGE_SCROLL_DETAIL",
+						offset: state.triageDetailScrollOffset + 3,
+					});
+					return;
+				}
+				if (key.shift && key.upArrow) {
+					dispatch({
+						type: "TRIAGE_SCROLL_DETAIL",
+						offset: Math.max(0, state.triageDetailScrollOffset - 3),
 					});
 					return;
 				}
 
+				// On-call schedule overlay — works even with an empty inbox.
+				if (input === "s") {
+					dispatch({ type: "TRIAGE_SCHEDULE_OPEN" });
+					return;
+				}
+
+				const di = state.flatTriage[state.triageSelectedIndex];
+				if (!di) return;
+
+				// Send to tree — reuses the Issues-tab worktree-creation flow
+				// (mode-select → context-input → createAndLaunch).
+				if (input === "w") {
+					if (di.worktree?.sessionId) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: "Session active — switch to the Trees tab to resume.",
+						});
+						return;
+					}
+					dispatch({ type: "SET_OVERLAY", overlay: "mode-select" });
+					return;
+				}
+
+				// Ask Claude a clarifying question about this issue + its comments.
+				if (input === "a") {
+					dispatch({ type: "TRIAGE_ASK_OPEN", ticketId: di.issue.identifier });
+					return;
+				}
+
+				if (input === "o") {
+					if (!di.issue.url) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "No issue URL available" });
+						return;
+					}
+					if (openUrl(di.issue.url)) {
+						dispatch({ type: "SET_ACTION_MESSAGE", message: "Opened in browser" });
+					}
+					return;
+				}
 				return; // prevent fallthrough to issues actions
 			}
 
@@ -2965,6 +3275,11 @@ export default function Dashboard() {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "No worktree to remove" });
 					return;
 				}
+				// Already mid-removal — don't queue a duplicate.
+				if (state.deletingTickets[di.issue.identifier]?.phase === "removing") {
+					dispatch({ type: "SET_ACTION_MESSAGE", message: "Already removing this worktree" });
+					return;
+				}
 				dispatch({ type: "SET_OVERLAY", overlay: "confirm-delete" });
 				return;
 			}
@@ -2972,6 +3287,8 @@ export default function Dashboard() {
 		{
 			isActive:
 				state.overlay !== "context-input" &&
+				// Triage ask: the input phase is owned by MultilineTextArea.
+				(state.overlay !== "triage-ask" || state.triageAskPhase !== "input") &&
 				// Issue form title/description are owned by MultilineTextArea;
 				// only the "saving" phase needs the outer handler (a no-op
 				// swallow), so disabling it for the whole overlay is fine.
@@ -3010,9 +3327,41 @@ export default function Dashboard() {
 	const selectedIssue =
 		(state.activeTab === "trees"
 			? state.flatTrees[state.treeSelectedIndex]
-			: state.flatIssues[state.selectedIndex]) ?? null;
+			: state.activeTab === "triage"
+				? state.flatTriage[state.triageSelectedIndex]
+				: state.flatIssues[state.selectedIndex]) ?? null;
 	const selectedReview = state.flatReviews[state.reviewSelectedIndex] ?? null;
 	const activeTracker = getIssueTracker(repoRootRef.current);
+	// Comments for the selected triage issue (lazily loaded; undefined = still
+	// fetching, which the detail panel renders as "loading…").
+	const triageComments =
+		state.activeTab === "triage" && selectedIssue
+			? state.triageCommentsById[selectedIssue.issue.identifier]
+			: undefined;
+	// Compact on-call summary for the triage detail pane. Uses the first
+	// schedule (sorted to put the viewer's own rotation first) and finds the
+	// viewer's next upcoming shift.
+	let onCall:
+		| { currentName: string | null; currentIsMe: boolean; myNext: string | null }
+		| undefined;
+	if (state.activeTab === "triage" && state.triageSchedules.length > 0) {
+		const sched = state.triageSchedules[0]!;
+		const now = Date.now();
+		const next = sched.shifts.find((s) => s.isMe && Date.parse(s.startsAt) > now);
+		onCall = {
+			currentName: sched.currentName,
+			currentIsMe: sched.currentIsMe,
+			myNext: next
+				? new Date(next.startsAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+				: null,
+		};
+	}
+	// Worktree deletions in flight — `deletingIds` marks list rows, the selected
+	// one's status drives the detail-pane progress view.
+	const deletingIds = new Set(Object.keys(state.deletingTickets));
+	const selectedDeleteStatus = selectedIssue
+		? state.deletingTickets[selectedIssue.issue.identifier]
+		: undefined;
 
 	return (
 		<Box width={columns} height={rows} flexDirection="column">
@@ -3061,23 +3410,24 @@ export default function Dashboard() {
 			{/* Tab strip \u2014 pill-style; active tab highlighted with cyan background.
 			    Count in parens disambiguates the trailing number from the tab keybind. */}
 			<Box paddingX={1}>
-				<Tab
-					active={state.activeTab === "issues"}
-					label={`1 Issues (${state.flatIssues.length})`}
-					mode={theme.mode}
-				/>
-				<Text> </Text>
-				<Tab
-					active={state.activeTab === "trees"}
-					label={`2 Trees (${state.flatTrees.length})`}
-					mode={theme.mode}
-				/>
-				<Text> </Text>
-				<Tab
-					active={state.activeTab === "reviews"}
-					label={`3 Reviews (${state.flatReviews.length})`}
-					mode={theme.mode}
-				/>
+				{tabOrder.map((tab, i) => {
+					const meta = {
+						triage: { name: "Triage", count: state.flatTriage.length },
+						issues: { name: "Issues", count: state.flatIssues.length },
+						trees: { name: "Trees", count: state.flatTrees.length },
+						reviews: { name: "Reviews", count: state.flatReviews.length },
+					}[tab];
+					return (
+						<Box key={tab}>
+							{i > 0 ? <Text> </Text> : null}
+							<Tab
+								active={state.activeTab === tab}
+								label={`${i + 1} ${meta.name} (${meta.count})`}
+								mode={theme.mode}
+							/>
+						</Box>
+					);
+				})}
 			</Box>
 
 			{/* Bordered content area — wraps tab content for a real "panel" feel */}
@@ -3402,6 +3752,109 @@ export default function Dashboard() {
 							</Text>
 						</Box>
 					</Box>
+				) : state.overlay === "triage-schedule" ? (
+					<TriageScheduleOverlay
+						schedules={state.triageSchedules}
+						scrollOffset={state.triageScheduleScrollOffset}
+						width={innerWidth}
+						height={contentHeight}
+					/>
+				) : state.overlay === "triage-ask" ? (
+					<Box flexDirection="column" width={innerWidth} height={contentHeight} paddingX={1}>
+						<Text bold color="cyan">
+							Ask about {state.triageAskTicketId}
+						</Text>
+						{state.triageAskPhase === "input" ? (
+							<>
+								<Text dimColor>Claude answers from the issue + all its comments (read-only).</Text>
+								<Text> </Text>
+								<MultilineTextArea
+									value={state.triageAskQuestion}
+									onChange={(v) => dispatch({ type: "TRIAGE_ASK_CHANGE", value: v })}
+									onSubmit={() => {
+										const q = state.triageAskQuestion.trim();
+										if (q) void doAsk(q);
+									}}
+									onCancel={() => dispatch({ type: "TRIAGE_ASK_CLOSE" })}
+									width={innerWidth - 2}
+									height={6}
+									placeholder="e.g. Is this a real bug? Where would the fix go?"
+								/>
+								<Text> </Text>
+								<Text dimColor>
+									<Text color="cyan" bold>
+										Ctrl+D
+									</Text>
+									{" ask  ·  "}
+									<Text color="cyan" bold>
+										Ctrl+G
+									</Text>
+									{" cancel"}
+								</Text>
+							</>
+						) : state.triageAskPhase === "running" ? (
+							<Box flexGrow={1} alignItems="center" justifyContent="center">
+								<Text color="cyan">
+									<Spinner type="dots" /> Asking Claude…
+								</Text>
+							</Box>
+						) : state.triageAskPhase === "error" ? (
+							<>
+								<Text> </Text>
+								<Text color="red">{state.triageAskError}</Text>
+								<Text> </Text>
+								<Text dimColor>
+									<Text color="cyan" bold>
+										a
+									</Text>
+									{" ask again  ·  "}
+									<Text color="cyan" bold>
+										q
+									</Text>
+									{" close"}
+								</Text>
+							</>
+						) : (
+							<>
+								{state.triageAskQuestion ? (
+									<Text dimColor>
+										{`Q: ${state.triageAskQuestion.replace(/\n+/g, " ")}`.slice(0, innerWidth - 2)}
+									</Text>
+								) : null}
+								<Text> </Text>
+								{(() => {
+									const allLines = (state.triageAskAnswer ?? "").split("\n");
+									const bodyHeight = Math.max(1, contentHeight - 5);
+									const off = Math.min(
+										state.triageAskScrollOffset,
+										Math.max(0, allLines.length - bodyHeight),
+									);
+									return allLines
+										.slice(off, off + bodyHeight)
+										.map((ln, i) => (
+											<Text key={i}>
+												{ln.length > innerWidth - 2 ? ln.slice(0, innerWidth - 3) + "…" : ln || " "}
+											</Text>
+										));
+								})()}
+								<Text> </Text>
+								<Text dimColor>
+									<Text color="cyan" bold>
+										⇧↑↓/j/k
+									</Text>
+									{" scroll  ·  "}
+									<Text color="cyan" bold>
+										a
+									</Text>
+									{" ask again  ·  "}
+									<Text color="cyan" bold>
+										q
+									</Text>
+									{" close"}
+								</Text>
+							</>
+						)}
+					</Box>
 				) : (
 					<Box flexGrow={1}>
 						{/* Left pane */}
@@ -3415,6 +3868,28 @@ export default function Dashboard() {
 									width={leftWidth}
 									selectionBg={theme.selectionBg}
 								/>
+							) : state.activeTab === "triage" ? (
+								state.flatTriage.length === 0 ? (
+									<Box
+										width={leftWidth}
+										height={contentHeight}
+										justifyContent="center"
+										alignItems="center"
+									>
+										<Text color="yellow">Triage inbox empty</Text>
+									</Box>
+								) : (
+									<IssueList
+										groups={state.triageGroups}
+										flatIssues={state.flatTriage}
+										selectedIndex={state.triageSelectedIndex}
+										scrollOffset={state.triageListScrollOffset}
+										height={contentHeight}
+										width={leftWidth}
+										selectionBg={theme.selectionBg}
+										variant="triage"
+									/>
+								)
 							) : (state.activeTab === "trees" ? state.flatTrees : state.flatIssues).length ===
 							  0 ? (
 								<Box
@@ -3446,6 +3921,8 @@ export default function Dashboard() {
 									height={contentHeight}
 									width={leftWidth}
 									selectionBg={theme.selectionBg}
+									deletingIds={state.activeTab === "trees" ? deletingIds : undefined}
+									variant={state.activeTab === "issues" ? "issues" : "default"}
 								/>
 							)}
 						</Box>
@@ -3509,18 +3986,34 @@ export default function Dashboard() {
 									draft={state.prCreateDraft}
 									dispatch={dispatch}
 								/>
+							) : state.activeTab === "triage" && !selectedIssue ? (
+								// Empty (or nothing-selected) triage inbox: surface the
+								// on-call rotation in the otherwise-idle right pane so it's
+								// visible without selecting an issue or pressing [s].
+								<TriageScheduleOverlay
+									schedules={state.triageSchedules}
+									scrollOffset={state.triageScheduleScrollOffset}
+									width={rightWidth}
+									height={contentHeight}
+								/>
 							) : (
 								<DetailPanel
 									issue={selectedIssue}
 									scrollOffset={
 										state.activeTab === "trees"
 											? state.treeDetailScrollOffset
-											: state.detailScrollOffset
+											: state.activeTab === "triage"
+												? state.triageDetailScrollOffset
+												: state.detailScrollOffset
 									}
 									height={contentHeight}
 									width={rightWidth}
 									creatingForTicket={state.creatingForTicket}
 									creationLogs={state.creationLogs}
+									deleteStatus={selectedDeleteStatus}
+									triage={state.activeTab === "triage"}
+									comments={triageComments}
+									onCall={onCall}
 								/>
 							)}
 						</Box>
@@ -3536,6 +4029,20 @@ export default function Dashboard() {
 					{state.overlay === "diff" ? (
 						<Box width={innerWidth} paddingX={1}>
 							<CommandBar showWorkspace={hasWorkspaceFile} mode="diff" />
+						</Box>
+					) : state.overlay === "triage-schedule" ? (
+						<Box width={innerWidth} paddingX={1}>
+							<Text>
+								<Text color="cyan" bold>
+									j/k
+								</Text>
+								<Text dimColor> scroll</Text>
+								<Text dimColor>{"  ·  "}</Text>
+								<Text color="cyan" bold>
+									q
+								</Text>
+								<Text dimColor> close</Text>
+							</Text>
 						</Box>
 					) : (
 						<>

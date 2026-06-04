@@ -351,6 +351,27 @@ export function cleanupImages(ticketId: string): void {
 	getIssueTracker(repoRoot).cleanupCache(ticketId);
 }
 
+/**
+ * Ask Claude a clarifying question about a triage issue. The full issue —
+ * description plus every comment — is rendered via the shared `ticket.njk`
+ * template and injected into `ask.njk`. Read-only codebase tools are granted
+ * (Read for downloaded issue images, Grep/Glob so Claude can judge whether the
+ * issue is fixable against the real code). Runs non-interactively and returns
+ * the captured answer text. Async so the Ink dashboard keeps animating.
+ */
+export async function askTicketQuestion(opts: {
+	ticket: Issue;
+	trackerName: string;
+	question: string;
+}): Promise<RunAgentResult> {
+	const prompt = renderPrompt("ask", {
+		ticket_id: opts.ticket.identifier,
+		ticket_content: renderTicket(opts.ticket, opts.trackerName),
+		user_question: opts.question,
+	});
+	return runAgentAsync(prompt, { allowedTools: ["Read", "Grep", "Glob"] });
+}
+
 export interface FillCommitOpts {
 	branch: string;
 	ticketId: string | null;

@@ -1,6 +1,8 @@
 import { Box, Text } from "ink";
 import type { PRCheck } from "../github.js";
 import type { ProjectGroup, DashboardIssue } from "./types.js";
+import { formatDueDate } from "./due.js";
+import { issueReadiness } from "../trackers/types.js";
 
 interface Props {
 	groups: ProjectGroup[];
@@ -11,6 +13,14 @@ interface Props {
 	width: number;
 	/** Theme-adapted selection background (light/dark). Falls back to dark navy. */
 	selectionBg?: string;
+	/** Right-column variant (row structure — and click→row mapping — is identical):
+	 *   "default" — WT + CI status columns (Trees tab)
+	 *   "triage"  — a colored due-date badge
+	 *   "issues"  — a readiness glyph (ready / blocked by dependencies) */
+	variant?: "default" | "triage" | "issues";
+	/** Ticket ids whose worktree is currently being removed — shown with a
+	 * distinct WT-column glyph so concurrent deletions are visible in the list. */
+	deletingIds?: Set<string>;
 }
 
 function stateColor(type: string, name?: string): string {
@@ -104,7 +114,23 @@ export function buildIssueListRows(
 // Glyphs are 1 char and rendered right-aligned within their column.
 const LEFT_FIXED = 1 + 1 + 1 + 2 + 11; // 16 — left-aligned columns
 const RIGHT_FIXED = 2 + 2 + 2; // 6 — WT + 2 spaces + CI
+// Triage variant: a single right-aligned due-date column. Widest badge is
+// "⚠ overdue 99d" (13 chars); pad/clamp everything to this so titles align.
+const DUE_COL_WIDTH = 13;
+// Issues variant: a single readiness glyph under a "RDY" header.
+const READY_COL_WIDTH = 3;
 const TITLE_GAP = 2; // minimum spacing between title and the right columns
+
+function readinessGlyph(di: DashboardIssue): { glyph: string; color: string } {
+	switch (issueReadiness(di.issue.blockedBy)) {
+		case "ready":
+			return { glyph: "✓", color: "green" };
+		case "blocked":
+			return { glyph: "⊘", color: "yellow" };
+		default:
+			return { glyph: "·", color: "gray" };
+	}
+}
 
 export default function IssueList({
 	groups,
@@ -114,11 +140,16 @@ export default function IssueList({
 	height,
 	width,
 	selectionBg = "#1e3a5f",
+	variant = "default",
+	deletingIds,
 }: Props) {
+	const isTriage = variant === "triage";
+	const isIssues = variant === "issues";
+	const rightFixed = isTriage ? DUE_COL_WIDTH : isIssues ? READY_COL_WIDTH : RIGHT_FIXED;
 	const rows = buildIssueListRows(groups, flatIssues);
 	const visible = rows.slice(scrollOffset, scrollOffset + height);
 	const titleMaxWidth = Math.max(
-		width - LEFT_FIXED - 1 /* leading space */ - RIGHT_FIXED - TITLE_GAP,
+		width - LEFT_FIXED - 1 /* leading space */ - rightFixed - TITLE_GAP,
 		10,
 	);
 
@@ -138,7 +169,7 @@ export default function IssueList({
 						// Label "WT CI" is 5 chars; the "W" lines up with the WT
 						// glyph at column (width - RIGHT_FIXED + 1).
 						const namePart = `${row.name}  ${row.count}`;
-						const labelText = "WT CI";
+						const labelText = isTriage ? "DUE" : isIssues ? "RDY" : "WT CI";
 						const labelPad = row.isFirst
 							? Math.max(2, width - namePart.length - labelText.length)
 							: 0;
@@ -174,7 +205,8 @@ export default function IssueList({
 					const di = issue;
 					const sc = stateColor(di.issue.state.type, di.issue.state.name);
 					const prio = priorityMarker(di.issue.priority);
-					const work = workIndicator(di.worktree);
+					const isDeleting = deletingIds?.has(di.issue.identifier) ?? false;
+					const work = isDeleting ? { glyph: "⌫", color: "yellow" } : workIndicator(di.worktree);
 					const ci = ciIndicator(di.checks);
 					const nestPrefix = depth > 0 ? "  ".repeat(depth - 1) + "└ " : "";
 					const adjustedTitleWidth = Math.max(titleMaxWidth - nestPrefix.length, 5);
@@ -185,12 +217,19 @@ export default function IssueList({
 
 					const bg = selected ? selectionBg : undefined;
 
-					// Pad between title and the right columns so the W/CI markers stay
+					// Pad between title and the right columns so the markers stay
 					// pinned to the right edge regardless of title length.
 					const trailingPad = Math.max(
 						0,
-						width - LEFT_FIXED - 1 - nestPrefix.length - title.length - RIGHT_FIXED,
+						width - LEFT_FIXED - 1 - nestPrefix.length - title.length - rightFixed,
 					);
+
+					// Triage variant: a single right-aligned due-date badge in place
+					// of the WT/CI columns.
+					const due = isTriage ? formatDueDate(di.issue.dueDate) : null;
+					const dueText = (due?.label ?? "").padStart(DUE_COL_WIDTH).slice(-DUE_COL_WIDTH);
+					// Issues variant: a single readiness glyph right-aligned under "RDY".
+					const ready = isIssues ? readinessGlyph(di) : null;
 
 					return (
 						<Box key={di.issue.identifier} width={width}>
@@ -211,15 +250,27 @@ export default function IssueList({
 								{title}
 							</Text>
 							<Text backgroundColor={bg}>{" ".repeat(trailingPad)}</Text>
-							<Text backgroundColor={bg}> </Text>
-							<Text backgroundColor={bg} color={work.color}>
-								{work.glyph}
-							</Text>
-							<Text backgroundColor={bg}>{"  "}</Text>
-							<Text backgroundColor={bg}> </Text>
-							<Text backgroundColor={bg} color={ci.color}>
-								{ci.glyph}
-							</Text>
+							{isTriage ? (
+								<Text backgroundColor={bg} color={due?.color} bold={due?.urgent}>
+									{dueText}
+								</Text>
+							) : isIssues ? (
+								<Text backgroundColor={bg} color={ready?.color}>
+									{`  ${ready?.glyph ?? " "}`}
+								</Text>
+							) : (
+								<>
+									<Text backgroundColor={bg}> </Text>
+									<Text backgroundColor={bg} color={work.color}>
+										{work.glyph}
+									</Text>
+									<Text backgroundColor={bg}>{"  "}</Text>
+									<Text backgroundColor={bg}> </Text>
+									<Text backgroundColor={bg} color={ci.color}>
+										{ci.glyph}
+									</Text>
+								</>
+							)}
 						</Box>
 					);
 				})}

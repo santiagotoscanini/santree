@@ -18,6 +18,13 @@ This page is a curated highlight reel.
 
 ## Recent highlights
 
+### 0.7.x (May–June 2026)
+
+- Triage tab — when Linear is the active tracker, the dashboard leads with a **Triage** inbox: `triage`-state issues with an urgency-coded `DUE` badge, the full comment thread in the detail pane, `a` to ask Claude a read-only clarifying question about the issue, `w` to send it to a tree, and `s` to view your team's triage on-call rotation.
+- Tabs split into four — **Triage** (Linear only) · **Issues** (backlog) · **Trees** (worktrees in progress) · **Reviews** (PRs awaiting your review).
+- Non-blocking worktree deletion — confirm `d` and removal runs in the background with staged progress; fire several in a row without waiting.
+- PR draft/ready toggle, browser PR compose pre-fill, and dashboard auto-refresh throttled to 5 minutes.
+
 ### 0.6.x (May 2026)
 
 - Reviews tab — `[v]` opens the PR diff inline (parsed from `gh pr diff`), now with `SANTREE_DIFF_TOOL` syntax highlighting in parity with the worktree diff overlay.

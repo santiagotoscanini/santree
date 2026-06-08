@@ -62,9 +62,27 @@ The Triage tab lists the triage-state issues assigned to you, ordered by SLA urg
 | Key | Action |
 |---|---|
 | `a` | Ask Claude a clarifying question about the issue + all its comments — inline, read-only Q&A (Claude may inspect the codebase to judge whether it's fixable). The answer appears in place; press `a` again to ask another, `q`/`Esc` to close. |
+| `i` | **Investigate the ticket** — launch a Claude investigation in a new multiplexer window, driven by a skill or prompt you configure per repo (see [Investigate triage ticket](#investigate-triage-ticket)). Greyed until configured. |
 | `w` | Send it to a tree — creates a worktree and starts work, exactly like the Issues tab. The issue moves to the Trees tab. |
 | `s` | Open the **triage on-call schedule** — the full weekly rotation for your team(s), pulled from Linear's "Triage responsibility" (current shift highlighted, your own shifts marked). Works even when the inbox is empty. `q`/`Esc` to close. |
 | `o` | Open the issue in the active tracker (Linear) |
+
+#### Investigate triage ticket
+
+Press `i` on the Triage tab to hand the selected ticket to Claude in a new multiplexer window (tmux/cmux). You decide what "investigate" means per repo by adding a `_triage` block to `.santree/metadata.json`:
+
+```json
+{
+  "_triage": { "skill_name": "investigate-ticket-live" }
+}
+```
+
+- **`skill_name`** — a Claude skill / slash command. Santree runs `/<skill_name> <TICKET-ID>` (e.g. `/investigate-ticket-live TEAM-123`). Best when the investigation logic lives in a reusable skill.
+- **`prompt`** — a free-form prompt instead, with `{ticket_id}` substituted: `{ "prompt": "investigate {ticket_id} using the prod logs and the codebase" }`.
+
+If both are present, `skill_name` wins. The window opens in the main repo root, so Claude can read the codebase and use the repo's MCP servers.
+
+`.santree/metadata.json` is gitignored, so this is per-machine — each person points it at their own skill or prompt without committing it. Until you configure it, the `[i]` action shows greyed and pressing it just prints a reminder. An active multiplexer is required (there's no inline fallback).
 
 ### Worktree actions
 
@@ -116,7 +134,7 @@ Only the selection background is theme-sensitive; foreground colors are terminal
 | `[C]` commit + push | `[w]` work (plan / implement) |
 | `[c]` PR create | `[f]` fix PR |
 | `[v]` diff overlay | `[r]` self-review PR |
-| `[a]` ask Claude (Triage) | |
+| `[a]` ask Claude (Triage) | `[i]` investigate ticket (Triage) |
 | `[?]` help | |
 
 Inline flows never leave the dashboard. New-window flows hand off to a multiplexer window so you can interact with Claude directly.

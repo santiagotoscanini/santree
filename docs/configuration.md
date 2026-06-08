@@ -78,6 +78,23 @@ Both directories are `.gitignore`-friendly:
 {: .important }
 > The trailing slash matters — without it, you'd ignore a *file* named `worktrees`, not the directory.
 
+## Triage investigation
+
+The Triage tab's `[i]` action launches a Claude investigation of the selected ticket in a new multiplexer window. Configure what it runs per repo by adding a `_triage` block to `.santree/metadata.json`:
+
+```json
+{
+  "_triage": { "skill_name": "investigate-ticket-live" }
+}
+```
+
+| Key | Effect |
+|---|---|
+| `_triage.skill_name` | A Claude skill / slash command. Santree runs `/<skill_name> <TICKET-ID>` (e.g. `/investigate-ticket-live TEAM-123`). |
+| `_triage.prompt` | A free-form prompt template used instead; every `{ticket_id}` is replaced with the ticket. Example: `"investigate {ticket_id} using the prod logs and the codebase"`. |
+
+If both keys are set, `skill_name` wins. The investigation window opens in the main repo root, so Claude can read the codebase and use the repo's MCP servers. `metadata.json` is gitignored, so this is per-machine. Until it's set, the `[i]` action is greyed and an active multiplexer (tmux/cmux) is required.
+
 ---
 
 ## See also

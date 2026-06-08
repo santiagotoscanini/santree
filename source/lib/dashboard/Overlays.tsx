@@ -412,6 +412,11 @@ const LEGEND: LegendSection[] = [
 			{ glyph: "d", color: "red", meaning: "Delete issue (built-in) / remove worktree (Trees)" },
 			{ glyph: "w", color: "cyan", meaning: "Start work / send to tree (creates a worktree)" },
 			{ glyph: "a", color: "cyan", meaning: "Ask Claude about the issue + comments (Triage tab)" },
+			{
+				glyph: "i",
+				color: "cyan",
+				meaning: "Investigate ticket via your configured skill/prompt (Triage tab)",
+			},
 			{ glyph: "s", color: "cyan", meaning: "Triage on-call schedule (Triage tab)" },
 		],
 	},

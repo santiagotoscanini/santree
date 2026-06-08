@@ -102,7 +102,7 @@ function fileColor(xy: string): string | undefined {
 export function buildIssueActions(
 	di: DashboardIssue,
 	trackerName: string,
-	opts?: { tab?: DashboardTab; canMutate?: boolean },
+	opts?: { tab?: DashboardTab; canMutate?: boolean; triageInvestigateConfigured?: boolean },
 ): IssueActionItem[] {
 	const { worktree, pr, issue } = di;
 	const items: IssueActionItem[] = [];
@@ -131,6 +131,13 @@ export function buildIssueActions(
 	if (opts?.tab === "triage") {
 		items.push({ key: "w", label: "Send to tree", color: "cyan" });
 		items.push({ key: "a", label: "Ask", color: "cyan" });
+		// Greyed until `_triage.skill_name`/`_triage.prompt` is set in
+		// `.santree/metadata.json` — pressing it then just prints a hint.
+		items.push({
+			key: "i",
+			label: "Investigate",
+			color: opts.triageInvestigateConfigured ? "cyan" : "gray",
+		});
 		items.push({ key: "s", label: "Schedule", color: "cyan" });
 		if (issue.url) {
 			items.push({ key: "o", label: trackerName, color: "gray" });

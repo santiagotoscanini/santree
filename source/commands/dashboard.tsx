@@ -25,7 +25,18 @@ import {
 	discardFile,
 } from "../lib/git.js";
 import { run, spawnAsync } from "../lib/exec.js";
-import { resolveAgentBinary, fillCommitMessage, askTicketQuestion } from "../lib/ai.js";
+import {
+	resolveAgentBinary,
+	resolveClaudeBinary,
+	fillCommitMessage,
+	askTicketQuestion,
+} from "../lib/ai.js";
+import {
+	readTriageInvestigateConfig,
+	isTriageInvestigateConfigured,
+	buildInvestigatePrompt,
+	buildInvestigateCommand,
+} from "../lib/triage-config.js";
 import { getInstalledClaudeVersion } from "../lib/version.js";
 import { extractTicketId, getStagedDiffContent } from "../lib/git.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
@@ -449,6 +460,11 @@ export default function Dashboard() {
 	// Triage tab appears at all. Recomputed on every data refresh — feature
 	// detection via `tracker.supportsTriage`, never a kind check.
 	const [supportsTriage, setSupportsTriage] = useState(false);
+	// Whether `.santree/metadata.json` configures an "investigate triage ticket"
+	// skill/prompt (`_triage.skill_name` / `_triage.prompt`). Drives whether the
+	// Triage `[i]` action renders enabled (cyan) or greyed. Read fresh on every
+	// data refresh so manual edits to metadata.json show up within a cycle.
+	const [triageInvestigateConfigured, setTriageInvestigateConfigured] = useState(false);
 	const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const repoRootRef = useRef<string | null>(null);
 	const stateRef = useRef(state);
@@ -574,6 +590,9 @@ export default function Dashboard() {
 			setHasWorkspaceFile(hasWs);
 			const tracker = getIssueTracker(repoRoot);
 			setSupportsTriage(tracker.supportsTriage === true);
+			setTriageInvestigateConfigured(
+				isTriageInvestigateConfigured(readTriageInvestigateConfig(repoRoot)),
+			);
 			dispatch({ type: "SET_DATA", ...data });
 			dispatch({ type: "SET_REVIEWS_DATA", flatReviews: reviewData.flatReviews });
 			// Triage on-call rotations (Linear). Best-effort, non-blocking — never
@@ -2934,6 +2953,47 @@ export default function Dashboard() {
 					return;
 				}
 
+				// Investigate — hand the ticket to a user-configured skill/prompt in a
+				// new multiplexer window. Config lives in `.santree/metadata.json`
+				// (`_triage.skill_name` or `_triage.prompt`); read fresh so manual
+				// edits take effect without waiting for a refresh.
+				if (input === "i") {
+					const root = repoRootRef.current;
+					if (!root) return;
+					const prompt = buildInvestigatePrompt(
+						readTriageInvestigateConfig(root),
+						di.issue.identifier,
+					);
+					if (!prompt) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message:
+								"Set _triage.skill_name (or _triage.prompt) in .santree/metadata.json to enable investigate",
+						});
+						return;
+					}
+					const mux = getMultiplexer();
+					if (!mux.isActive()) {
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: "Investigate needs a multiplexer (tmux or cmux)",
+						});
+						return;
+					}
+					const command = buildInvestigateCommand(resolveClaudeBinary() ?? "claude", prompt);
+					const windowName = `investigate-${di.issue.identifier}`;
+					void (async () => {
+						const created = await mux.createWindow({ name: windowName, cwd: root, command });
+						dispatch({
+							type: "SET_ACTION_MESSAGE",
+							message: created.ok
+								? "Launched investigation in new window"
+								: `Failed to launch investigation${created.message ? `: ${created.message}` : ""}`,
+						});
+					})();
+					return;
+				}
+
 				if (input === "o") {
 					if (!di.issue.url) {
 						dispatch({ type: "SET_ACTION_MESSAGE", message: "No issue URL available" });
@@ -4057,6 +4117,7 @@ export default function Dashboard() {
 									overlay={state.overlay}
 									trackerName={activeTracker.displayName}
 									canMutate={activeTracker.canMutate === true}
+									triageInvestigateConfigured={triageInvestigateConfigured}
 								/>
 							</Box>
 						</>
@@ -4079,6 +4140,7 @@ function ActionRow({
 	overlay,
 	trackerName,
 	canMutate,
+	triageInvestigateConfigured,
 }: {
 	activeTab: import("../lib/dashboard/types.js").DashboardTab;
 	selectedIssue: DashboardIssue | null;
@@ -4086,6 +4148,7 @@ function ActionRow({
 	overlay: import("../lib/dashboard/types.js").ActionOverlay;
 	trackerName: string;
 	canMutate: boolean;
+	triageInvestigateConfigured: boolean;
 }) {
 	// During the diff overlay, none of the per-issue actions apply (View diff
 	// is what got us here, Commit/PR/etc. need the detail panel context). Keep
@@ -4098,7 +4161,11 @@ function ActionRow({
 				? buildReviewActions(selectedReview)
 				: []
 			: selectedIssue
-				? buildIssueActions(selectedIssue, trackerName, { tab: activeTab, canMutate })
+				? buildIssueActions(selectedIssue, trackerName, {
+						tab: activeTab,
+						canMutate,
+						triageInvestigateConfigured,
+					})
 				: [];
 
 	if (items.length === 0) return <Text> </Text>;

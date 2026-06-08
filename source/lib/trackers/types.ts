@@ -47,11 +47,16 @@ export interface AssignedIssue {
 	blockedBy?: IssueRef[];
 	/** Issues this one blocks (downstream dependents). */
 	blocking?: IssueRef[];
-	/** Due date as an ISO `YYYY-MM-DD` string, or null when none is set.
-	 * Only trackers with a native due-date concept populate it (Linear today);
-	 * others leave it undefined. Surfaced on the Triage tab as a colored,
-	 * urgency-coded badge. */
-	dueDate?: string | null;
+	/** When the issue's triage SLA breaches, as an ISO timestamp, or null when
+	 * no SLA applies. Only trackers with a native SLA concept populate it
+	 * (Linear today); others leave it undefined. Surfaced on the Triage tab as a
+	 * colored, urgency-coded countdown badge. */
+	slaBreachesAt?: string | null;
+	/** When the issue is snoozed until, as an ISO timestamp, or null when not
+	 * snoozed. A snooze in the future means the issue is parked — surfaced on the
+	 * Triage tab as a greyed, sunk-to-the-bottom row so active work stands out.
+	 * Linear-only today. */
+	snoozedUntilAt?: string | null;
 }
 
 export interface Issue extends AssignedIssue {

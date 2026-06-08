@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import type { Comment, DashboardIssue, DashboardTab, DeleteStatus } from "./types.js";
-import { formatDueDate } from "./due.js";
+import { formatSla, isSnoozed } from "./sla.js";
 import { issueReadiness } from "../trackers/types.js";
 
 interface Props {
@@ -312,30 +312,41 @@ export default function DetailPanel({
 	// ── Hero: identifier + title, then a status pill row ───────────────
 	lines.push({ text: `${li.identifier}  ${li.title}`, bold: true });
 	const sc = stateColor(li.state.type);
-	const heroSegs: Segment[] = [
-		{ text: "● ", color: sc },
-		{ text: li.state.name, color: sc },
-		{ text: "  ·  ", dim: true },
-		{ text: li.priorityLabel },
-	];
+	const heroSegs: Segment[] = [];
+	// On the Triage tab every issue is in the "Triage" state by definition, so the
+	// status pill is noise — lead with priority instead.
+	if (!triage) {
+		heroSegs.push(
+			{ text: "● ", color: sc },
+			{ text: li.state.name, color: sc },
+			{ text: "  ·  ", dim: true },
+		);
+	}
+	heroSegs.push({ text: li.priorityLabel });
 	if (li.labels.length > 0) {
 		heroSegs.push({ text: "  ·  ", dim: true });
 		heroSegs.push({ text: li.labels.join(", "), dim: true });
 	}
 	lines.push({ text: "", segments: heroSegs });
 
-	// ── Due date ──────────────────────────────────────────────────────
-	// Urgency-coded; shown whenever the issue carries one (most relevant on the
-	// Triage tab, harmless elsewhere).
-	const due = formatDueDate(li.dueDate);
-	if (due) {
+	// ── SLA countdown ─────────────────────────────────────────────────
+	// Urgency-coded time-to-breach; shown whenever the issue carries an SLA
+	// (Triage tab). Snoozed issues are parked, so render greyed with a marker.
+	const sla = formatSla(li.slaBreachesAt);
+	const snoozed = isSnoozed(li.snoozedUntilAt);
+	if (sla) {
+		const col = snoozed ? "gray" : sla.color;
+		const bold = !snoozed && sla.urgent;
 		lines.push({
 			text: "",
 			segments: [
-				{ text: "◷ ", color: due.color, bold: due.urgent },
-				{ text: due.label, color: due.color, bold: due.urgent },
+				{ text: "◷ ", color: col, bold },
+				{ text: sla.label, color: col, bold },
+				...(snoozed ? [{ text: "  ·  snoozed", color: "gray" as const }] : []),
 			],
 		});
+	} else if (snoozed) {
+		lines.push({ text: "", segments: [{ text: "◷ snoozed", color: "gray" }] });
 	}
 
 	// ── Description ───────────────────────────────────────────────────

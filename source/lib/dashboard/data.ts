@@ -28,6 +28,7 @@ import {
 	type PRReview,
 } from "../github.js";
 import { getIssueTracker, getCandidateTrackers } from "../trackers/index.js";
+import { isSnoozed } from "./sla.js";
 import type { DashboardIssue, ProjectGroup, StatusGroup, EnrichedReviewPR } from "./types.js";
 
 export async function loadDashboardData(repoRoot: string): Promise<{
@@ -325,23 +326,37 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 	const backlogIssues = enriched.filter((di) => !di.worktree && !isTriage(di));
 	const treeIssues = enriched.filter((di) => di.worktree);
 
-	// Surface the most pressing triage items first: by due date ascending
-	// (overdue/soonest first), undated last. `dueDate` is `YYYY-MM-DD` so a
-	// plain string compare is chronological. buildProjectGroups preserves this
-	// order within each status group.
+	// Order the triage inbox so the work that needs attention now is on top:
+	// active (non-snoozed) items first, snoozed parked at the bottom; within
+	// each, by SLA breach time ascending (breached/soonest first), SLA-less last.
+	const slaRank = (di: DashboardIssue): number => {
+		const s = di.issue.slaBreachesAt;
+		const t = s ? Date.parse(s) : NaN;
+		return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+	};
 	triageIssues.sort((a, b) => {
-		const da = a.issue.dueDate ?? null;
-		const db = b.issue.dueDate ?? null;
-		if (da && db) return da < db ? -1 : da > db ? 1 : 0;
-		if (da) return -1;
-		if (db) return 1;
-		return 0;
+		const sa = isSnoozed(a.issue.snoozedUntilAt) ? 1 : 0;
+		const sb = isSnoozed(b.issue.snoozedUntilAt) ? 1 : 0;
+		if (sa !== sb) return sa - sb;
+		return slaRank(a) - slaRank(b);
 	});
 
 	const groups = buildProjectGroups(backlogIssues);
 	const flatIssues = flatten(groups);
 
-	const triageGroups = buildProjectGroups(triageIssues);
+	// Triage is scoped to issues assigned to the viewer, so project grouping and
+	// the redundant "Triage" status header add noise. Render one flat group under
+	// a single "Assigned to me" header (its column label is the SLA badge). The
+	// empty status-group name makes IssueList skip the per-status sub-header.
+	const triageGroups: ProjectGroup[] = triageIssues.length
+		? [
+				{
+					name: "Assigned to me",
+					id: null,
+					statusGroups: [{ name: "", type: "triage", issues: triageIssues }],
+				},
+			]
+		: [];
 	const flatTriage = flatten(triageGroups);
 
 	const treeGroups = buildProjectGroups(treeIssues);

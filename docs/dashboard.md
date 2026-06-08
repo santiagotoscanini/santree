@@ -35,7 +35,7 @@ When the Triage tab is present it leads, so the number keys are `1` Triage, `2` 
 The far-right `WT CI` columns give an at-a-glance worktree-exists / checks-pass status without expanding rows. The right column changes per tab:
 
 - **Trees** — `WT CI` (worktree exists / checks status).
-- **Triage** — a `DUE` due-date badge: red when overdue or due today, yellow when due within two days, gray otherwise.
+- **Triage** — an `SLA` countdown badge showing time until the triage SLA breaches (e.g. `2d 23h`, `13h`, `45m`, or `breached`): red when breached or under a day out, yellow when under two days, gray otherwise. Snoozed issues are greyed and sorted to the bottom.
 - **Issues** — a `RDY` readiness glyph driven by the issue's blocking dependencies: **`✓` green = ready to start** (no open blockers), **`⊘` yellow = blocked** by an unfinished dependency. Lets you spot which backlog tasks are startable right now without opening each one. The detail pane shows the full **Dependencies** section — what blocks this issue (with each blocker's done/open state) and what it blocks. Dependency data comes from Linear's "blocks" issue relations; other trackers show a neutral dot.
 
 **Right pane** — context-aware detail. Issue description, worktree git status (staged / unstaged / untracked, with diff stats vs merge-base), PR body, CI checks ordered fail → pending → pass, reviews, conversation comments, the live Claude todo list for the active session, and the action footer.
@@ -57,7 +57,7 @@ The divider is draggable. Mouse, scroll wheel, and keyboard all work everywhere.
 
 ### Triage actions
 
-The Triage tab is where you assess incoming issues before committing to them. The right pane shows the due date, description, and the full comment thread, and — when your team has a Linear triage on-call rotation — a one-line **on-call summary** at the top (who's on call now, and when you're next up). These keys act on the selected issue:
+The Triage tab lists the triage-state issues assigned to you, ordered by SLA urgency (snoozed ones greyed and parked at the bottom), so you can assess them before committing to the work. The right pane shows the SLA countdown, description, and the full comment thread, and — when your team has a Linear triage on-call rotation — a one-line **on-call summary** at the top (who's on call now, and when you're next up). These keys act on the selected issue:
 
 | Key | Action |
 |---|---|

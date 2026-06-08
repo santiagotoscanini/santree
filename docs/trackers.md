@@ -71,12 +71,12 @@ If you have multiple workspaces authenticated, running `santree linear auth` in 
 - Title, description, comments
 - State (name + type), priority, labels
 - Project name + ID
-- Due date — surfaced as the urgency-coded `DUE` badge on the [Triage tab](dashboard.html)
+- Triage SLA + snooze — the SLA breach time is surfaced as the urgency-coded `SLA` countdown badge on the [Triage tab](dashboard.html), and snoozed issues are greyed and sunk to the bottom there
 - Attached images — downloaded to `/tmp/santree-images-<ticketId>/` and the URLs in the description are rewritten to local paths so Claude can read them. (Cleanup is handled by macOS clearing `/tmp` on reboot — no explicit cleanup runs.)
 
 ### Triage inbox
 
-Linear is the one tracker today with a native triage concept, so the dashboard grows a **Triage** tab when Linear is the active tracker. It lists issues in a `triage`-state inbox that don't have a worktree yet, with due dates, the full comment thread, and an `a` key to ask Claude a read-only clarifying question about the issue before you commit to it. Press `s` to see your team's **triage on-call rotation**, pulled from Linear's "Triage responsibility" schedule (current shift and your own shifts highlighted). See the [Dashboard → Triage actions](dashboard.html#triage-actions) reference for the full keymap.
+Linear is the one tracker today with a native triage concept, so the dashboard grows a **Triage** tab when Linear is the active tracker. It lists the triage-state issues assigned to you that don't have a worktree yet, ordered by SLA urgency, with the SLA countdown, the full comment thread, and an `a` key to ask Claude a read-only clarifying question about the issue before you commit to it. Snoozed issues are greyed and parked at the bottom so the active work stands out. Press `s` to see your team's **triage on-call rotation**, pulled from Linear's "Triage responsibility" schedule (current shift and your own shifts highlighted). See the [Dashboard → Triage actions](dashboard.html#triage-actions) reference for the full keymap.
 
 ### Branch naming
 

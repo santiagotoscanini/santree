@@ -401,7 +401,7 @@ const LEGEND: LegendSection[] = [
 			{
 				glyph: "Triage",
 				color: "cyan",
-				meaning: "Incoming inbox — due dates + comments (Linear only)",
+				meaning: "Incoming inbox — SLA countdown + comments (Linear only)",
 			},
 			{ glyph: "Issues", color: "cyan", meaning: "Backlog / planning" },
 			{ glyph: "Trees", color: "cyan", meaning: "Worktrees in progress" },
@@ -430,8 +430,9 @@ const LEGEND: LegendSection[] = [
 			{ glyph: "✗", color: "red", meaning: "CI column: a check is failing" },
 			{ glyph: "●", color: "yellow", meaning: "CI column: checks pending / running" },
 			{ glyph: "·", color: "gray", meaning: "CI column: no PR or no checks" },
-			{ glyph: "◷", color: "red", meaning: "DUE column (Triage): overdue / due today" },
-			{ glyph: "◷", color: "yellow", meaning: "DUE column (Triage): due within 2 days" },
+			{ glyph: "◷", color: "red", meaning: "SLA column (Triage): breached / under a day" },
+			{ glyph: "◷", color: "yellow", meaning: "SLA column (Triage): under two days" },
+			{ glyph: "●", color: "gray", meaning: "Triage row greyed: snoozed (parked, sunk to bottom)" },
 			{ glyph: "✓", color: "green", meaning: "RDY column (Issues): ready — no open blockers" },
 			{
 				glyph: "⊘",

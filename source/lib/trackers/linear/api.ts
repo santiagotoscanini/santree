@@ -55,7 +55,8 @@ query GetIssue($id: String!) {
     title
     description
     url
-    dueDate
+    slaBreachesAt
+    snoozedUntilAt
     state { name type }
     priority
     labels { nodes { name } }
@@ -92,7 +93,8 @@ query AssignedIssues {
         title
         description
         url
-        dueDate
+        slaBreachesAt
+        snoozedUntilAt
         priority
         state { name type }
         labels { nodes { name } }
@@ -137,7 +139,8 @@ interface LinearIssueNode {
 	title: string;
 	description?: string | null;
 	url: string;
-	dueDate?: string | null;
+	slaBreachesAt?: string | null;
+	snoozedUntilAt?: string | null;
 	priority: number;
 	state?: LinearStateNode;
 	labels?: { nodes?: LinearLabelNode[] };
@@ -159,7 +162,8 @@ function mapAssigned(issue: LinearIssueNode): AssignedIssue {
 		title: issue.title,
 		description: issue.description ?? null,
 		url: issue.url,
-		dueDate: issue.dueDate ?? null,
+		slaBreachesAt: issue.slaBreachesAt ?? null,
+		snoozedUntilAt: issue.snoozedUntilAt ?? null,
 		priority: issue.priority,
 		priorityLabel: PRIORITY_MAP[issue.priority] ?? "No priority",
 		state: {

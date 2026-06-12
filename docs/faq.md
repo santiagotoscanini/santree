@@ -17,11 +17,18 @@ Switching branches with `git checkout` overwrites your working tree. If you have
 
 The trade-off is disk space (one checkout per active branch) and a bit of structure (`.santree/worktrees/<TICKET-ID>/`). For most workflows it's a net win.
 
-## Why do I need the shell integration?
+## How do I enter a new worktree from the CLI?
 
-Commands like `worktree create` and `worktree switch` need to change the directory of the **parent shell**. A child process can't do that on its own — when santree exits, the shell's `cwd` is unchanged. The wrapper reads marker lines from santree's stdout (`SANTREE_CD:<path>`, `SANTREE_WORK:<mode>`) and `cd`s on your behalf.
+A child process can't change its parent shell's directory, so when you create or switch worktrees from the **CLI**, santree prints the `cd` command for you to run:
 
-Without the shell integration, you can still use santree, but you'll have to `cd` manually after each command.
+```text
+→ Run this to enter the worktree:
+  cd '/path/to/repo/.santree/worktrees/TEAM-123'
+```
+
+Copy-paste it, or wrap it in your own shell alias. santree itself is just a binary — there's nothing to source into your shell config, and `which santree` points straight at it.
+
+If you run inside **tmux or cmux**, the [dashboard](dashboard.html) avoids the cd dance entirely: switching to a worktree opens a new window already in the right directory. That's the recommended workflow.
 
 ## My dashboard is empty
 
@@ -32,9 +39,9 @@ Some possibilities:
 - **GitHub Issues — no assignees**: `gh search issues --assignee=@me` returns nothing if your team uses Projects without assignees. Self-assign the issues you're working on.
 - **Cross-repo issues**: only current-repo issues are surfaced today.
 
-## `st --version` shows a different version than my repo
+## `santree --version` shows a different version than my repo
 
-You probably have both a globally-installed santree and an `npm link`ed dev copy. `which st` will tell you which binary is winning. Re-link with `npm link` from the repo, or uninstall the global version.
+You probably have both a globally-installed santree and an `npm link`ed dev copy. `which santree` will tell you which binary is winning. Re-link with `npm link` from the repo, or uninstall the global version.
 
 ## Diff overlay shows no syntax highlighting
 

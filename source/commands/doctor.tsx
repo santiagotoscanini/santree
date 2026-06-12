@@ -15,6 +15,12 @@ import type { IssueTracker } from "../lib/trackers/types.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
 import { resolveClaudeBinary } from "../lib/ai.js";
 import {
+	isStatuslineConfigured,
+	getStatuslineCommand,
+	isRemoteControlEnabled,
+	missingSessionSignalHooks,
+} from "../lib/claude-config.js";
+import {
 	CURRENT_VERSION,
 	CLAUDE_CODE_PACKAGE,
 	SANTREE_PACKAGE,
@@ -308,22 +314,6 @@ async function checkTrackerAuth(): Promise<TrackerCheckStatus> {
 }
 
 /**
- * Checks if the shell integration is set up by looking for the
- * SANTREE_SHELL_INTEGRATION environment variable exported by the shell scripts.
- */
-function checkShellIntegration(): {
-	configured: boolean;
-	shell: string | null;
-} {
-	const shell = process.env.SHELL || "";
-	const shellName = shell.includes("zsh") ? "zsh" : shell.includes("bash") ? "bash" : null;
-
-	const configured = process.env.SANTREE_SHELL_INTEGRATION === "1";
-
-	return { configured, shell: shellName };
-}
-
-/**
  * Checks if Claude Code Remote Control is enabled for all sessions.
  * Remote Control lets you continue local sessions from any device.
  *
@@ -332,25 +322,12 @@ function checkShellIntegration(): {
  * See: https://code.claude.com/docs/en/settings#settings-files
  */
 function checkRemoteControl(): RemoteControlStatus {
-	const home = process.env.HOME || "";
-	const configPath = path.join(home, ".claude.json");
-
-	try {
-		if (fs.existsSync(configPath)) {
-			const content = fs.readFileSync(configPath, "utf-8");
-			const config = JSON.parse(content);
-
-			if (config.remoteControlAtStartup === true) {
-				return { enabled: true };
-			}
-		}
-	} catch {
-		// JSON parse error or file read error
+	if (isRemoteControlEnabled()) {
+		return { enabled: true };
 	}
-
 	return {
 		enabled: false,
-		hint: 'Run /config in Claude Code and enable "Enable Remote Control for all sessions"',
+		hint: 'Run `santree setup` (or /config in Claude Code → "Enable Remote Control for all sessions")',
 	};
 }
 
@@ -359,33 +336,13 @@ function checkRemoteControl(): RemoteControlStatus {
  * If ~/.claude/settings.json has statusLine pointing to santree
  */
 async function checkStatusline(): Promise<StatuslineStatus> {
-	const home = process.env.HOME || "";
-	const claudeSettingsPath = path.join(home, ".claude", "settings.json");
-
-	let claudeSettingsConfigured = false;
-	let currentCommand: string | undefined;
-
-	try {
-		if (fs.existsSync(claudeSettingsPath)) {
-			const content = fs.readFileSync(claudeSettingsPath, "utf-8");
-			const settings = JSON.parse(content);
-
-			if (settings.statusLine?.command) {
-				currentCommand = String(settings.statusLine.command);
-				// Check if it points to santree statusline
-				claudeSettingsConfigured =
-					currentCommand.includes("santree statusline") ||
-					currentCommand.includes("santree helpers statusline");
-			}
-		}
-	} catch {
-		// JSON parse error or file read error
-	}
+	const claudeSettingsConfigured = isStatuslineConfigured();
+	const currentCommand = getStatuslineCommand();
 
 	let hint: string | undefined;
 	if (!claudeSettingsConfigured) {
 		hint =
-			'Add to ~/.claude/settings.json: "statusLine": { "type": "command", "command": "santree helpers statusline" }';
+			'Run `santree setup`, or add to ~/.claude/settings.json: "statusLine": { "type": "command", "command": "santree helpers statusline" }';
 	}
 
 	return {
@@ -401,39 +358,7 @@ async function checkStatusline(): Promise<StatuslineStatus> {
  * that run "santree helpers session-signal".
  */
 function checkSessionSignalHooks(): SessionSignalStatus {
-	const home = process.env.HOME || "";
-	const claudeSettingsPath = path.join(home, ".claude", "settings.json");
-
-	const requiredEvents = ["Notification", "Stop", "UserPromptSubmit", "SessionEnd"];
-	const missingHooks: string[] = [];
-
-	try {
-		if (fs.existsSync(claudeSettingsPath)) {
-			const content = fs.readFileSync(claudeSettingsPath, "utf-8");
-			const settings = JSON.parse(content);
-			const hooks = settings.hooks || {};
-
-			for (const event of requiredEvents) {
-				const eventHooks = hooks[event];
-				if (!Array.isArray(eventHooks)) {
-					missingHooks.push(event);
-					continue;
-				}
-				// Check if any hook entry has a nested hook command containing session-signal
-				const found = eventHooks.some((entry: any) => {
-					const innerHooks = entry.hooks || [];
-					return innerHooks.some(
-						(h: any) => typeof h.command === "string" && h.command.includes("session-signal"),
-					);
-				});
-				if (!found) missingHooks.push(event);
-			}
-		} else {
-			missingHooks.push(...requiredEvents);
-		}
-	} catch {
-		missingHooks.push(...requiredEvents);
-	}
+	const missingHooks = missingSessionSignalHooks();
 
 	if (missingHooks.length === 0) {
 		return { configured: true, missingHooks: [] };
@@ -442,7 +367,7 @@ function checkSessionSignalHooks(): SessionSignalStatus {
 	return {
 		configured: false,
 		missingHooks,
-		hint: `Missing: ${missingHooks.join(", ")}. Run: santree helpers session-signal install`,
+		hint: `Missing: ${missingHooks.join(", ")}. Run: santree setup (or santree helpers session-signal install)`,
 	};
 }
 
@@ -652,30 +577,6 @@ function TrackerRow({ tracker }: { tracker: TrackerCheckStatus }) {
 	);
 }
 
-function ShellRow({ configured, shell }: { configured: boolean; shell: string | null }) {
-	return (
-		<Box flexDirection="column" marginBottom={1}>
-			<Box>
-				<StatusIcon ok={configured} required={true} />
-				<Text> </Text>
-				<Text bold>Shell Integration</Text>
-				<Text dimColor> - Enables directory switching</Text>
-			</Box>
-			{configured ? (
-				<Box marginLeft={2}>
-					<Text dimColor>Shell: {shell}</Text>
-				</Box>
-			) : (
-				<Box marginLeft={2}>
-					<Text color="yellow">
-						↳ Add to .{shell}rc: eval "$(santree helpers shell-init {shell})"
-					</Text>
-				</Box>
-			)}
-		</Box>
-	);
-}
-
 function StatuslineRow({ status }: { status: StatuslineStatus }) {
 	return (
 		<Box flexDirection="column" marginBottom={1}>
@@ -831,10 +732,6 @@ function SantreeSetupRow({ status }: { status: SantreeSetupStatus }) {
 export default function Doctor() {
 	const [tools, setTools] = useState<ToolStatus[]>([]);
 	const [tracker, setTracker] = useState<TrackerCheckStatus | null>(null);
-	const [shellStatus, setShellStatus] = useState<{
-		configured: boolean;
-		shell: string | null;
-	} | null>(null);
 	const [remoteControl, setRemoteControl] = useState<RemoteControlStatus | null>(null);
 	const [statusline, setStatusline] = useState<StatuslineStatus | null>(null);
 	const [sessionSignal, setSessionSignal] = useState<SessionSignalStatus | null>(null);
@@ -896,7 +793,7 @@ export default function Doctor() {
 				}
 			}
 
-			// Optional: a syntax-highlighting diff pager — used by `st worktree diff`
+			// Optional: a syntax-highlighting diff pager — used by `santree worktree diff`
 			// and the dashboard `v` overlay when SANTREE_DIFF_TOOL is set. Any
 			// diff pager works (delta, diff-so-fancy, …); without one set, the
 			// dashboard renders inline with santree's own colorizer and the CLI
@@ -941,7 +838,6 @@ export default function Doctor() {
 
 			setTools(results);
 			setTracker(trackerResult);
-			setShellStatus(checkShellIntegration());
 			setRemoteControl(checkRemoteControl());
 			setStatusline(statuslineResult);
 			setSessionSignal(checkSessionSignalHooks());
@@ -964,7 +860,7 @@ export default function Doctor() {
 	const requiredMissing = tools.filter((t) => t.required && (!t.installed || t.hint));
 	const optionalMissing = tools.filter((t) => !t.required && !t.installed);
 	const trackerOk = tracker?.authenticated && !tracker?.hint;
-	const allRequired = requiredMissing.length === 0 && trackerOk && shellStatus?.configured;
+	const allRequired = requiredMissing.length === 0 && trackerOk;
 
 	return (
 		<Box flexDirection="column" padding={1}>
@@ -992,7 +888,6 @@ export default function Doctor() {
 			</Box>
 
 			{tracker && <TrackerRow tracker={tracker} />}
-			{shellStatus && <ShellRow configured={shellStatus.configured} shell={shellStatus.shell} />}
 			{santreeSetup && <SantreeSetupRow status={santreeSetup} />}
 
 			<Box marginBottom={1} marginTop={1} flexDirection="column">
@@ -1017,8 +912,7 @@ export default function Doctor() {
 				) : (
 					<Box flexDirection="column">
 						<Text color="yellow">
-							{requiredMissing.length + (trackerOk ? 0 : 1) + (shellStatus?.configured ? 0 : 1)}{" "}
-							required item(s) need attention
+							{requiredMissing.length + (trackerOk ? 0 : 1)} required item(s) need attention
 						</Text>
 						{optionalMissing.length > 0 && (
 							<Text dimColor>{optionalMissing.length} optional item(s) not installed</Text>

@@ -28,6 +28,8 @@ source/
 │   ├── github.ts        # GitHub CLI wrapper (PR info, auth, push, checks, reviews)
 │   ├── exec.ts          # run() — execSync wrapper returning string | null
 │   ├── metadata.ts      # .santree/metadata.json r/w (extracted to break the trackers ↔ git import cycle)
+│   ├── claude-config.ts # Shared read/detect/configure for ~/.claude/settings.json (statusline) + ~/.claude.json (remote control); used by both doctor and setup so they can't disagree
+│   ├── setup/           # `santree setup` engine: shell-config.ts (managed-block rc writer), claude/tools/gitignore detect+apply, steps.ts catalog, apply.ts (TTY hand-off)
 │   ├── prompts.ts       # Nunjucks template renderer for AI prompts
 │   ├── trackers/        # Issue tracker abstraction (Linear, GitHub Issues)
 │   │   ├── types.ts     # IssueTracker interface + generic Issue/AssignedIssue/Comment/AuthStatus
@@ -44,15 +46,15 @@ source/
 │       └── DiffOverlay.tsx # Inline diff overlay — file tree + diff content (full-area)
 └── commands/            # One React component per CLI command
     ├── doctor.tsx        # Top-level: system requirements check (also reports git-delta as optional)
+    ├── setup.tsx         # Top-level: guided multi-select wizard that fixes what doctor reports (`--dry-run`/`--yes`)
     ├── dashboard.tsx     # Top-level: interactive dashboard (alt screen, mouse, inline flows)
     ├── worktree/         # santree worktree {create,list,switch,remove,clean,sync,work,open,setup,commit,diff}
     ├── pr/               # santree pr {create,open,fix,review}
     ├── linear/           # santree linear {auth,switch} — Linear-specific OAuth flow
     ├── github/           # santree github {auth} — `gh auth login` wrapper
     ├── issue/            # santree issue {switch,open} — tracker-agnostic actions
-    └── helpers/          # santree helpers {shell-init,statusline}
+    └── helpers/          # santree helpers {statusline,session-signal,english-tutor,squirrel}
 prompts/                 # Nunjucks templates: work, review, fix-pr, fill-pr, diff, pr, ticket, ask
-shell/                   # Shell integration templates: init.zsh.njk, init.bash.njk
 ```
 
 ### Command anatomy
@@ -84,14 +86,21 @@ Ink renders React, so the spinner freezes if the main thread blocks. Commands ha
 3. **Truly async operations** — `createWorktree`, `removeWorktree`, PR info fetches, and push operations use `execAsync`/`spawn` so the spinner stays alive during slow network operations.
 4. **Parallel fetching** — `Promise.all()` for independent async calls (e.g., PR info + dirty check + commits ahead in `list.tsx`).
 
-### Shell integration
+### Entering worktrees (no shell integration)
 
-Commands can't `cd` the parent shell. Instead they write markers to stdout:
+santree is a plain binary — there is **no `santree` shell function, alias, or hook**, so `which santree` resolves to the binary. A child process can't `cd` its parent shell, so when a CLI command wants you to land in a worktree it **prints the command** for you to run. `lib/cd-hint.ts` is the single source: `formatCdCommand({ path, work? })` returns `cd '<path>' [&& santree worktree work …]` (path + context-file single-quoted, flags literal); `worktree/create` and `worktree/switch` render it in their Ink output, and the dashboard's non-multiplexer fallback prints it via `printCdHint()` after leaving the alt screen.
 
-- `SANTREE_CD:<path>` — shell wrapper reads this and `cd`s
-- `SANTREE_WORK:<mode>` — shell wrapper launches `st worktree work` after `cd`
+The dashboard is the primary surface, and with tmux/cmux active its switch/work/fix/review flows open a **new multiplexer window** already in the right directory (via `getMultiplexer().createWindow`) — no parent-shell cd needed, so the print path only matters for direct CLI use and the no-multiplexer dashboard fallback. Window commands invoke `santree …` (not an alias).
 
-The shell wrapper is generated from `shell/init.{zsh,bash}.njk` via `santree helpers shell-init`.
+### Setup wizard (`commands/setup.tsx` + `lib/setup/`)
+
+`santree setup` is the **fix-it companion** to `doctor`: doctor *reports* gaps, setup *applies* them. The wizard runs a phase machine (`detecting → select → configure → applying → done`) over a catalog of `SetupStep`s (`lib/setup/steps.ts`). Each step has `detect: "ok" | "actionable" | "unavailable"` (only `actionable` steps reach the checklist), a `kind` (`"file"` = silent JS write, `"spawn"` = TTY hand-off for installs/logins), an optional pick-one `options` sub-prompt, and an `apply(choice)`. All apply paths honor `ctx.dryRun` (return a "would…" message, write nothing).
+
+- **`lib/setup/shell-config.ts`** — the rc writer. `resolveShellConfig()` is ZDOTDIR/XDG-aware (zsh → `$ZDOTDIR/.zshrc`, bash → `~/.bashrc`). Everything santree writes goes in ONE managed block (`# >>> santree >>>` … `# <<< santree <<<`); each line is tagged `# santree:<key>` so `upsertManagedLine()` replaces in place (idempotent re-runs, never duplicates). `isEnvVarSet()` scans the user's config **minus** santree's own block, so we never re-offer (or clobber) an export the user hand-maintains in `.zshenv`.
+- **`lib/setup/tools.ts`** — `detectDiffPagers()`/`detectEditors()` (probe PATH) + `getInstaller()` (macOS+brew today; `PlatformInstaller` seam for apt/dnf later).
+- **`lib/setup/gitignore.ts`** — writes the SPECIFIC entries (`.santree/worktrees/`, `metadata.json`, `session-states/`), never a blanket `.santree/` (keeps `.santree/issues/` tracked); target is `.gitignore` (shared) or `.git/info/exclude` (local), asked per-repo.
+- **`lib/setup/apply.ts`** — `spawnTTY()` reuses the `external-editor.ts` raw-mode hand-off (drop raw mode → `spawnSync` stdio inherit → restore) for `brew install` / `gh auth login` / `santree issue setup` (re-invoked via `santreeSelfArgv`).
+- **`lib/claude-config.ts`** — single source of truth for the statusline / remote-control / session-signal-hook detect+configure; `doctor.tsx` and setup both go through it. English-tutor is deliberately NOT a setup step (it stays an opt-in extra, documented in `integrations.md`).
 
 ### AI shared logic (`lib/ai.ts`)
 
@@ -172,6 +181,8 @@ The Triage **SLA-countdown** badge is rendered by `formatSla()` in `lib/dashboar
 
 **Worktree deletion** is concurrent and non-blocking: confirming `d` fires `removeWorktreeWithProgress()` without awaiting, so you can confirm several removals back-to-back. Each is tracked in `state.deletingTickets` (a `ticketId → DeleteStatus { logs, phase, error }` map) — `removeWorktree(branch, root, force, onProgress)` streams staged messages ("Removing worktree…" / "Cleaning up…" / "Deleting branch…" / "Done") into the entry, which `DetailPanel` renders (`deleteStatus` prop) when that row is selected, and `IssueList` marks with a `⌫` glyph in the WT column (`deletingIds` prop). `SET_DATA` prunes entries whose worktree is gone (successful removal), so in-progress and failed (`error`) deletions stay visible until resolved.
 
+**Optimistic PR creation** mirrors that pattern. After `gh pr create` succeeds, `PR_CREATE_DONE` immediately attaches a placeholder `PRInfo` (number parsed from the returned URL, `state: "OPEN"`) to the just-created ticket's `flatTrees` row and records it in `state.pendingPrs` (a `ticketId → PRInfo` map) — so the `[p] Open PR` action and PR section appear instantly instead of after the next 5-min refresh. Only that one ticket is affected; every other PR keeps its already-loaded data. `DetailPanel` shows a "⟳ loading checks & reviews…" line for it (`prSyncing` prop). `SET_DATA` reconciles: once a refresh surfaces the real PR the pending entry is dropped; if the refresh ran before GitHub indexed the PR (real `pr` still null) the placeholder is preserved and stays pending.
+
 **Layout**: Two-pane split — left pane (`IssueList`) shows issues grouped by project. Each issue with a worktree expands into one or more nested **detail sub-rows** below its title (`· diff`, `· pr`, `· session`); issues without worktrees stay as a single row. The shared row builder `buildIssueListRows()` is exported from `IssueList.tsx` and used by both the renderer and the dashboard's mouse-click row→issue mapper, so click coordinates always resolve to the correct parent issue (sub-rows resolve to the parent's `flatIndex`). Right pane (`DetailPanel`) shows issue detail with description, git status, PR info, checks, reviews, and context-aware actions.
 
 **State management**: `useReducer` with `DashboardState`/`DashboardAction` (defined in `lib/dashboard/types.ts`). Right-pane overlays (`mode-select`, `confirm-delete`, `commit`, `pr-create`) replace just the right pane; full-area overlays (`context-input`, `triage-ask`, `diff`, `base-select`, `confirm-setup`, `tracker-select`, `issue-form`, `confirm-delete-issue`) replace the entire content area below the tab bar. `issue-form` reuses `MultilineTextArea` in two steps (title → description, Ctrl+D advance/save, Ctrl+G cancel) like `context-input`, so the outer `useInput` is disabled and SGR mouse tracking is suppressed while it (and its title/description phases) is mounted.
@@ -184,8 +195,8 @@ The Triage **SLA-countdown** badge is rendered by `formatSla()` in `lib/dashboar
 
 **Multiplexer-launched flows** (open new windows/workspaces in the active multiplexer — see [Multiplexer abstraction](#multiplexer-abstraction-libmultiplexer)):
 
-- **Work** (`w` key): opens mode-select overlay → launches `st worktree work` in a new window
-- **Fix PR** (`f` key) and **Review PR** (`r` key): launch `st pr fix`/`st pr review` in a new window
+- **Work** (`w` key): opens mode-select overlay → launches `santree worktree work` in a new window
+- **Fix PR** (`f` key) and **Review PR** (`r` key): launch `santree pr fix`/`santree pr review` in a new window
 
 **Data fetching**: `loadDashboardData()` calls `getIssueTracker(repoRoot).listAssigned(repoRoot)` and enriches each issue with worktree info (git status, commits ahead, session ID, **diff shortstat vs merge-base**), PR info, checks, and reviews — all in parallel via `Promise.all`. Auto-refreshes every 5 minutes (each refresh fans out into several GraphQL-backed `gh pr view`/`gh pr checks` calls per PR; the interval is spaced to stay within GitHub's hourly GraphQL rate limit). `getDiffShortstatAsync()` in `lib/git.ts` runs `git diff --shortstat $(git merge-base <base> HEAD)`.
 
@@ -207,7 +218,7 @@ The Triage **SLA-countdown** badge is rendered by `formatSla()` in `lib/dashboar
 | `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In auto mode, `detectTerminalTheme()` in `lib/dashboard/theme.ts` queries the terminal background via OSC 11 (`\x1b]11;?\x07`), parses the RGB response, and picks light/dark by Rec. 709 luminance. Re-runs alongside `loadDashboardData()` on every refresh so theme switches propagate within ~5 minutes (or sooner on a manual `R`). Falls back to `dark` on non-TTY or 150ms timeout. Affects `selectionBg` (only theme-sensitive style — terminal-native foreground colors render correctly on either background). |
 | `SANTREE_EDITOR` | Editor used by `e` (open in editor) actions in the dashboard. Defaults to `code`. |
 
-Santree launches Claude with `--permission-mode auto` for implement runs and `--permission-mode plan` for plan-mode runs (`st worktree work --plan`). Auto-acceptance of non-mutating tools while planning is governed by Claude Code's `useAutoModeDuringPlan` setting in `~/.claude/settings.json`, not by santree. There is no opt-in env var — worktree-scoped automation is the default. Set `--permission-mode default` upstream if you ever need stricter prompting.
+Santree launches Claude with `--permission-mode auto` for implement runs and `--permission-mode plan` for plan-mode runs (`santree worktree work --plan`). Auto-acceptance of non-mutating tools while planning is governed by Claude Code's `useAutoModeDuringPlan` setting in `~/.claude/settings.json`, not by santree. There is no opt-in env var — worktree-scoped automation is the default. Set `--permission-mode default` upstream if you ever need stricter prompting.
 
 ## External Dependencies
 

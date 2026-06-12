@@ -20,6 +20,9 @@ This page is a curated highlight reel.
 
 ### 0.7.x (May–June 2026)
 
+- Optimistic PR creation — after you create a PR from the dashboard, its "Open PR" action appears immediately (with a "loading checks & reviews…" hint) instead of waiting for the next refresh. Only the just-created PR shows the loading state; existing PRs keep their info.
+- Shell integration removed — santree is now a plain binary with no `santree` shell function, alias, or hook (so `which santree` just works). Worktree create/switch from the CLI print a `cd` command to copy; the dashboard with tmux/cmux opens a new window in the worktree as before. If you had `eval "$(santree helpers shell-init …)"` in your shell config, you can delete that line.
+- `santree setup` — a guided wizard that fixes what `santree doctor` reports: a checklist of only the steps that still need doing (diff tool + `brew install git-delta`, editor, Claude Code statusline / hooks / remote control, GitHub CLI auth, and per-repo `.santree` scaffold / `.gitignore` / issue-tracker setup). Space to toggle, Enter to apply; `--dry-run` to preview, `--yes` to apply recommended defaults.
 - Triage tab — when Linear is the active tracker, the dashboard leads with a **Triage** inbox: the triage-state issues assigned to you, ordered by an urgency-coded `SLA` countdown badge (snoozed issues greyed and parked at the bottom), the full comment thread in the detail pane, `a` to ask Claude a read-only clarifying question about the issue, `w` to send it to a tree, and `s` to view your team's triage on-call rotation.
 - Tabs split into four — **Triage** (Linear only) · **Issues** (backlog) · **Trees** (worktrees in progress) · **Reviews** (PRs awaiting your review).
 - Non-blocking worktree deletion — confirm `d` and removal runs in the background with staged progress; fire several in a row without waiting.

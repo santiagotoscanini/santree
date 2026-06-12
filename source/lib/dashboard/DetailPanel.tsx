@@ -12,6 +12,9 @@ interface Props {
 	creationLogs: string;
 	/** Deletion progress for the selected worktree, when one is being removed. */
 	deleteStatus?: DeleteStatus;
+	/** True while a just-created PR is shown optimistically, before a refresh
+	 * confirms it (renders a "syncing…" hint next to the PR). */
+	prSyncing?: boolean;
 	/** Triage mode: hide worktree/PR/checks sections (they never apply to an
 	 * inbox issue) and show the discussion instead. */
 	triage?: boolean;
@@ -219,6 +222,7 @@ export default function DetailPanel({
 	creatingForTicket,
 	creationLogs,
 	deleteStatus,
+	prSyncing = false,
 	triage = false,
 	comments,
 	onCall,
@@ -657,10 +661,20 @@ export default function DetailPanel({
 				{ text: "  " },
 				{ text: pr.state, color: prColor },
 				{ text: draft, dim: true },
+				...(prSyncing ? [{ text: "  · syncing…", color: "yellow" as const }] : []),
 			],
 		});
 		if (pr.url) {
 			lines.push({ text: `  ${pr.url}`, dim: true });
+		}
+		if (prSyncing) {
+			// Just created from the dashboard — number/url are known, but checks
+			// and reviews aren't fetched yet. Show a clear loading line for this
+			// one PR (other PRs keep their already-loaded data).
+			lines.push({
+				text: "",
+				segments: [{ text: "  ⟳ loading checks & reviews…", color: "yellow" }],
+			});
 		}
 	} else if (!isMain) {
 		lines.push(sectionHeader("◉", "Pull Request"));

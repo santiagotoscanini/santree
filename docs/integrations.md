@@ -1,6 +1,6 @@
 ---
 title: Integrations
-nav_order: 10
+nav_order: 11
 ---
 
 # Integrations
@@ -36,6 +36,9 @@ Format: `repo | branch | S: staged | U: unstaged | A: untracked | Model | Contex
 
 The context-usage segment renders as a colored progress bar — green / yellow ≥60% / red ≥80%.
 
+<!-- TODO screenshot: the statusline rendered at the bottom of a Claude Code session — ideally with the context bar in the yellow/red zone so the colored progress bar is visible. A tight crop of just the statusline row works best. -->
+
+
 ### Remote control
 
 Enable [Remote Control](https://code.claude.com/docs/en/remote-control) to continue local Claude Code sessions from your phone, tablet, or any browser. This lets you kick off work with `santree worktree work` and monitor or steer the session remotely.
@@ -67,7 +70,9 @@ Verify with `santree doctor` — look for the "Session Signal Hooks" row under C
 
 ### English Tutor
 
-When enabled, Claude Code spots grammar mistakes in your prompts and replies with a one-line correction (`original -> correction (reason)`) before doing the actual work. Mistake-free prompts are ignored. Useful if English isn't your first language.
+A little extra — deliberately left out of `santree setup` so it stays opt-in. Not everyone is a native English speaker, and this one's a quiet bonus for those who want it.
+
+When enabled, Claude Code spots grammar mistakes in your prompts and replies with a one-line correction (`original -> correction (reason)`) before doing the actual work. Mistake-free prompts are ignored.
 
 Install:
 

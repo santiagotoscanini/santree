@@ -1,6 +1,6 @@
 ---
 title: Commands
-nav_order: 7
+nav_order: 8
 ---
 
 # Commands
@@ -18,6 +18,7 @@ Reference for every santree subcommand. Most flow through the [Dashboard](dashbo
 | Command | Description |
 |---|---|
 | `santree dashboard` | Interactive dashboard of all your assigned issues |
+| `santree setup` | Guided wizard that configures editor, diff tool, Claude Code, and this repo (`--dry-run`, `--yes`) |
 | `santree doctor` | Check system requirements and integrations |
 | `santree update` | Update santree to the latest version |
 
@@ -149,7 +150,6 @@ Auto-pushes, detects existing PRs, and uses the first commit message as the titl
 
 | Command | Description |
 |---|---|
-| `santree helpers shell-init` | Output shell integration script |
 | `santree helpers statusline` | Custom statusline for Claude Code |
 | `santree helpers session-signal install` | Auto-install session-signal hooks in Claude Code |
 | `santree helpers session-signal install --dry` | Print the hooks JSON without writing |

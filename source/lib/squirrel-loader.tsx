@@ -369,13 +369,15 @@ function colorForCell(y: number, lit: number): string {
 
 interface Props {
 	text?: string;
+	/** Optional version line (e.g. santree's running version), shown under `text`. */
+	version?: string;
 }
 
 /** Animated 3D squirrel for loading states. SDF ray-marched at module
  * load with surface-normal lighting, soft shadows, AO, and a rainbow
  * Y-gradient. Body spin + tail wag + breathing/sniff/ear-flick layers
  * combine over independent phases. */
-export default function SquirrelLoader({ text }: Props) {
+export default function SquirrelLoader({ text, version }: Props) {
 	const [frame, setFrame] = useState(0);
 	useEffect(() => {
 		const id = setInterval(() => setFrame((f) => (f + 1) % FRAMES.length), FRAME_MS);
@@ -419,6 +421,11 @@ export default function SquirrelLoader({ text }: Props) {
 			{text && (
 				<Box marginTop={1}>
 					<Text dimColor>{text}</Text>
+				</Box>
+			)}
+			{version && (
+				<Box>
+					<Text dimColor>v{version}</Text>
 				</Box>
 			)}
 		</Box>

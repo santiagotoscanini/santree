@@ -27,6 +27,8 @@ description: "Santree — a CLI for managing Git worktrees with integrated AI as
   <a href="quickstart.html" class="btn fs-5 mb-4 mb-md-0">5-minute tour</a>
 </p>
 
+<!-- TODO screenshot: HERO — the dashboard in its best light. Trees tab, a few real tickets, one expanded into · diff / · pr / · session sub-rows; right pane showing description + git status + CI + actions footer. Wide (~140 cols), with a diff pager (delta) configured so colors pop. This is the first thing visitors see — make it the money shot. -->
+
 ---
 
 ## What's inside
@@ -45,8 +47,8 @@ description: "Santree — a CLI for managing Git worktrees with integrated AI as
 # Install
 npm install -g santree
 
-# Wire up shell integration (one-time)
-eval "$(santree helpers shell-init zsh)"   # or bash
+# Configure (shell-free — sets editor, diff tool, Claude Code, this repo)
+santree setup
 
 # Verify
 santree doctor

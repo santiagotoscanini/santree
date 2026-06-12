@@ -224,6 +224,12 @@ export interface DashboardState {
 	creationError: string | null;
 	/** In-flight (and just-finished) worktree deletions, keyed by ticket id. */
 	deletingTickets: Record<string, DeleteStatus>;
+	/**
+	 * Optimistic PRs just created from the dashboard, keyed by ticket id. They
+	 * make the "Open PR" action appear immediately (before the next refresh
+	 * surfaces the real PR), and are reconciled away by SET_DATA.
+	 */
+	pendingPrs: Record<string, PRInfo>;
 	commitPhase: CommitPhase;
 	commitMessage: string;
 	commitError: string | null;
@@ -458,6 +464,7 @@ export const initialState: DashboardState = {
 	creationLogs: "",
 	creationError: null,
 	deletingTickets: {},
+	pendingPrs: {},
 	commitPhase: "idle",
 	commitMessage: "",
 	commitError: null,
@@ -527,12 +534,25 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 			const deletingTickets = Object.fromEntries(
 				Object.entries(state.deletingTickets).filter(([id]) => presentTreeIds.has(id)),
 			);
+			// Reconcile optimistic PRs: keep the placeholder until the refresh
+			// actually surfaces the PR (GitHub may not have indexed it yet), then
+			// drop it once real PR data — or the worktree itself — is gone.
+			let reconciledTrees = action.flatTrees;
+			const pendingPrs: Record<string, PRInfo> = {};
+			for (const [id, optimistic] of Object.entries(state.pendingPrs)) {
+				const idx = reconciledTrees.findIndex((d) => d.issue.identifier === id);
+				if (idx < 0) continue; // worktree gone → drop
+				if (reconciledTrees[idx]!.pr) continue; // real PR arrived → reconciled
+				reconciledTrees = reconciledTrees.map((d, i) => (i === idx ? { ...d, pr: optimistic } : d));
+				pendingPrs[id] = optimistic; // still pending → keep showing it
+			}
 			return {
 				...state,
 				groups: action.groups,
 				flatIssues: action.flatIssues,
 				treeGroups: action.treeGroups,
-				flatTrees: action.flatTrees,
+				flatTrees: reconciledTrees,
+				pendingPrs,
 				triageGroups: action.triageGroups,
 				flatTriage: action.flatTriage,
 				deletingTickets,
@@ -816,14 +836,35 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 			return { ...state, prCreateDraft: !state.prCreateDraft };
 		case "PR_CREATE_EDIT":
 			return { ...state, prCreatePhase: "review" };
-		case "PR_CREATE_DONE":
+		case "PR_CREATE_DONE": {
+			// Optimistically attach the new PR to its tree row so the "Open PR"
+			// action appears immediately, instead of waiting for the next refresh
+			// to surface it via `gh pr view`.
+			const ticketId = state.prCreateTicketId;
+			let flatTrees = state.flatTrees;
+			let pendingPrs = state.pendingPrs;
+			if (ticketId) {
+				const optimistic: PRInfo = {
+					number: action.url.match(/\/pull\/(\d+)/)?.[1] ?? "?",
+					state: "OPEN",
+					isDraft: state.prCreateDraft,
+					url: action.url,
+				};
+				flatTrees = state.flatTrees.map((d) =>
+					d.issue.identifier === ticketId && !d.pr ? { ...d, pr: optimistic } : d,
+				);
+				pendingPrs = { ...state.pendingPrs, [ticketId]: optimistic };
+			}
 			return {
 				...state,
 				prCreatePhase: "done",
 				prCreateUrl: action.url,
 				prCreateBody: null,
 				prCreateTitle: null,
+				flatTrees,
+				pendingPrs,
 			};
+		}
 		case "PR_CREATE_CANCEL":
 			return {
 				...state,

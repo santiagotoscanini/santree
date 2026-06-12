@@ -1,6 +1,6 @@
 ---
 title: Dashboard
-nav_order: 6
+nav_order: 7
 ---
 
 # Dashboard
@@ -59,6 +59,9 @@ The divider is draggable. Mouse, scroll wheel, and keyboard all work everywhere.
 
 The Triage tab lists the triage-state issues assigned to you, ordered by SLA urgency (snoozed ones greyed and parked at the bottom), so you can assess them before committing to the work. The right pane shows the SLA countdown, description, and the full comment thread, and — when your team has a Linear triage on-call rotation — a one-line **on-call summary** at the top (who's on call now, and when you're next up). These keys act on the selected issue:
 
+<!-- TODO screenshot: Triage tab — the list with color-coded SLA badges (a red breached/<24h one and a yellow <48h one for contrast), a greyed snoozed row at the bottom, and the on-call summary line + comment thread in the right pane. -->
+
+
 | Key | Action |
 |---|---|
 | `a` | Ask Claude a clarifying question about the issue + all its comments — inline, read-only Q&A (Claude may inspect the codebase to judge whether it's fixable). The answer appears in place; press `a` again to ask another, `q`/`Esc` to close. |
@@ -94,6 +97,8 @@ If both are present, `skill_name` wins. The window opens in the main repo root, 
 | `o` | Open the issue in the active tracker (Linear / GitHub) |
 
 ### PR actions
+
+<!-- TODO screenshot: an inline flow — the `[C]` commit overlay (stage confirm or the message text area) or the `[c]` PR-create body review, to show these happen in-pane without leaving the dashboard. -->
 
 | Key | Action |
 |---|---|

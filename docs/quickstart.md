@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-nav_order: 3
+nav_order: 4
 ---
 
 # Quickstart
@@ -15,7 +15,9 @@ Five-minute walkthrough — pick an issue, work on it, ship a PR. Assumes you've
 
 ## 1. Authenticate your tracker
 
-Pick one and run the matching auth command from inside any repo where you want santree to surface issues.
+If you ran `santree setup` during [Installation](installation.html), you already did this — skip to step 2.
+
+Otherwise, pick one and run the matching auth command from inside any repo where you want santree to surface issues:
 
 ```bash
 # Linear (OAuth in browser)
@@ -40,6 +42,9 @@ You'll see a two-pane TUI: assigned issues on the left, detail on the right. Mou
 ## 3. Start working on a ticket
 
 Select an issue and press `w`. A mode-select overlay asks plan-vs-implement, then opens a context input where you can add custom instructions to the prompt (`Ctrl+O` to drop into your editor). Press Enter to launch.
+
+<!-- TODO screenshot: the `w` flow — either the plan/implement mode-select overlay or the context-input box with a line or two of custom instructions typed in. -->
+
 
 What happens behind the scenes:
 
@@ -67,6 +72,8 @@ The diff is **branch-only** — it uses `git merge-base` against the configured 
 | `[c]` | Create the PR (fill template via Claude with a draft/ready toggle, or open the new-PR page pre-filled in the browser) |
 | `[r]` | Self-review the PR with Claude |
 | `[f]` | Apply review comments / CI failures with Claude |
+
+<!-- TODO screenshot: the `[c]` PR-create flow — the fill-mode body review step (generated PR body in the editable text area with the draft/ready toggle visible), or the right-pane PR section right after creation showing the new PR. -->
 
 Once the PR is merged, `[d]` removes the worktree, or `santree worktree clean` does it in bulk for any branch whose PR is merged or closed.
 

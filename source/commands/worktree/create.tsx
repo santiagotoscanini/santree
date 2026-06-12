@@ -13,6 +13,7 @@ import {
 	extractTicketId,
 } from "../../lib/git.js";
 import { spawnAsync } from "../../lib/exec.js";
+import { formatCdCommand } from "../../lib/cd-hint.js";
 import { getMultiplexer } from "../../lib/multiplexer/index.js";
 
 export const description = "Create a new worktree from a branch";
@@ -62,6 +63,7 @@ export default function Create({ options, args }: Props) {
 	const [worktreePath, setWorktreePath] = useState("");
 	const [baseBranch, setBaseBranch] = useState<string | null>(null);
 	const [muxWindowName, setMuxWindowName] = useState<string | null>(null);
+	const [cdHint, setCdHint] = useState<string | null>(null);
 
 	async function finalize(path: string, branch: string) {
 		const wantsWindow = options.window || options.tmux;
@@ -70,7 +72,7 @@ export default function Create({ options, args }: Props) {
 			if (!mux.isActive()) {
 				setMessage("Worktree created, but no active multiplexer");
 				setStatus("done");
-				console.log(`SANTREE_CD:${path}`);
+				setCdHint(formatCdCommand({ path }));
 				return;
 			}
 
@@ -82,7 +84,7 @@ export default function Create({ options, args }: Props) {
 
 			let runCommand: string | undefined;
 			if (options.work) {
-				runCommand = options.plan ? "st worktree work --plan" : "st worktree work";
+				runCommand = options.plan ? "santree worktree work --plan" : "santree worktree work";
 			}
 
 			const result = await mux.createWindow({ name: windowName, cwd: path, command: runCommand });
@@ -91,25 +93,25 @@ export default function Create({ options, args }: Props) {
 					`Worktree created, but failed to create window${result.message ? `: ${result.message}` : ""}`,
 				);
 				setStatus("done");
-				console.log(`SANTREE_CD:${path}`);
+				setCdHint(formatCdCommand({ path }));
 				return;
 			}
 
 			setStatus("done");
 			const workInfo = options.work ? (options.plan ? " + Claude (plan)" : " + Claude") : "";
 			setMessage(`Worktree and window created!${workInfo}`);
-			// Don't output SANTREE_CD when a window is created — user is already in the new window
+			// No cd hint when a window is created — the user is already in the new window
 			return;
 		}
 
 		setStatus("done");
 		setMessage("Worktree created successfully!");
-		console.log(`SANTREE_CD:${path}`);
-
-		if (options.work) {
-			const mode = options.plan ? "plan" : "implement";
-			console.log(`SANTREE_WORK:${mode}`);
-		}
+		setCdHint(
+			formatCdCommand({
+				path,
+				work: options.work ? { mode: options.plan ? "plan" : "implement" } : undefined,
+			}),
+		);
 	}
 
 	useEffect(() => {
@@ -284,6 +286,12 @@ export default function Create({ options, args }: Props) {
 						</Text>
 						<Text dimColor> {worktreePath}</Text>
 						{muxWindowName && <Text dimColor> window: {muxWindowName}</Text>}
+						{cdHint && (
+							<Box flexDirection="column" marginTop={1}>
+								<Text dimColor>→ Run this to enter the worktree:</Text>
+								<Text color="cyan"> {cdHint}</Text>
+							</Box>
+						)}
 					</Box>
 				)}
 				{status === "error" && (

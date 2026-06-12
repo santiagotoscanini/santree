@@ -25,6 +25,7 @@ import {
 	discardFile,
 } from "../lib/git.js";
 import { run, spawnAsync } from "../lib/exec.js";
+import { printCdHint } from "../lib/cd-hint.js";
 import {
 	resolveAgentBinary,
 	resolveClaudeBinary,
@@ -1240,7 +1241,9 @@ export default function Dashboard() {
 					: null;
 			const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
 			const workCmd =
-				mode === "plan" ? `st worktree work --plan${contextArg}` : `st worktree work${contextArg}`;
+				mode === "plan"
+					? `santree worktree work --plan${contextArg}`
+					: `santree worktree work${contextArg}`;
 			const cmd = resumeCmd ?? workCmd;
 			const mux = getMultiplexer();
 
@@ -1280,7 +1283,7 @@ export default function Dashboard() {
 					});
 				}
 			}
-			// Delayed refresh to pick up session ID created by `st worktree work`
+			// Delayed refresh to pick up session ID created by `santree worktree work`
 			setTimeout(() => refresh(), 3000);
 		},
 		[refresh],
@@ -1299,8 +1302,8 @@ export default function Dashboard() {
 				const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
 				const workCmd =
 					mode === "plan"
-						? `st worktree work --plan${contextArg}`
-						: `st worktree work${contextArg}`;
+						? `santree worktree work --plan${contextArg}`
+						: `santree worktree work${contextArg}`;
 				const created = await mux.createWindow({
 					name: windowName,
 					cwd: worktreePath,
@@ -1320,9 +1323,10 @@ export default function Dashboard() {
 				setTimeout(() => refresh(), 3000);
 			} else {
 				leaveAltScreen();
-				console.log(`SANTREE_CD:${worktreePath}`);
-				console.log(`SANTREE_WORK:${mode}`);
-				if (contextFile) console.log(`SANTREE_WORK_CONTEXT:${contextFile}`);
+				printCdHint({
+					path: worktreePath,
+					work: { mode, contextFile: contextFile || undefined },
+				});
 				exit();
 			}
 		},
@@ -1491,9 +1495,10 @@ export default function Dashboard() {
 					void launchWorkInTmux(di, mode, di.worktree.path, contextFile);
 				} else {
 					leaveAltScreen();
-					console.log(`SANTREE_CD:${di.worktree.path}`);
-					console.log(`SANTREE_WORK:${mode}`);
-					if (contextFile) console.log(`SANTREE_WORK_CONTEXT:${contextFile}`);
+					printCdHint({
+						path: di.worktree.path,
+						work: { mode, contextFile: contextFile || undefined },
+					});
 					exit();
 				}
 			} else {
@@ -2856,7 +2861,7 @@ export default function Dashboard() {
 							const created = await mux.createWindow({
 								name: windowName,
 								cwd,
-								command: "st pr review",
+								command: "santree pr review",
 							});
 							dispatch({
 								type: "SET_ACTION_MESSAGE",
@@ -2867,7 +2872,7 @@ export default function Dashboard() {
 						})();
 					} else {
 						leaveAltScreen();
-						console.log(`SANTREE_CD:${ri.worktree.path}`);
+						printCdHint({ path: ri.worktree.path });
 						exit();
 					}
 					return;
@@ -3147,7 +3152,7 @@ export default function Dashboard() {
 					void (async () => {
 						const selected = await mux.selectWindow(windowName);
 						if (selected.ok) return;
-						const cmd = resumeCmd ?? "st worktree work";
+						const cmd = resumeCmd ?? "santree worktree work";
 						const created = await mux.createWindow({
 							name: windowName,
 							cwd: worktreePath,
@@ -3162,7 +3167,7 @@ export default function Dashboard() {
 					})();
 				} else {
 					leaveAltScreen();
-					console.log(`SANTREE_CD:${di.worktree.path}`);
+					printCdHint({ path: di.worktree.path });
 					exit();
 				}
 				return;
@@ -3225,7 +3230,7 @@ export default function Dashboard() {
 						const created = await mux.createWindow({
 							name: windowName,
 							cwd,
-							command: "st pr review",
+							command: "santree pr review",
 						});
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
@@ -3236,7 +3241,7 @@ export default function Dashboard() {
 					})();
 				} else {
 					leaveAltScreen();
-					console.log(`SANTREE_CD:${di.worktree.path}`);
+					printCdHint({ path: di.worktree.path });
 					exit();
 				}
 				return;
@@ -3296,7 +3301,7 @@ export default function Dashboard() {
 						const created = await mux.createWindow({
 							name: windowName,
 							cwd,
-							command: "st pr fix",
+							command: "santree pr fix",
 						});
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
@@ -3307,7 +3312,7 @@ export default function Dashboard() {
 					})();
 				} else {
 					leaveAltScreen();
-					console.log(`SANTREE_CD:${di.worktree.path}`);
+					printCdHint({ path: di.worktree.path });
 					exit();
 				}
 				return;
@@ -3364,7 +3369,7 @@ export default function Dashboard() {
 		return (
 			<Box width={columns} height={rows} flexDirection="column">
 				<Box justifyContent="center" alignItems="center" flexGrow={1}>
-					<SquirrelLoader text="Loading dashboard..." />
+					<SquirrelLoader text="Loading dashboard..." version={version} />
 				</Box>
 			</Box>
 		);
@@ -4071,6 +4076,7 @@ export default function Dashboard() {
 									creatingForTicket={state.creatingForTicket}
 									creationLogs={state.creationLogs}
 									deleteStatus={selectedDeleteStatus}
+									prSyncing={!!selectedIssue && !!state.pendingPrs[selectedIssue.issue.identifier]}
 									triage={state.activeTab === "triage"}
 									comments={triageComments}
 									onCall={onCall}

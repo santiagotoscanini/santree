@@ -1,6 +1,6 @@
 ---
 title: Development
-nav_order: 11
+nav_order: 13
 ---
 
 # Development
@@ -44,7 +44,7 @@ node dist/cli.js linear auth --test TEAM-123
 
 ## Link globally
 
-To use `santree` (and `st`) as global commands pointing to your local build:
+To use `santree` as a global command pointing to your local build:
 
 ```bash
 npm link
@@ -53,10 +53,10 @@ npm link
 Verify it picked up your local copy:
 
 ```bash
-st --version    # should match the version in your local package.json
+santree --version    # should match the version in your local package.json
 ```
 
-If it shows a different version, `npm` resolved a different binary — check `which st`. Unlink with `npm unlink -g santree`.
+If it shows a different version, `npm` resolved a different binary — check `which santree`. Unlink with `npm unlink -g santree`.
 
 ## Code quality
 
@@ -94,14 +94,14 @@ source/
 └── commands/            # One React (Ink) component per CLI command
     ├── doctor.tsx
     ├── dashboard.tsx
+    ├── setup.tsx        # guided setup wizard
     ├── worktree/        # create, list, switch, remove, clean, sync, work, open, setup, commit, diff
     ├── pr/              # create, open, fix, review
     ├── linear/          # auth, switch
     ├── github/          # auth
     ├── issue/           # switch, open
-    └── helpers/         # shell-init, statusline, session-signal, english-tutor, squirrel
+    └── helpers/         # statusline, session-signal, english-tutor, squirrel
 prompts/                 # Nunjucks templates: work, review, fix-pr, fill-pr, ticket
-shell/                   # Shell integration templates: init.zsh.njk, init.bash.njk
 ```
 
 ## Adding a provider
@@ -119,7 +119,7 @@ That's it. The dashboard, prompt rendering, and AI flows speak generic terms (`i
 **To add a multiplexer** (e.g. zellij):
 
 1. Create `source/lib/multiplexer/zellij.ts`.
-2. Implement the `Multiplexer` interface — `isActive()`, `createWindow()`, `selectWindow()`, `renameWindow()`, `sendCommand()`, `isSessionAlive()`.
+2. Implement the `Multiplexer` interface — `isActive()`, `createWindow()`, `selectWindow()`, `sendCommand()`, `isSessionAlive()`.
 3. Register the adapter in `lib/multiplexer/index.ts`. Detection is auto — `getMultiplexer()` iterates the adapter list and picks the first whose `isActive()` returns true.
 
 ## Patterns to know

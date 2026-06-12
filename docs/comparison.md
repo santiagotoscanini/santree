@@ -1,6 +1,6 @@
 ---
 title: Why santree?
-nav_order: 13
+nav_order: 2
 description: How santree compares to other Git worktree tools and AI coding workflows.
 ---
 

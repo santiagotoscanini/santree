@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
 import { Text, Box } from "ink";
 import { z } from "zod";
 import { getWorktreePath } from "../../lib/git.js";
+import { formatCdCommand } from "../../lib/cd-hint.js";
 
 export const description = "Switch to another worktree";
 
@@ -13,18 +13,9 @@ type Props = {
 
 export default function Switch({ args }: Props) {
 	const [branchName] = args;
-	const hasOutputRef = useRef(false);
 
 	// Find worktree path synchronously
 	const worktreePath = getWorktreePath(branchName);
-
-	// Output SANTREE_CD once (before Ink fully renders)
-	useEffect(() => {
-		if (worktreePath && !hasOutputRef.current) {
-			hasOutputRef.current = true;
-			process.stdout.write(`SANTREE_CD:${worktreePath}\n`);
-		}
-	}, [worktreePath]);
 
 	const status = worktreePath ? "done" : "error";
 	const error = worktreePath ? null : `Worktree not found for branch: ${branchName}`;
@@ -59,11 +50,12 @@ export default function Switch({ args }: Props) {
 				)}
 			</Box>
 
-			<Box marginTop={1}>
-				{status === "done" && (
-					<Text color="green" bold>
-						✓ Switching to worktree
-					</Text>
+			<Box marginTop={1} flexDirection="column">
+				{status === "done" && worktreePath && (
+					<>
+						<Text dimColor>→ Run this to enter the worktree:</Text>
+						<Text color="cyan"> {formatCdCommand({ path: worktreePath })}</Text>
+					</>
 				)}
 				{status === "error" && (
 					<Text color="red" bold>

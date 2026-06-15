@@ -6,7 +6,7 @@
 
 ### CI Checks
 {% for check in checks %}
-- {{ "PASS" if check.bucket == "pass" else ("FAIL" if check.bucket == "fail" else "PENDING") }} — {{ check.name }}{% if check.description %}: {{ check.description }}{% endif %}
+- {{ "PASS" if check.bucket == "pass" else ("FAIL" if check.bucket == "fail" else ("SKIP" if check.bucket == "skipping" or check.bucket == "cancel" else "PENDING")) }} — {{ check.name }}{% if check.description %}: {{ check.description }}{% endif %}
 {%- endfor %}
 {%- endif %}
 {%- if failed_checks | length %}

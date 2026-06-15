@@ -12,7 +12,7 @@ import { cleanupGithubImages, rewriteGithubImages } from "./images.js";
 async function getAuthStatus(_repoRoot: string | null): Promise<AuthStatus> {
 	const user = await getAuthenticatedUser();
 	if (!user) {
-		return { authenticated: false, hint: "Run: santree github auth (or: gh auth login)" };
+		return { authenticated: false, hint: "GitHub CLI not authenticated. Run: gh auth login" };
 	}
 	return {
 		authenticated: true,
@@ -42,7 +42,7 @@ async function listAssigned(repoRoot: string): Promise<IssueTrackerResult<Assign
 		return {
 			ok: false,
 			reason: "unauthenticated",
-			message: "Run: santree github auth (or: gh auth login)",
+			message: "GitHub CLI not authenticated. Run: gh auth login",
 		};
 	}
 	const nwo = await getCurrentRepoNwo(repoRoot);

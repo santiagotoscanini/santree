@@ -20,6 +20,7 @@ This page is a curated highlight reel.
 
 ### 0.7.x (May–June 2026)
 
+- `santree config` — one command to inspect and configure santree, replacing the separate `doctor`, `setup`, and `tracker` commands. It's a live panel: read-only diagnostics (tool versions, update-available) sit alongside settings you can change in place — each row applies the moment you toggle it. Pick your issue tracker (Local / Linear / GitHub, with Linear OAuth inline) right inside it. `santree config --check` prints the old flat status report for scripts/CI; `--yes` applies recommended defaults non-interactively; `--dry-run` previews.
 - Optimistic PR creation — after you create a PR from the dashboard, its "Open PR" action appears immediately (with a "loading checks & reviews…" hint) instead of waiting for the next refresh. Only the just-created PR shows the loading state; existing PRs keep their info.
 - Shell integration removed — santree is now a plain binary with no `santree` shell function, alias, or hook (so `which santree` just works). Worktree create/switch from the CLI print a `cd` command to copy; the dashboard with tmux/cmux opens a new window in the worktree as before. If you had `eval "$(santree helpers shell-init …)"` in your shell config, you can delete that line.
 - `santree setup` — a guided wizard that fixes what `santree doctor` reports: a checklist of only the steps that still need doing (diff tool + `brew install git-delta`, editor, Claude Code statusline / hooks / remote control, GitHub CLI auth, and per-repo `.santree` scaffold / `.gitignore` / issue-tracker setup). Space to toggle, Enter to apply; `--dry-run` to preview, `--yes` to apply recommended defaults.
@@ -40,7 +41,6 @@ This page is a curated highlight reel.
 
 ### 0.5.x
 
-- English Tutor — `santree helpers english-tutor install` adds Claude Code hooks that flag grammar mistakes in your prompts before processing.
 - Multiplexer abstraction — auto-detects tmux / cmux. The `SANTREE_MULTIPLEXER` env var was removed in favour of pure auto-detection.
 - Centralized issue tracking + multiplexer logic; cleaner `lib/trackers/` and `lib/multiplexer/`.
 - Delta integration — `SANTREE_DIFF_TOOL=delta` for syntax highlighting in the diff overlay; `splitCombinedSgr()` works around an upstream `slice-ansi` bug.
@@ -65,4 +65,4 @@ While we're at `0.x`, expect occasional breaking changes in minor releases — t
 
 ## Update notifications
 
-`santree doctor` and the dashboard banner check npm for newer versions (cached for 6 hours per package). Run `santree update` to upgrade — it auto-detects your package manager (npm / pnpm / yarn / bun).
+`santree config --check` and the dashboard banner check npm for newer versions (cached for 6 hours per package). Run `santree update` to upgrade — it auto-detects your package manager (npm / pnpm / yarn / bun).

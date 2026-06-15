@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Text, Box } from "ink";
 import { z } from "zod";
 import { findMainRepoRoot } from "../../lib/git.js";
+import { getConfiguredEditor } from "../../lib/config-store.js";
 import { execSync, spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -52,8 +53,8 @@ export default function Open({ options: opts }: Props) {
 			return;
 		}
 
-		// Resolve editor: --editor flag > SANTREE_EDITOR env > "code" default
-		const editor = opts.editor || process.env.SANTREE_EDITOR || "code";
+		// Resolve editor: --editor flag > santree config editor (or SANTREE_EDITOR) > "code"
+		const editor = opts.editor || getConfiguredEditor() || "code";
 
 		// Validate editor exists in PATH
 		try {

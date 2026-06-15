@@ -65,7 +65,7 @@ Bold edges (`==>`) follow the happy path; thin edges (`-->`) are branches/loops;
 
 | Stage | Supported today | Planned |
 |---|---|---|
-| **Issue tracker** (① Dashboard) | Linear, GitHub Issues | Jira, Shortcut, etc. |
+| **Issue tracker** (① Dashboard) | Linear, GitHub Issues, Local (built-in file-based) | Jira, Shortcut, etc. |
 | **AI agent** (②, ⑤) | Claude Code (`claude` CLI) | OpenAI Codex, OpenCode, Cursor agent |
 | **Diff pager** (③) | delta, diff-so-fancy, any unified-diff pager — built-in colorizer when none set | — |
 | **Editor** (side branch) | Anything taking a path: zed, nvim, jetbrains, cursor, vscode. cursor + vscode also handle `.code-workspace` files via `[E]` workspace shortcut | — |

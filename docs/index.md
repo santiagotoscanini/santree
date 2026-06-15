@@ -34,8 +34,8 @@ description: "Santree — a CLI for managing Git worktrees with integrated AI as
 ## What's inside
 
 - **Interactive dashboard** — every assigned issue in one TUI, with live worktree / PR / CI / review state and the running Claude session per branch.
-- **Pluggable issue trackers** — Linear (OAuth + GraphQL) and GitHub Issues (via `gh`) are first-class. Pick one per repo with `santree issue switch`.
-- **Pluggable terminal multiplexers** — auto-detects tmux or cmux; falls back gracefully when neither is active.
+- **Pluggable issue trackers** — Linear (OAuth + GraphQL) and GitHub Issues (via `gh`) are first-class. Pick one per repo from the **Issue tracker** row in `santree config`.
+- **Pluggable terminal multiplexers** — auto-detects cmux (suggested) or tmux; falls back gracefully when neither is active.
 - **AI in the loop** — Claude is launched with the rendered ticket + your context. PR creation, review fix-up, and self-review all run the agent with the right inputs pre-staged.
 - **Inline diff overlay** — review your branch the way GitHub does (merge-base scoped) without leaving the dashboard. Pipe through `delta` for syntax highlighting.
 
@@ -48,10 +48,10 @@ description: "Santree — a CLI for managing Git worktrees with integrated AI as
 npm install -g santree
 
 # Configure (shell-free — sets editor, diff tool, Claude Code, this repo)
-santree setup
+santree config
 
 # Verify
-santree doctor
+santree config --check
 
 # Open the dashboard — manage everything from one screen
 santree dashboard
@@ -73,7 +73,7 @@ That's it. Walk a real session in [Quickstart](quickstart.html).
 | Look up a command | [Commands]({{ site.baseurl }}/commands.html) |
 | Wire up Linear or GitHub Issues | [Trackers]({{ site.baseurl }}/trackers.html) |
 | Configure env vars / init scripts | [Configuration]({{ site.baseurl }}/configuration.html) |
-| Add Claude statusline / hooks / English Tutor | [Integrations]({{ site.baseurl }}/integrations.html) |
+| Add the Claude statusline / remote control | [Integrations]({{ site.baseurl }}/integrations.html) |
 | Compare to alternatives | [Why santree?]({{ site.baseurl }}/comparison.html) |
 | Hack on santree | [Development]({{ site.baseurl }}/development.html) |
 | Troubleshoot | [FAQ]({{ site.baseurl }}/faq.html) |

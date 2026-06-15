@@ -1,0 +1,79 @@
+## PR #{{ pr_number }} — fix-loop iteration brief
+Branch: `{{ branch }}` → base: `{{ base_branch }}`
+{% if pr_url %}{{ pr_url }}{% endif %}
+
+### Mergeability
+{% if conflicts -%}
+⚠️ **CONFLICTS** with base `{{ base_branch }}` (mergeable={{ mergeable }}, state={{ merge_state }}).
+{%- elif mergeable == "UNKNOWN" -%}
+Mergeability not yet computed by GitHub (UNKNOWN) — do **not** assume conflicts.
+{%- else -%}
+No conflicts (mergeable={{ mergeable }}, state={{ merge_state }}).
+{%- endif %}
+
+### Failing checks — {{ fixable_count }} fixable, {{ manual_count }} manual{% if pending_count %}, {{ pending_count }} still pending{% endif %}
+{% if failed_checks | length -%}
+{% for c in failed_checks %}
+- **[{{ "FIXABLE" if c.fixable else "MANUAL" }}]** {{ c.name }}{% if c.workflow %} ({{ c.workflow }}){% endif %}{% if c.failed_step %} — failed step: `{{ c.failed_step }}`{% endif %}
+{%- if c.fixable and c.log %}
+```
+{{ c.log }}
+```
+{%- endif %}
+{%- endfor %}
+{%- else -%}
+No failing checks.
+{%- endif %}
+
+{% if reviews and reviews | length -%}
+### Reviews
+{% for r in reviews %}- **{{ r.author.login }}**: {{ r.state }}{% if r.body %} — {{ r.body }}{% endif %}
+{% endfor %}
+{%- endif %}
+### Approved review comments — {{ approved_comments | length }}
+{% if approved_comments | length -%}
+Unresolved threads you've 👍-approved (these — and only these — are in scope):
+{% for t in approved_comments %}
+- **Thread** `{{ t.id }}` on `{{ t.path }}{% if t.line %}:{{ t.line }}{% endif %}`{% if t.isOutdated %} *(outdated — the diff moved; find the equivalent code)*{% endif %}
+{% for c in t.comments %}  - **{{ c.author }}**: {{ c.body }}
+{% endfor %}{% endfor %}
+{%- else -%}
+None approved. Only unresolved threads whose **last comment you've 👍-reacted to** are applied — leave a 👍 to approve one.
+{%- endif %}
+
+## ➡️ Do this now
+{% if directive == "merge" -%}
+The PR **conflicts** with `{{ base_branch }}` — resolve before anything else:
+1. `{{ santree_cmd }} pr fix --signal merging`
+2. `git fetch origin` then `git merge origin/{{ base_branch }}`
+3. Resolve every conflict (preserve both sides' intent) and commit the merge.
+4. `git push`, then `{{ santree_cmd }} pr fix --signal waiting-ci`.
+
+→ Schedule the next iteration ~5 min out and end your turn.
+{%- elif directive == "work" -%}
+Run `{{ santree_cmd }} pr fix --signal fixing`, then:
+{% if fixable_count -%}
+- Fix the **[FIXABLE]** checks above. Run the matching local command (test / lint / typecheck / formatter) to confirm each passes **locally** before pushing. Never touch **[MANUAL]** checks.
+{% endif -%}
+{% if approved_comments | length -%}
+- Apply each **approved review thread** above (read the whole thread for intent). After pushing, resolve each one so it won't reappear:
+  ```
+  gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t='<thread id>'
+  ```
+{% endif -%}
+Then `git push` and `{{ santree_cmd }} pr fix --signal waiting-ci`.
+
+→ Schedule the next iteration ~5 min out and end your turn.
+{%- elif directive == "wait" -%}
+Nothing to fix right now{% if pending_count %} — {{ pending_count }} check(s) still running{% endif %}{% if mergeable == "UNKNOWN" %} — GitHub hasn't finished computing mergeability{% endif %}. Don't change anything.
+
+→ Schedule the next iteration ~5 min out and end your turn to re-check.
+{%- elif directive == "stop-stuck" -%}
+The only remaining failures are **[MANUAL]** ({{ manual_count }}) — you can't safely fix these.
+
+→ Run `{{ santree_cmd }} pr fix --signal stopped:stuck`, then **STOP** (do not schedule another iteration). State in one line what's left for a human.
+{%- else -%}
+✅ CI is green, no conflicts, and no approved comments left to apply.
+
+→ Run `{{ santree_cmd }} pr fix --signal stopped:clean`, then **STOP** (do not schedule another iteration).
+{%- endif %}

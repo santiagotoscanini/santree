@@ -1,5 +1,11 @@
 import { execSync } from "child_process";
-import type { CreateWindowOpts, Multiplexer, MultiplexerKind, SessionResult } from "./types.js";
+import type {
+	AddTabOpts,
+	CreateWindowOpts,
+	Multiplexer,
+	MultiplexerKind,
+	SessionResult,
+} from "./types.js";
 import { shellEscape } from "./types.js";
 
 function tmuxSync(cmd: string): boolean {
@@ -34,6 +40,12 @@ export const tmuxMultiplexer: Multiplexer = {
 		return { ok: true };
 	},
 
+	async addTab({ windowName, tabName, cwd, command }: AddTabOpts): Promise<SessionResult> {
+		// tmux has no in-window tab concept, so a "tab" becomes its own window named
+		// `<tabName>-<windowName>` (e.g. fix-loop-TEAM-123).
+		return this.createWindow({ name: `${tabName}-${windowName}`, cwd, command });
+	},
+
 	async selectWindow(name: string): Promise<SessionResult> {
 		if (!this.isActive()) return { ok: false, reason: "not-active" };
 		const ok = tmuxSync(`tmux select-window -t ${shellEscape(name)}`);
@@ -44,32 +56,5 @@ export const tmuxMultiplexer: Multiplexer = {
 		if (!this.isActive()) return { ok: false, reason: "not-active" };
 		const ok = tmuxSync(`tmux send-keys -t ${shellEscape(name)} ${shellEscape(command)} Enter`);
 		return ok ? { ok: true } : { ok: false, reason: "failed" };
-	},
-
-	isSessionAlive(ticketId: string): boolean {
-		try {
-			const output = execSync('tmux list-windows -F "#{window_name}\t#{pane_pid}"', {
-				encoding: "utf-8",
-				stdio: ["pipe", "pipe", "ignore"],
-			}).trim();
-
-			for (const line of output.split("\n")) {
-				const [name, pidStr] = line.split("\t");
-				if (!name?.startsWith(ticketId)) continue;
-				if (!pidStr) return false;
-				try {
-					const ps = execSync(`pgrep -P ${pidStr} -a`, {
-						encoding: "utf-8",
-						stdio: ["pipe", "pipe", "ignore"],
-					}).trim();
-					return ps.split("\n").some((proc) => proc.includes("claude"));
-				} catch {
-					return false;
-				}
-			}
-		} catch {
-			// tmux not available
-		}
-		return false;
 	},
 };

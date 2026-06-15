@@ -4,9 +4,6 @@ import {
 	getBaseBranch,
 	getDefaultBranch,
 	readAllMetadata,
-	readSessionState,
-	isSessionAlive,
-	clearSessionState,
 	clearSessionId,
 	getGitStatusAsync,
 	getCommitsAheadAsync,
@@ -14,6 +11,7 @@ import {
 	getDiffShortstatAsync,
 } from "../git.js";
 import { runAsync } from "../exec.js";
+import { readFixLoopRuntime } from "../fix-loop.js";
 import { readMainAgentTodos, findClaudeSessionCwd } from "../claude-todos.js";
 import {
 	getPRInfoAsync,
@@ -87,13 +85,6 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					getPRInfoAsync(wt.branch),
 					getDiffShortstatAsync(wt.path, base),
 				]);
-				let sessState = readSessionState(repoRoot, issue.identifier);
-				// Validate against the active multiplexer — if the session has gone, clear stale state
-				if (sessState && !isSessionAlive(issue.identifier)) {
-					clearSessionState(repoRoot, issue.identifier);
-					sessState = null;
-				}
-				const ss = sessState?.state ?? null;
 				const storedId = metadata[issue.identifier]?.session_id ?? null;
 				// Verify the session is still resumable. Claude Code clears old
 				// transcript files (or `/clear` mints a new ID), leaving our stored
@@ -110,10 +101,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					clearSessionId(repoRoot, issue.identifier);
 					sessionId = null;
 				}
-				// Hide stale todos when the session has exited or its file is gone —
-				// the on-disk todos file outlives the process and showing them
-				// would lie about state.
-				const claudeTodos = sessionId && ss !== "exited" ? readMainAgentTodos(sessionId) : null;
+				const claudeTodos = sessionId ? readMainAgentTodos(sessionId) : null;
 				worktreeInfo = {
 					path: wt.path,
 					branch: wt.branch,
@@ -123,8 +111,6 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					sessionId,
 					sessionCwd,
 					gitStatus: gitStatusOutput,
-					sessionState: ss === "exited" ? null : ss,
-					sessionMessage: sessState?.message ?? null,
 					diffStats: shortstat,
 					claudeTodos,
 				};
@@ -144,6 +130,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 				pr: prInfo,
 				checks: checksInfo,
 				reviews: reviewsInfo,
+				fixLoop: readFixLoopRuntime(repoRoot, issue.identifier),
 			};
 		}),
 	);
@@ -183,12 +170,6 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						.replace(/-/g, " ")
 						.trim() || tid;
 
-				let sessState = readSessionState(repoRoot, tid);
-				if (sessState && !isSessionAlive(tid)) {
-					clearSessionState(repoRoot, tid);
-					sessState = null;
-				}
-				const ss = sessState?.state ?? null;
 				const storedId = metadata[tid]?.session_id ?? null;
 				const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
 				let sessionId: string | null = storedId;
@@ -196,7 +177,7 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 					clearSessionId(repoRoot, tid);
 					sessionId = null;
 				}
-				const claudeTodos = sessionId && ss !== "exited" ? readMainAgentTodos(sessionId) : null;
+				const claudeTodos = sessionId ? readMainAgentTodos(sessionId) : null;
 				return {
 					issue: {
 						identifier: tid,
@@ -219,14 +200,13 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						sessionId,
 						sessionCwd,
 						gitStatus: gitStatusOutput,
-						sessionState: ss === "exited" ? null : ss,
-						sessionMessage: sessState?.message ?? null,
 						diffStats: shortstat,
 						claudeTodos,
 					},
 					pr,
 					checks: checksInfo,
 					reviews: reviewsInfo,
+					fixLoop: readFixLoopRuntime(repoRoot, tid),
 				};
 			}),
 	);
@@ -433,8 +413,6 @@ async function buildMainEntry(repoRoot: string): Promise<DashboardIssue | null> 
 			sessionId: null,
 			sessionCwd: null,
 			gitStatus: gitStatusOutput,
-			sessionState: null,
-			sessionMessage: null,
 			diffStats: shortstat,
 			claudeTodos: null,
 		},
@@ -494,12 +472,6 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 						getCommitsAheadAsync(wt.path, base),
 						getDiffShortstatAsync(wt.path, base),
 					]);
-					let sessState = ticketId ? readSessionState(repoRoot, ticketId) : null;
-					if (sessState && ticketId && !isSessionAlive(ticketId)) {
-						clearSessionState(repoRoot, ticketId);
-						sessState = null;
-					}
-					const ss = sessState?.state ?? null;
 					const storedId = ticketId ? (metadata[ticketId]?.session_id ?? null) : null;
 					const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
 					let sessionId: string | null = storedId;
@@ -507,7 +479,7 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 						clearSessionId(repoRoot, ticketId);
 						sessionId = null;
 					}
-					const claudeTodos = sessionId && ss !== "exited" ? readMainAgentTodos(sessionId) : null;
+					const claudeTodos = sessionId ? readMainAgentTodos(sessionId) : null;
 					worktreeInfo = {
 						path: wt.path,
 						branch: wt.branch,
@@ -517,8 +489,6 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 						sessionId,
 						sessionCwd,
 						gitStatus: gitStatusOutput,
-						sessionState: ss === "exited" ? null : ss,
-						sessionMessage: sessState?.message ?? null,
 						diffStats: shortstat,
 						claudeTodos,
 					};

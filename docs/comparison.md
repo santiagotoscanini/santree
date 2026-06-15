@@ -60,7 +60,7 @@ Trackers and multiplexers are behind interfaces. Adding a new option (Jira, Zell
 |---|---|---|
 | Create branch + checkout | manual | `santree worktree create` |
 | Track which branches you have open | `git worktree list` | dashboard with PR / CI / review state |
-| Per-branch tmux window | manual | `--tmux` flag, or auto from dashboard |
+| Per-branch multiplexer window | manual | `--window` flag, or auto from dashboard |
 | Issue context in branch name | manual | extracted automatically |
 | Per-branch init script | shell function | `.santree/init.sh` |
 | Cleanup merged worktrees | manual | `santree worktree clean` |
@@ -92,7 +92,6 @@ You can absolutely just `cd` into a worktree and run `claude`. Santree adds:
 - Auto-fetching the issue from your tracker and injecting it into the prompt
 - A consistent prompt template per task (work / fix / review / fill-PR) so you're not re-writing the same instructions
 - Resume support — the dashboard remembers the Claude session ID per worktree, so `Enter` resumes instead of starting fresh
-- Live session-state surfacing in the dashboard (active / waiting / idle / exited)
 
 If you only ever work on one branch at a time and don't mind re-prompting, the manual flow is simpler.
 

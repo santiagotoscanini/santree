@@ -2,7 +2,7 @@ import * as os from "os";
 import { run } from "../exec.js";
 
 /**
- * Tool detection + installation for `santree setup`.
+ * Tool detection + installation for `santree config`.
  *
  * macOS (Homebrew) is the only auto-install path today. The `PlatformInstaller`
  * seam keeps the door open for apt/dnf/etc. without touching call sites — add a

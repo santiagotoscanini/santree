@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import type { PRCheck } from "../github.js";
+import type { FixLoopRuntime } from "../fix-loop.js";
 import type { ProjectGroup, DashboardIssue } from "./types.js";
 import { formatSla, isSnoozed } from "./sla.js";
 import { issueReadiness } from "../trackers/types.js";
@@ -21,6 +22,9 @@ interface Props {
 	/** Ticket ids whose worktree is currently being removed — shown with a
 	 * distinct WT-column glyph so concurrent deletions are visible in the list. */
 	deletingIds?: Set<string>;
+	/** Active/recent auto-fix loops by ticket id — a running/stalled loop shows a
+	 * ⟳ in place of the CI glyph (the loop is the CI story while it runs). */
+	fixLoops?: Record<string, FixLoopRuntime>;
 }
 
 function stateColor(type: string, name?: string): string {
@@ -62,9 +66,28 @@ function workIndicator(wt: DashboardIssue["worktree"]): { glyph: string; color: 
 
 function ciIndicator(checks: PRCheck[] | null): { glyph: string; color: string } {
 	if (!checks || checks.length === 0) return { glyph: "·", color: "gray" };
+	// `gh` buckets: pass | fail | pending | skipping | cancel. Only `fail` blocks
+	// (red) and only `pending` is genuinely still running (yellow). `skipping` /
+	// `cancel` don't run under the current conditions and don't block — GitHub
+	// reports them as "skipped" and still shows "all checks passed", so they must
+	// not turn the glyph yellow.
 	if (checks.some((c) => c.bucket === "fail")) return { glyph: "✗", color: "red" };
-	if (checks.every((c) => c.bucket === "pass")) return { glyph: "✓", color: "green" };
-	return { glyph: "●", color: "yellow" };
+	if (checks.some((c) => c.bucket === "pending")) return { glyph: "●", color: "yellow" };
+	return { glyph: "✓", color: "green" };
+}
+
+/**
+ * While a fix loop is actively running (or stalled), it owns the CI column — a ⟳
+ * conveys "being auto-fixed" better than the underlying check state. Stopped loops
+ * fall back to the real CI glyph (CI green ≈ stopped clean, CI red ≈ stopped stuck).
+ */
+function fixLoopOverride(
+	loop: FixLoopRuntime | undefined,
+): { glyph: string; color: string } | null {
+	if (!loop) return null;
+	if (loop.phase === "running") return { glyph: "⟳", color: "cyan" };
+	if (loop.phase === "stalled") return { glyph: "⟳", color: "yellow" };
+	return null;
 }
 
 export type ListRow =
@@ -148,6 +171,7 @@ export default function IssueList({
 	selectionBg = "#1e3a5f",
 	variant = "default",
 	deletingIds,
+	fixLoops,
 }: Props) {
 	const isTriage = variant === "triage";
 	const isIssues = variant === "issues";
@@ -216,7 +240,7 @@ export default function IssueList({
 					const prio = snoozed ? { glyph: " ", color: "gray" } : priorityMarker(di.issue.priority);
 					const isDeleting = deletingIds?.has(di.issue.identifier) ?? false;
 					const work = isDeleting ? { glyph: "⌫", color: "yellow" } : workIndicator(di.worktree);
-					const ci = ciIndicator(di.checks);
+					const ci = fixLoopOverride(fixLoops?.[di.issue.identifier]) ?? ciIndicator(di.checks);
 					const nestPrefix = depth > 0 ? "  ".repeat(depth - 1) + "└ " : "";
 					const adjustedTitleWidth = Math.max(titleMaxWidth - nestPrefix.length, 5);
 					const title =

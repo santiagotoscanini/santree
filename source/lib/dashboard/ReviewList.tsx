@@ -15,9 +15,12 @@ interface Props {
 
 function checksIndicator(checks: PRCheck[] | null): { text: string; color: string } {
 	if (!checks || checks.length === 0) return { text: "-", color: "gray" };
+	// Only `fail` blocks (red) and only `pending` is genuinely running (yellow);
+	// `skipping`/`cancel` don't run under the current conditions and don't block,
+	// so they must not turn the glyph yellow (matches GitHub's "all checks passed").
 	if (checks.some((c) => c.bucket === "fail")) return { text: "✗", color: "red" };
-	if (checks.every((c) => c.bucket === "pass")) return { text: "✓", color: "green" };
-	return { text: "●", color: "yellow" };
+	if (checks.some((c) => c.bucket === "pending")) return { text: "●", color: "yellow" };
+	return { text: "✓", color: "green" };
 }
 
 const HEADER_ROWS = 1;

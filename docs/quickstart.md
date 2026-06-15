@@ -13,21 +13,17 @@ Five-minute walkthrough — pick an issue, work on it, ship a PR. Assumes you've
 
 ---
 
-## 1. Authenticate your tracker
+## 1. Pick your tracker
 
-If you ran `santree setup` during [Installation](installation.html), you already did this — skip to step 2.
+If you set this during [Installation](installation.html) via `santree config`, you already did this — skip to step 2.
 
-Otherwise, pick one and run the matching auth command from inside any repo where you want santree to surface issues:
+Otherwise, from inside any repo where you want santree to surface issues, run:
 
 ```bash
-# Linear (OAuth in browser)
-santree linear auth
-
-# OR GitHub Issues (uses the existing gh CLI — no separate OAuth)
-santree github auth
+santree config
 ```
 
-The auth command also flips the repo's active tracker, so you only do this once per repo. See [Trackers](trackers.html) for the full setup.
+Under **This repo**, select the **Issue tracker** row and pick **Local** (built-in, no account), **Linear** (opens the browser for OAuth right there if you're not logged in), or **GitHub** (uses the existing `gh` CLI — run `gh auth login` first if it tells you to). It switches instantly and only needs doing once per repo. See [Trackers](trackers.html) for the full setup.
 
 ## 2. Open the dashboard
 
@@ -62,7 +58,7 @@ The diff is **branch-only** — it uses `git merge-base` against the configured 
 <!-- TODO screenshot: diff overlay mid-review — file tree with a couple of files selected, syntax-highlighted diff on the right. -->
 
 {: .note }
-> Install [`delta`](https://github.com/dandavison/delta) (`brew install git-delta`) and `export SANTREE_DIFF_TOOL=delta` to get syntax highlighting in the overlay. Works for both worktree diffs and Reviews-tab PR diffs.
+> Install [`delta`](https://github.com/dandavison/delta) (`brew install git-delta`) and set it as your diff tool in `santree config` (Global → **Diff tool**) to get syntax highlighting in the overlay. Works for both worktree diffs and Reviews-tab PR diffs. (`SANTREE_DIFF_TOOL=delta` also works as a one-off override.)
 
 ## 5. Commit, push, and PR — without leaving the dashboard
 

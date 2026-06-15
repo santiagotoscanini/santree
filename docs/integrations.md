@@ -15,7 +15,7 @@ Optional integrations that make santree fit your existing setup.
 
 ## Claude Code
 
-Santree lives next to Claude Code — it launches `claude`, reads its hooks, and embeds its session state.
+Santree lives next to Claude Code — it launches `claude`, wires up a statusline, and resumes its sessions.
 
 ### Statusline
 
@@ -43,71 +43,37 @@ The context-usage segment renders as a colored progress bar — green / yellow �
 
 Enable [Remote Control](https://code.claude.com/docs/en/remote-control) to continue local Claude Code sessions from your phone, tablet, or any browser. This lets you kick off work with `santree worktree work` and monitor or steer the session remotely.
 
-Run `/config` inside Claude Code and set **Enable Remote Control for all sessions** to `true`. This writes `remoteControlAtStartup: true` to `~/.claude.json`. Run `santree doctor` to verify.
-
-### Session state signaling
-
-Surfaces the current Claude Code session state in the dashboard, statusline, and tmux window names. You can tell at a glance whether a session is actively working, waiting for permission approval, idle, or exited.
-
-| State | Meaning |
-|---|---|
-| `active` | User submitted a prompt, Claude is working |
-| `waiting` | Claude needs permission approval |
-| `idle` | Claude finished and is waiting for next prompt |
-| `exited` | Session ended |
-
-Install:
-
-```bash
-santree helpers session-signal install
-```
-
-Adds hooks for `Notification`, `Stop`, `UserPromptSubmit`, and `SessionEnd` to `~/.claude/settings.json`. Existing hooks are preserved.
-
-Preview the JSON without writing: `santree helpers session-signal install --dry`
-
-Verify with `santree doctor` — look for the "Session Signal Hooks" row under Claude Code.
-
-### English Tutor
-
-A little extra — deliberately left out of `santree setup` so it stays opt-in. Not everyone is a native English speaker, and this one's a quiet bonus for those who want it.
-
-When enabled, Claude Code spots grammar mistakes in your prompts and replies with a one-line correction (`original -> correction (reason)`) before doing the actual work. Mistake-free prompts are ignored.
-
-Install:
-
-```bash
-santree helpers english-tutor install
-```
-
-Adds two hooks (`UserPromptSubmit`, `SessionStart`) and a scoped `Edit` permission for the practice log to `~/.claude/settings.json`. Existing hooks and permissions are preserved.
-
-Preview the JSON without writing: `santree helpers english-tutor install --dry`
-
-Corrections are appended to `~/.config/santree/english-practice-log.md` (or `$XDG_CONFIG_HOME/santree/english-practice-log.md`). The `SessionStart` hook replays this log into context on new sessions so Claude can spot recurring patterns.
-
-Remove with `santree helpers english-tutor uninstall`.
+Run `/config` inside Claude Code and set **Enable Remote Control for all sessions** to `true`. This writes `remoteControlAtStartup: true` to `~/.claude.json`. Run `santree config --check` to verify.
 
 ---
 
 ## Multiplexers
 
-Santree auto-detects whichever multiplexer is active and uses it for new-window flows (`work`, `fix`, `review`).
+Santree auto-detects whichever multiplexer is active and uses it for new-window flows (`work`, `fix`, `review`). **[cmux](https://cmux.com) is the suggested multiplexer** — it treats Claude Code as a first-class citizen (it even ships its own wired-up Claude CLI; see [#2048](https://github.com/manaflow-ai/cmux/issues/2048) below), so the agent flows feel native. **tmux is fully supported** too, and is the right choice when you're not on macOS or prefer a terminal-native multiplexer.
 
 | Multiplexer | Detection | Notes |
 |---|---|---|
-| **tmux** | `$TMUX` set | Default. Works on every platform. |
-| **cmux** | `$CMUX_SURFACE_ID` set | macOS only. Requires the cmux.app GUI running. |
+| **cmux** | `$CMUX_SURFACE_ID` set | Suggested. Deepest Claude Code integration. macOS only; requires the cmux.app GUI running. |
+| **tmux** | `$TMUX` set | Fully supported. Works on every platform; the only auto-installable option (`santree config`). |
 | none | neither set | New-window flows degrade to "run manually" / inline only. |
 
 There is no env var override — each adapter declares its own runtime check.
+
+### cmux: per-project folders & per-ticket tabs
+
+On cmux, santree organizes its windows to match how you think about work:
+
+- **Each ticket gets one workspace** named after the ticket (e.g. `TEAM-123`). Starting work names its tab `work`; the [fix loop](dashboard.html#fix-loop) (`f`) and self-review (`r`) add `fix-loop` and `review` tabs to that *same* workspace — so everything for a ticket lives together instead of scattering across windows.
+- **Workspaces are grouped into sidebar folders by Linear project.** Launching work / investigate / review / fix for a ticket files its workspace under a folder named after the issue's project, so the cmux sidebar mirrors your project structure. Grouping is best-effort and never blocks a launch.
+
+(tmux has no in-workspace tabs or sidebar folders, so the fix loop and review open separate `fix-loop-<ticket>` / `review-<ticket>` windows there.)
 
 ### cmux caveats
 
 cmux is macOS-only and tightly bound to the cmux.app GUI. Two upstream issues affect santree's integration:
 
-{: .warning }
-> **[manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472)** — programmatically created workspaces have dead PTYs, so `sendCommand` is unimplemented (returns `unsupported`) and post-creation flows degrade. **tmux remains the recommended backend until #1472 lands.** `santree doctor` surfaces a warning when cmux is active.
+{: .note }
+> **[manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472)** — programmatically created workspaces have dead PTYs, so `sendCommand` returns `unsupported`. In practice this only affects re-sending a command into an **already-open** window (the resume / re-launch path): santree falls back to focusing the window and printing the command to run. New-window flows — the common case — bake the command into `createWindow` and work normally. If this edge case matters to your workflow, use tmux until #1472 lands.
 
 {: .note }
 > **[manaflow-ai/cmux#2048](https://github.com/manaflow-ai/cmux/issues/2048)** — cmux ships its own Claude CLI at `/Applications/cmux.app/Contents/Resources/bin/claude`, wired to the active cmux workspace. When santree detects cmux is active, it uses that bundled binary in preference to a globally-installed `claude`.
@@ -116,13 +82,15 @@ cmux is macOS-only and tightly bound to the cmux.app GUI. Two upstream issues af
 
 ## Editors
 
-Set `SANTREE_EDITOR` to whatever launches your editor with a path argument:
+Set your editor in `santree config` — under **Global**, the **Default editor** row. Pick whatever launches your editor with a path argument (`zed`, `cursor`, `code`, `nvim`, `idea`, `subl`, `webstorm`, …). It writes to santree's config file and takes effect on the next run — no shell restart.
+
+For a single invocation or in CI, `SANTREE_EDITOR` still works as a one-off override that wins over the stored value:
 
 ```bash
-export SANTREE_EDITOR=zed       # or cursor, code, nvim, idea, subl, webstorm, …
+SANTREE_EDITOR=zed santree dashboard
 ```
 
-Defaults to `code`. GUI editors (Code, Cursor, Zed, JetBrains) automatically get `--wait` when launched from `Ctrl+O` in the multi-line context input, so the dashboard pauses until you close the file.
+When unset, GUI "open in editor" actions fall back to `code`. GUI editors (Code, Cursor, Zed, JetBrains) automatically get `--wait` when launched from `Ctrl+O` in the multi-line context input, so the dashboard pauses until you close the file.
 
 `worktree open` also accepts `--editor <cmd>` to override per-invocation.
 
@@ -130,13 +98,15 @@ Defaults to `code`. GUI editors (Code, Cursor, Zed, JetBrains) automatically get
 
 ## Diff tools
 
-Set `SANTREE_DIFF_TOOL` to a pager that accepts a unified diff on stdin:
+Set your diff tool in `santree config` — under **Global**, the **Diff tool** row (on macOS it also offers `brew install git-delta` if you don't have delta yet). Pick a pager that accepts a unified diff on stdin (`delta` for syntax highlighting + side-by-side, `diff-so-fancy`, …). It writes to santree's config file and takes effect on the next run.
+
+For a single invocation or in CI, `SANTREE_DIFF_TOOL` still works as a one-off override that wins over the stored value:
 
 ```bash
-export SANTREE_DIFF_TOOL=delta            # syntax highlighting + side-by-side
-# or
-export SANTREE_DIFF_TOOL=diff-so-fancy
+SANTREE_DIFF_TOOL=delta santree worktree diff
 ```
+
+When unset, santree falls back to its own colorizer (dashboard overlay) or git's default pager (CLI).
 
 Used by:
 

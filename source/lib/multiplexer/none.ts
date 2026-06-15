@@ -13,15 +13,15 @@ export const noneMultiplexer: Multiplexer = {
 		return NOT_ACTIVE;
 	},
 
+	async addTab(): Promise<SessionResult> {
+		return NOT_ACTIVE;
+	},
+
 	async selectWindow(): Promise<SessionResult> {
 		return NOT_ACTIVE;
 	},
 
 	sendCommand(): SessionResult {
 		return NOT_ACTIVE;
-	},
-
-	isSessionAlive(): boolean {
-		return false;
 	},
 };

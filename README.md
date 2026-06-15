@@ -16,7 +16,7 @@
 
 <p align="center">
   Pick an issue, work on it with Claude in an isolated worktree, ship a PR — without leaving your terminal.<br/>
-  Pluggable issue trackers (Linear, GitHub Issues), pluggable multiplexers (tmux, cmux), and AI in the loop.
+  Pluggable issue trackers (Linear, GitHub Issues), pluggable multiplexers (cmux, tmux), and AI in the loop.
 </p>
 
 <p align="center">
@@ -31,8 +31,7 @@
 
 ```bash
 npm install -g santree
-eval "$(santree helpers shell-init zsh)"   # or bash
-santree doctor
+santree config   # inspect & set up tools, Claude Code integration, and this repo
 ```
 
 Full setup: [Installation](https://santree.toscanini.me/installation.html).

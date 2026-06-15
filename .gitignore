@@ -5,3 +5,4 @@ dist
 .santree/worktrees
 .santree/metadata.json
 .santree/session-states/
+.santree/fix-loops/

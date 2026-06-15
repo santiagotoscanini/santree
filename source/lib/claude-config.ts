@@ -7,8 +7,9 @@ import * as path from "path";
  *   - ~/.claude/settings.json   (statusline + hooks)
  *   - ~/.claude.json            (remote control)
  *
- * Both `santree doctor` (detect) and `santree setup` (configure) go through
- * here so the two commands can never disagree about what "configured" means.
+ * `santree config` (both the `--check` report and the interactive panel) goes
+ * through here so detection and configuration can never disagree about what
+ * "configured" means.
  */
 
 const STATUSLINE_COMMAND = "santree helpers statusline";
@@ -60,6 +61,19 @@ export function configureStatusline(): string {
 	return settingsPath;
 }
 
+/**
+ * Remove santree's statusline. Only clears `statusLine` when it's actually
+ * pointing at santree — a user's hand-rolled statusline is left untouched.
+ */
+export function removeStatusline(): string {
+	const settingsPath = claudeSettingsPath();
+	if (!isStatuslineConfigured()) return settingsPath;
+	const settings = readJsonSafe(settingsPath);
+	delete settings.statusLine;
+	writeJson(settingsPath, settings);
+	return settingsPath;
+}
+
 // ── Remote control ────────────────────────────────────────────────────────────
 
 export function isRemoteControlEnabled(): boolean {
@@ -74,32 +88,49 @@ export function enableRemoteControl(): string {
 	return configPath;
 }
 
-// ── Session-signal hooks ──────────────────────────────────────────────────────
-
-export const SESSION_SIGNAL_EVENTS = ["Notification", "Stop", "UserPromptSubmit", "SessionEnd"];
-
-/** Returns the session-signal events that are NOT yet wired in settings.json. */
-export function missingSessionSignalHooks(): string[] {
-	const settings = readJsonSafe(claudeSettingsPath());
-	const hooks = settings.hooks || {};
-	const missing: string[] = [];
-	for (const event of SESSION_SIGNAL_EVENTS) {
-		const eventHooks = hooks[event];
-		if (!Array.isArray(eventHooks)) {
-			missing.push(event);
-			continue;
-		}
-		const found = eventHooks.some((entry: any) => {
-			const inner = entry.hooks || [];
-			return inner.some(
-				(h: any) => typeof h.command === "string" && h.command.includes("session-signal"),
-			);
-		});
-		if (!found) missing.push(event);
-	}
-	return missing;
+/** Revert remote-control to the default (off) by dropping the opt-in flag. */
+export function disableRemoteControl(): string {
+	const configPath = claudeConfigPath();
+	const config = readJsonSafe(configPath);
+	delete config.remoteControlAtStartup;
+	writeJson(configPath, config);
+	return configPath;
 }
 
-export function isSessionSignalConfigured(): boolean {
-	return missingSessionSignalHooks().length === 0;
+// ── Legacy cleanup ────────────────────────────────────────────────────────────
+
+/**
+ * Strip any leftover session-signal hook entries from settings.json. The
+ * session-state feature (and its `santree helpers session-signal` command) was
+ * removed, so these hooks now invoke a command that no longer exists and fire
+ * on every Claude event. Removing them is always safe: we only touch entries
+ * whose command mentions `session-signal`, leaving every other hook on the
+ * shared events untouched. Returns the number of hook entries removed so
+ * callers can report it. Self-healing: running `santree config` once cleans up
+ * an existing install.
+ */
+export function pruneSessionSignalHooks(): number {
+	const settingsPath = claudeSettingsPath();
+	const settings = readJsonSafe(settingsPath);
+	const hooks = settings.hooks;
+	if (!hooks || typeof hooks !== "object") return 0;
+
+	let removed = 0;
+	for (const event of Object.keys(hooks)) {
+		const arr = hooks[event];
+		if (!Array.isArray(arr)) continue;
+		const kept = arr.filter((entry: any) => {
+			const inner = Array.isArray(entry.hooks) ? entry.hooks : [];
+			const isSignal = inner.some(
+				(h: any) => typeof h.command === "string" && h.command.includes("session-signal"),
+			);
+			if (isSignal) removed++;
+			return !isSignal;
+		});
+		if (kept.length === 0) delete hooks[event];
+		else hooks[event] = kept;
+	}
+
+	if (removed > 0) writeJson(settingsPath, settings);
+	return removed;
 }

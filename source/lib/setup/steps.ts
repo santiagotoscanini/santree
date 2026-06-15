@@ -5,29 +5,29 @@ import { isRepoTrackerConfigured } from "../trackers/index.js";
 import { getMultiplexer } from "../multiplexer/index.js";
 import { resolveClaudeBinary } from "../ai.js";
 import { CLAUDE_CODE_PACKAGE, detectPackageManager, getInstallCommandFor } from "../version.js";
-import { installHooks as installSessionSignalHooks } from "../session-signal.js";
 import {
 	isStatuslineConfigured,
 	configureStatusline,
+	removeStatusline,
 	isRemoteControlEnabled,
 	enableRemoteControl,
-	isSessionSignalConfigured,
+	disableRemoteControl,
 } from "../claude-config.js";
 import {
-	resolveShellConfig,
-	upsertManagedLine,
-	isEnvVarSet,
-	envKey,
-	type ShellConfig,
-} from "./shell-config.js";
+	setConfigValue,
+	getConfiguredEditor,
+	getConfiguredDiffTool,
+	configStorePath,
+} from "../config-store.js";
 import { detectDiffPagers, detectEditors, getInstaller, which } from "./tools.js";
 import {
 	missingIgnoreEntries,
 	addIgnoreEntries,
+	removeIgnoreEntries,
 	SANTREE_IGNORE_ENTRIES,
 	type IgnoreTarget,
 } from "./gitignore.js";
-import { spawnTTY, santreeSelfArgv } from "./apply.js";
+import { spawnTTY } from "./apply.js";
 
 export type DetectState = "ok" | "actionable" | "unavailable";
 
@@ -54,18 +54,22 @@ export interface SetupStep {
 	options?: StepOption[];
 	optionPrompt?: string;
 	apply: (choice: string | undefined) => StepResult | Promise<StepResult>;
+	/**
+	 * Reverse `apply`, returning the step to its un-configured state. Present only
+	 * on steps santree fully owns and can cleanly undo (statusline, remote control,
+	 * gitignore). Steps without it have no "off" in the panel.
+	 */
+	unapply?: (choice: string | undefined) => StepResult | Promise<StepResult>;
 }
 
 export interface SetupContext {
 	repoRoot: string | null;
-	shell: ShellConfig;
 	dryRun: boolean;
 }
 
 export function buildContext(dryRun: boolean): SetupContext {
 	return {
 		repoRoot: findMainRepoRoot(),
-		shell: resolveShellConfig(),
 		dryRun,
 	};
 }
@@ -76,18 +80,21 @@ export function buildContext(dryRun: boolean): SetupContext {
  */
 export function buildSteps(ctx: SetupContext): SetupStep[] {
 	const steps: SetupStep[] = [];
-	const { shell, repoRoot, dryRun } = ctx;
+	const { repoRoot, dryRun } = ctx;
 	const installer = getInstaller();
 
-	// ── Editor (SANTREE_EDITOR) ─────────────────────────────────────────────────
+	// ── Editor ──────────────────────────────────────────────────────────────────
 	{
 		const editors = detectEditors();
-		const set = isEnvVarSet("SANTREE_EDITOR", shell);
-		const detect: DetectState = set ? "ok" : editors.length > 0 ? "actionable" : "unavailable";
+		const detect: DetectState = getConfiguredEditor()
+			? "ok"
+			: editors.length > 0
+				? "actionable"
+				: "unavailable";
 		steps.push({
 			id: "editor",
-			title: "Default editor (SANTREE_EDITOR)",
-			detail: "Editor opened by the dashboard's [e] action",
+			title: "Default editor",
+			detail: "Editor opened by the dashboard's [e] action (stored in santree's config)",
 			scope: "global",
 			kind: "file",
 			recommended: true,
@@ -96,18 +103,14 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 			optionPrompt: "Pick your editor:",
 			apply: (choice) => {
 				const editor = choice || editors[0]?.command || "vim";
-				if (dryRun) return { ok: true, message: `Would set SANTREE_EDITOR=${editor}` };
-				upsertManagedLine(
-					shell.rcPath,
-					envKey("SANTREE_EDITOR"),
-					`export SANTREE_EDITOR="${editor}"`,
-				);
-				return { ok: true, message: `Set SANTREE_EDITOR=${editor} in ${shell.rcPath}` };
+				if (dryRun) return { ok: true, message: `Would set editor=${editor}` };
+				setConfigValue("editor", editor);
+				return { ok: true, message: `Set editor to ${editor} in ${configStorePath()}` };
 			},
 		});
 	}
 
-	// ── Diff tool (SANTREE_DIFF_TOOL) ───────────────────────────────────────────
+	// ── Diff tool ───────────────────────────────────────────────────────────────
 	{
 		const pagers = detectDiffPagers();
 		const hasDelta = pagers.some((p) => p.command === "delta");
@@ -118,12 +121,16 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 				label: `git-delta — install via ${installer.name}`,
 			});
 		}
-		const set = isEnvVarSet("SANTREE_DIFF_TOOL", shell);
-		const detect: DetectState = set ? "ok" : options.length > 0 ? "actionable" : "unavailable";
+		const detect: DetectState = getConfiguredDiffTool()
+			? "ok"
+			: options.length > 0
+				? "actionable"
+				: "unavailable";
 		steps.push({
 			id: "diff-tool",
-			title: "Diff tool (SANTREE_DIFF_TOOL)",
-			detail: "Pretty diffs in `worktree diff` and the dashboard [v] overlay",
+			title: "Diff tool",
+			detail:
+				"Pretty diffs in `worktree diff` and the dashboard [v] overlay (stored in santree's config)",
 			scope: "global",
 			kind: installer && !hasDelta ? "spawn" : "file",
 			recommended: true,
@@ -136,24 +143,23 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 				let tool = pick;
 				if (pick.startsWith("install:")) {
 					tool = pick.slice("install:".length);
+					// `install:` options are only offered when an installer exists, but
+					// guard explicitly so a broken invariant degrades instead of NPEs.
+					if (!installer) return { ok: false, message: "No installer available for git-delta" };
 					if (dryRun) {
 						return {
 							ok: true,
-							message: `Would ${installer!.installArgv("git-delta").join(" ")} then set SANTREE_DIFF_TOOL=${tool}`,
+							message: `Would ${installer.installArgv("git-delta").join(" ")} then set diffTool=${tool}`,
 						};
 					}
-					const argv = installer!.installArgv("git-delta");
+					const argv = installer.installArgv("git-delta");
 					const code = spawnTTY(argv[0]!, argv.slice(1));
 					if (code !== 0)
-						return { ok: false, message: "git-delta install failed — SANTREE_DIFF_TOOL not set" };
+						return { ok: false, message: "git-delta install failed — diff tool not set" };
 				}
-				if (dryRun) return { ok: true, message: `Would set SANTREE_DIFF_TOOL=${tool}` };
-				upsertManagedLine(
-					shell.rcPath,
-					envKey("SANTREE_DIFF_TOOL"),
-					`export SANTREE_DIFF_TOOL="${tool}"`,
-				);
-				return { ok: true, message: `Set SANTREE_DIFF_TOOL=${tool} in ${shell.rcPath}` };
+				if (dryRun) return { ok: true, message: `Would set diffTool=${tool}` };
+				setConfigValue("diffTool", tool);
+				return { ok: true, message: `Set diff tool to ${tool} in ${configStorePath()}` };
 			},
 		});
 	}
@@ -161,8 +167,8 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 	// ── Statusline ──────────────────────────────────────────────────────────────
 	steps.push({
 		id: "statusline",
-		title: "Claude Code statusline",
-		detail: "Worktree-aware statusline (branch, context usage, session state)",
+		title: "Statusline",
+		detail: "Worktree-aware statusline (branch, git changes, context usage)",
 		scope: "global",
 		kind: "file",
 		recommended: true,
@@ -173,32 +179,18 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 			const p = configureStatusline();
 			return { ok: true, message: `Configured statusline in ${p}` };
 		},
-	});
-
-	// ── Session-signal hooks ────────────────────────────────────────────────────
-	steps.push({
-		id: "session-signal",
-		title: "Session-state signal hooks",
-		detail: "Surface Claude session state (waiting/active/idle) in the dashboard",
-		scope: "global",
-		kind: "file",
-		recommended: true,
-		detect: isSessionSignalConfigured() ? "ok" : "actionable",
-		apply: () => {
+		unapply: () => {
 			if (dryRun)
-				return {
-					ok: true,
-					message: "Would install session-signal hooks in ~/.claude/settings.json",
-				};
-			const p = installSessionSignalHooks();
-			return { ok: true, message: `Installed session-signal hooks in ${p}` };
+				return { ok: true, message: "Would remove statusLine from ~/.claude/settings.json" };
+			const p = removeStatusline();
+			return { ok: true, message: `Removed statusline from ${p}` };
 		},
 	});
 
 	// ── Remote control ──────────────────────────────────────────────────────────
 	steps.push({
 		id: "remote-control",
-		title: "Claude Code remote control",
+		title: "Remote control",
 		detail: "Enable remote control at startup (drive sessions from the dashboard)",
 		scope: "global",
 		kind: "file",
@@ -209,6 +201,12 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 				return { ok: true, message: "Would set remoteControlAtStartup in ~/.claude.json" };
 			const p = enableRemoteControl();
 			return { ok: true, message: `Enabled remote control in ${p}` };
+		},
+		unapply: () => {
+			if (dryRun)
+				return { ok: true, message: "Would unset remoteControlAtStartup in ~/.claude.json" };
+			const p = disableRemoteControl();
+			return { ok: true, message: `Disabled remote control in ${p}` };
 		},
 	});
 
@@ -224,7 +222,7 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 				: "unavailable";
 		steps.push({
 			id: "gh",
-			title: "GitHub CLI (gh) auth",
+			title: "GitHub CLI",
 			detail: "Required for PR create / review / checks",
 			scope: "global",
 			kind: "spawn",
@@ -256,7 +254,7 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 		const installed = !!resolveClaudeBinary();
 		steps.push({
 			id: "claude",
-			title: "Claude Code CLI",
+			title: "Claude Code",
 			detail: "Powers `worktree work`, `pr fix`, `pr review`",
 			scope: "global",
 			kind: "spawn",
@@ -279,7 +277,7 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 		const detect: DetectState = active ? "ok" : installer ? "actionable" : "unavailable";
 		steps.push({
 			id: "tmux",
-			title: "tmux (terminal multiplexer)",
+			title: "tmux",
 			detail: "Enables new-window flows: work / fix / review / investigate",
 			scope: "global",
 			kind: "spawn",
@@ -316,7 +314,7 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 			}
 			steps.push({
 				id: "scaffold",
-				title: ".santree scaffold",
+				title: "Repo scaffold",
 				detail: "Create .santree/ and an executable init.sh (runs on worktree create)",
 				scope: "repo",
 				kind: "file",
@@ -343,7 +341,7 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 			const missing = missingIgnoreEntries(repoRoot);
 			steps.push({
 				id: "gitignore",
-				title: "Ignore santree's machine files",
+				title: "Gitignore entries",
 				detail: `Ignore ${SANTREE_IGNORE_ENTRIES.join(", ")} (keeps .santree/issues/ tracked)`,
 				scope: "repo",
 				kind: "file",
@@ -368,6 +366,16 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 						message: `Added ${added.length} entr${added.length === 1 ? "y" : "ies"} to ${where}`,
 					};
 				},
+				unapply: () => {
+					if (dryRun) return { ok: true, message: "Would remove santree's ignore entries" };
+					const removed = removeIgnoreEntries(repoRoot);
+					return {
+						ok: true,
+						message: removed.length
+							? `Removed ${removed.length} entr${removed.length === 1 ? "y" : "ies"}`
+							: "No santree ignore entries to remove",
+					};
+				},
 			});
 		}
 
@@ -378,17 +386,11 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 				title: "Issue tracker",
 				detail: "Pick + authenticate Linear / GitHub / Local for this repo",
 				scope: "repo",
-				kind: "spawn",
+				kind: "file",
 				recommended: true,
 				detect: isRepoTrackerConfigured(repoRoot) ? "ok" : "actionable",
-				apply: () => {
-					if (dryRun) return { ok: true, message: "Would run: santree issue setup" };
-					const { cmd, args } = santreeSelfArgv(["issue", "setup"]);
-					const code = spawnTTY(cmd, args, { cwd: repoRoot });
-					return code === 0
-						? { ok: true, message: "Issue tracker configured" }
-						: { ok: false, message: "Tracker setup did not complete" };
-				},
+				// Driven by the config panel's inline TrackerPicker; apply is unused.
+				apply: () => ({ ok: true, message: "Pick a tracker from the config panel" }),
 			});
 		}
 	}

@@ -3,20 +3,13 @@ import { promisify } from "util";
 import * as path from "path";
 import * as fs from "fs";
 import { run, runAsync, spawnAsync } from "./exec.js";
-import { getMultiplexer } from "./multiplexer/index.js";
+import { getConfiguredDiffTool } from "./config-store.js";
 import { getSantreeDir, readAllMetadata, writeAllMetadata } from "./metadata.js";
 import { getIssueTracker } from "./trackers/index.js";
 
 export { getSantreeDir, readAllMetadata, writeAllMetadata } from "./metadata.js";
 
 const execAsync = promisify(exec);
-
-export interface SessionState {
-	state: "waiting" | "idle" | "active" | "exited";
-	message: string | null;
-	session_id: string;
-	at: string;
-}
 
 export interface Worktree {
 	path: string;
@@ -253,7 +246,7 @@ export async function removeWorktree(
 			fs.rmSync(worktreePath, { recursive: true, force: true });
 		}
 
-		// Clean up centralized metadata entry and session state
+		// Clean up centralized metadata entry
 		const ticketId = extractTicketId(branchName);
 		if (ticketId) {
 			const all = readAllMetadata(repoRoot);
@@ -261,7 +254,6 @@ export async function removeWorktree(
 				delete all[ticketId];
 				writeAllMetadata(repoRoot, all);
 			}
-			clearSessionState(repoRoot, ticketId);
 		}
 
 		// Also delete the branch
@@ -507,24 +499,17 @@ export async function getCommitsBehindAsync(cwd: string, baseBranch: string): Pr
 }
 
 /**
- * Read the SANTREE_DIFF_TOOL env var, returning the configured diff pager
- * command (e.g. "delta", "diff-so-fancy") or null if unset/invalid.
+ * Resolve the configured diff pager command (e.g. "delta", "diff-so-fancy"),
+ * or null if unset/invalid. Source order: `SANTREE_DIFF_TOOL` env override →
+ * santree's config file (set from `santree config`). See `lib/config-store.ts`.
  *
  * The CLI `worktree diff` flow lets the pager do its full job (render +
  * scroll) via git's `core.pager`. The dashboard's `[v]` overlay only uses
  * the rendering half — it captures the pager's stdout as a string and
  * handles scrolling itself in Ink.
- *
- * The value is restricted to a safe shell-token character set since it ends
- * up in arguments passed to spawn() — even though we never use shell:true,
- * keeping the surface tight defends against accidental misconfigurations.
  */
 export function getDiffTool(): string | null {
-	const raw = process.env["SANTREE_DIFF_TOOL"];
-	if (!raw || !raw.trim()) return null;
-	const tool = raw.trim();
-	if (!/^[a-zA-Z0-9_\-/.+]+$/.test(tool)) return null;
-	return tool;
+	return getConfiguredDiffTool() ?? null;
 }
 
 export interface DiffShortstat {
@@ -798,51 +783,5 @@ export async function discardFile(
 	);
 	if (code !== 0) {
 		throw new Error(`git checkout HEAD failed: ${output.trim()}`);
-	}
-}
-
-/**
- * Get the path to the .santree/session-states directory.
- */
-function getSessionStatesDir(repoRoot: string): string {
-	return path.join(getSantreeDir(repoRoot), "session-states");
-}
-
-/**
- * Read the session state file for a given ticket.
- * Returns null if missing or "exited".
- */
-export function readSessionState(repoRoot: string, ticketId: string): SessionState | null {
-	const filePath = path.join(getSessionStatesDir(repoRoot), `${ticketId}.json`);
-	if (!fs.existsSync(filePath)) return null;
-	try {
-		const data: SessionState = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-		if (data.state === "exited") return null;
-		return data;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Check if a session for the given ticket is still alive in the active multiplexer.
- * Delegates to the configured multiplexer (tmux: pane_pid + pgrep claude;
- * cmux: workspace lookup; none: always false). Callers should also consult the
- * .santree/session-states/<ticketId>.json file — that's the authoritative signal
- * written by Claude Code hooks, while this is the "is the terminal still up" backstop.
- */
-export function isSessionAlive(ticketId: string): boolean {
-	return getMultiplexer().isSessionAlive(ticketId);
-}
-
-/**
- * Delete the session state file for a given ticket.
- */
-export function clearSessionState(repoRoot: string, ticketId: string): void {
-	const filePath = path.join(getSessionStatesDir(repoRoot), `${ticketId}.json`);
-	try {
-		fs.unlinkSync(filePath);
-	} catch {
-		// Ignore if file doesn't exist
 	}
 }

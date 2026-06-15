@@ -33,6 +33,64 @@ export async function getPRInfoAsync(branchName: string): Promise<PRInfo | null>
 	}
 }
 
+/** GitHub's mergeability signals for a PR (subset we act on). */
+export interface PRMergeState {
+	/** "MERGEABLE" | "CONFLICTING" | "UNKNOWN" */
+	mergeable: string;
+	/** "BEHIND" | "BLOCKED" | "CLEAN" | "DIRTY" | "DRAFT" | "HAS_HOOKS" | "UNKNOWN" | "UNSTABLE" */
+	mergeStateStatus: string;
+	/** True when the branch has conflicts with its base that need resolving. */
+	hasConflicts: boolean;
+}
+
+/**
+ * Fetch a PR's mergeability for a branch. `CONFLICTING` (or a `DIRTY` merge-state)
+ * means the branch conflicts with its base and needs a merge/resolve before CI can
+ * pass. Returns null if no PR exists or gh fails. GitHub computes mergeability
+ * asynchronously, so `mergeable` is `UNKNOWN` briefly after a push — callers should
+ * treat `UNKNOWN` as "don't know yet", not "no conflicts".
+ */
+export async function getPRMergeStateAsync(branchName: string): Promise<PRMergeState | null> {
+	try {
+		const { stdout } = await execAsync(
+			`gh pr view "${branchName}" --json mergeable,mergeStateStatus`,
+		);
+		const data = JSON.parse(stdout);
+		const mergeable = String(data.mergeable ?? "UNKNOWN");
+		const mergeStateStatus = String(data.mergeStateStatus ?? "UNKNOWN");
+		return {
+			mergeable,
+			mergeStateStatus,
+			hasConflicts: mergeable === "CONFLICTING" || mergeStateStatus === "DIRTY",
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Classify a CI check as something an AI agent can plausibly fix on its own
+ * ("fixable" — tests, types, lint, format, coverage) vs. one that needs a human or
+ * infra ("manual" — deploys, releases, image builds, e2e, security scans). Matched
+ * case-insensitively against the check's name + workflow. **Unknown ⇒ "manual"**:
+ * the fix loop should only touch failures it's confident about and stop otherwise.
+ * Extend the keyword lists as new check conventions appear (cf. HIDDEN_STATE_NAMES).
+ */
+// Trailing \b only (no leading boundary) so test-runner prefixes and plurals
+// match: "pytest", "tests", "rspec", "codecov" all count as fixable.
+export const FIXABLE_CHECK_PATTERN =
+	/(tests?|specs?|jest|vitest|mocha|junit|phpunit|lint|format|prettier|eslint|ruff|black|gofmt|rustfmt|type[\s-]?check|tsc|mypy|pyright|coverage|cov)\b/i;
+export const MANUAL_CHECK_PATTERN =
+	/\b(deploy|release|publish|build[\s-]?image|docker|e2e|end[\s-]?to[\s-]?end|integration|smoke|terraform|infra|migrat|codeql|security|scan|sign|notariz)\b/i;
+
+export function classifyCheck(check: Pick<PRCheck, "name" | "workflow">): "fixable" | "manual" {
+	const haystack = `${check.name} ${check.workflow}`;
+	// Manual wins ties: a "deploy tests" job is safer treated as manual.
+	if (MANUAL_CHECK_PATTERN.test(haystack)) return "manual";
+	if (FIXABLE_CHECK_PATTERN.test(haystack)) return "fixable";
+	return "manual";
+}
+
 /**
  * Check if the GitHub CLI (gh) is available on PATH.
  * Runs: `which gh`
@@ -158,6 +216,120 @@ export async function getPRReviewCommentsAsync(
 	} catch {
 		return null;
 	}
+}
+
+/** Per-process cache of the authenticated GitHub login (the "viewer"). */
+let viewerLoginCache: Promise<string | null> | null = null;
+
+/**
+ * The authenticated GitHub user's login (GraphQL `viewer`). Cached per process.
+ * Used to gate auto-applying a review comment on the PR owner's OWN 👍 — a
+ * reviewer can't self-approve their comment for the fix loop.
+ */
+export function getViewerLoginAsync(): Promise<string | null> {
+	if (viewerLoginCache) return viewerLoginCache;
+	viewerLoginCache = (async () => {
+		try {
+			const { stdout } = await execAsync(
+				`gh api graphql -f query='{ viewer { login } }' --jq .data.viewer.login`,
+			);
+			return stdout.trim() || null;
+		} catch {
+			return null;
+		}
+	})();
+	return viewerLoginCache;
+}
+
+export interface PRReviewThreadComment {
+	author: string;
+	body: string;
+	path: string | null;
+	/** Current line, falling back to the original line for outdated comments. */
+	line: number | null;
+	diffHunk: string;
+	createdAt: string;
+	/** Logins of users who reacted 👍 (THUMBS_UP) to this comment. */
+	thumbsUpBy: string[];
+}
+
+/** A PR review thread (an inline comment + its replies) with resolution state. */
+export interface PRReviewThread {
+	/** GraphQL node id — used to resolve the thread after the fix is applied. */
+	id: string;
+	isResolved: boolean;
+	isOutdated: boolean;
+	path: string | null;
+	/** Anchor line in the current diff, falling back to the original line. */
+	line: number | null;
+	comments: PRReviewThreadComment[];
+}
+
+/**
+ * Fetch a PR's review threads with resolution state and per-comment 👍 reactions.
+ * The REST comments endpoint exposes neither, so this goes through GraphQL.
+ * Returns null if the repo can't be resolved or gh fails.
+ */
+export async function getPRReviewThreadsAsync(prNumber: string): Promise<PRReviewThread[] | null> {
+	const repo = await getRepoNameAsync();
+	if (!repo) return null;
+	const [owner, name] = repo.split("/");
+	if (!owner || !name) return null;
+
+	// Single-line query (GraphQL ignores whitespace); single-quoted for the shell.
+	// `first` bounds keep us well under GitHub's query-complexity cap.
+	const query =
+		`query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){` +
+		`pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved isOutdated path line originalLine ` +
+		`comments(first:50){nodes{author{login} body path line originalLine diffHunk createdAt ` +
+		`reactions(first:50){nodes{content user{login}}}}}}}}}}`;
+	const output = await runAsync(
+		`gh api graphql -f query='${query}' -f owner='${owner}' -f name='${name}' -F number=${Number(prNumber)}`,
+	);
+	if (!output) return null;
+	try {
+		const data = JSON.parse(output);
+		const nodes = data?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+		return nodes.map((t: any) => ({
+			id: String(t.id),
+			isResolved: !!t.isResolved,
+			isOutdated: !!t.isOutdated,
+			path: t.path ?? null,
+			line: t.line ?? t.originalLine ?? null,
+			comments: (t.comments?.nodes ?? []).map((c: any) => ({
+				author: c.author?.login ?? "unknown",
+				body: c.body ?? "",
+				path: c.path ?? null,
+				line: c.line ?? c.originalLine ?? null,
+				diffHunk: c.diffHunk ?? "",
+				createdAt: c.createdAt ?? "",
+				thumbsUpBy: (c.reactions?.nodes ?? [])
+					.filter((r: any) => r.content === "THUMBS_UP")
+					.map((r: any) => r.user?.login)
+					.filter(Boolean),
+			})),
+		}));
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Filter review threads to the ones the fix loop should act on: **unresolved**
+ * AND whose **last comment carries a 👍 from `approver`** (the viewer's own
+ * approval). Resolved threads are dropped entirely — resolved means the ask was
+ * already applied or deliberately declined. The 👍 gate stops the loop from
+ * applying a comment the moment it's left, before the PR owner has vetted it.
+ */
+export function getApprovedReviewThreads(
+	threads: PRReviewThread[],
+	approver: string,
+): PRReviewThread[] {
+	return threads.filter((t) => {
+		if (t.isResolved) return false;
+		const last = t.comments[t.comments.length - 1];
+		return !!last && last.thumbsUpBy.includes(approver);
+	});
 }
 
 /**

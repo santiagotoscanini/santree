@@ -6,7 +6,7 @@ nav_order: 10
 # Issue trackers
 {: .no_toc }
 
-Santree supports Linear and GitHub Issues behind a single interface. Each repo picks one.
+Santree supports Linear, GitHub Issues, and a built-in Local (file-based) tracker behind a single interface. Each repo picks one.
 
 1. TOC
 {:toc}
@@ -17,19 +17,18 @@ Santree supports Linear and GitHub Issues behind a single interface. Each repo p
 
 The active tracker is resolved in this order:
 
-1. `SANTREE_TRACKER` env var (one-off override)
-2. Per-repo `_tracker.kind` in `.santree/metadata.json`
+1. `SANTREE_TRACKER` env var (one-off override — `linear`, `github`, or `local`)
+2. Per-repo `_tracker.kind` in `.santree/metadata.json` (`linear` / `github` / `local`)
 3. Legacy `_linear.org` (treated as Linear, for back-compat)
 4. Auto-detect — any Linear creds present → Linear, else GitHub
 
-To set the per-repo tracker explicitly:
+The easiest way to pick is the **Issue tracker** row under **This repo** in `santree config`:
 
 ```bash
-santree issue switch linear
-santree issue switch github
+santree config
 ```
 
-The auth commands also flip the tracker as a side effect, so usually you just run the auth command for whichever backend you want and you're done.
+Selecting that row drills into Local / Linear / GitHub, marks the one in use, and switches the moment you select. Picking Linear lets you choose an authenticated workspace or authenticate a new one inline; picking GitHub switches if `gh` is logged in, otherwise tells you to run `gh auth login`. The dashboard's `t` key opens the same picker.
 
 For one-off overrides (testing, scripting):
 
@@ -57,14 +56,11 @@ santree linear auth --test TEAM-123
 
 # Log out
 santree linear auth --logout
-
-# Switch between authenticated workspaces
-santree linear switch
 ```
 
 On first run, `santree linear auth` opens your browser to authorize the app with your Linear workspace. Tokens are stored in `$XDG_CONFIG_HOME/santree/auth.json` (defaults to `~/.config/santree/auth.json`) and auto-refresh transparently.
 
-If you have multiple workspaces authenticated, running `santree linear auth` in a new repo lets you pick which one to link.
+To switch between authenticated workspaces for a repo, open the **Issue tracker** row in `santree config` and pick Linear — it lists every workspace you've authenticated (plus a row to authenticate a new one).
 
 ### What gets fetched
 
@@ -91,11 +87,14 @@ Santree uses the existing `gh` CLI — no separate OAuth.
 ### Auth
 
 ```bash
-# Verify gh is authenticated; flip this repo's tracker to GitHub
-santree github auth
+# Authenticate the gh CLI yourself (santree never does this for you):
+gh auth login
+
+# Then pick GitHub as this repo's tracker via the Issue tracker row:
+santree config   # This repo → Issue tracker → GitHub
 ```
 
-`gh` owns its own token; santree never writes a GitHub token of its own.
+`gh` owns its own token; santree never writes a GitHub token of its own — that's why you log in with `gh auth login` directly. Selecting GitHub in `santree config` only verifies the login and sets the tracker.
 
 ### What gets fetched
 

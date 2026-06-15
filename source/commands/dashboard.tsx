@@ -24,7 +24,8 @@ import {
 	unstageAll,
 	discardFile,
 } from "../lib/git.js";
-import { run, spawnAsync } from "../lib/exec.js";
+import { run, spawnAsync, execFileAsync } from "../lib/exec.js";
+import { getConfiguredEditor } from "../lib/config-store.js";
 import { printCdHint } from "../lib/cd-hint.js";
 import {
 	resolveAgentBinary,
@@ -40,6 +41,8 @@ import {
 } from "../lib/triage-config.js";
 import { getInstalledClaudeVersion } from "../lib/version.js";
 import { extractTicketId, getStagedDiffContent } from "../lib/git.js";
+import { santreeSelfArgv } from "../lib/setup/apply.js";
+import { startFixLoop } from "../lib/fix-loop.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
 import { shellEscape } from "../lib/multiplexer/types.js";
 import Spinner from "ink-spinner";
@@ -53,7 +56,7 @@ import { getAuthenticatedUser, getCurrentRepoNwo } from "../lib/trackers/github/
 import { openUrl } from "../lib/open-url.js";
 import { parseUnifiedDiff } from "../lib/diff-parse.js";
 import * as os from "os";
-import type { DashboardIssue, ProjectGroup } from "../lib/dashboard/types.js";
+import type { DashboardIssue, ProjectGroup, DashboardTab } from "../lib/dashboard/types.js";
 import { initialState, reducer } from "../lib/dashboard/types.js";
 import { loadDashboardData, loadReviewsData } from "../lib/dashboard/data.js";
 import IssueList, { buildIssueListRows } from "../lib/dashboard/IssueList.js";
@@ -366,6 +369,36 @@ function Tab({ active, label, mode }: { active: boolean; label: string; mode: "l
 	return <Text>{` ${label} `}</Text>;
 }
 
+const TAB_NAMES: Record<DashboardTab, string> = {
+	triage: "Triage",
+	issues: "Issues",
+	trees: "Trees",
+	reviews: "Reviews",
+};
+
+/**
+ * Column ranges (1-based, absolute) of each tab pill in the tab strip, so a
+ * row-2 click maps to the right tab. Must mirror the renderer exactly: the strip
+ * Box has `paddingX={1}` (first pill at col 2), each `<Tab>` pill is `" label "`
+ * (label + 2), and a 1-space separator sits between pills. Labels embed the live
+ * counts, so widths shift as data refreshes — always pass current counts.
+ */
+function computeTabHitboxes(
+	order: DashboardTab[],
+	counts: Record<DashboardTab, number>,
+): Array<{ tab: DashboardTab; start: number; end: number }> {
+	const boxes: Array<{ tab: DashboardTab; start: number; end: number }> = [];
+	let col = 2; // paddingX={1} on the row-2 Box → first pill starts at col 2
+	order.forEach((tab, i) => {
+		if (i > 0) col += 1; // 1-space separator between pills
+		const label = `${i + 1} ${TAB_NAMES[tab]} (${counts[tab]})`;
+		const width = label.length + 2; // pill renders ` label `
+		boxes.push({ tab, start: col, end: col + width - 1 });
+		col += width;
+	});
+	return boxes;
+}
+
 /**
  * Single-line global keymap shown at the bottom-left of the dashboard. The
  * `E workspace` hint only appears when the action is meaningful
@@ -470,6 +503,10 @@ export default function Dashboard() {
 	const repoRootRef = useRef<string | null>(null);
 	const stateRef = useRef(state);
 	stateRef.current = state;
+	// Kept in sync so the long-lived mouse handler can rebuild the tab order
+	// (which depends on whether Triage is present) for click-to-switch.
+	const supportsTriageRef = useRef(supportsTriage);
+	supportsTriageRef.current = supportsTriage;
 	const draggingRef = useRef<"main" | "diff" | null>(null);
 
 	const [termSize, setTermSize] = useState({
@@ -556,10 +593,11 @@ export default function Dashboard() {
 		}
 
 		try {
-			// Re-detect terminal theme alongside data fetch so light↔dark
-			// switches propagate within one refresh cycle (≤5min, or sooner
-			// on a manual `R`). Skip the
-			// OSC 11 query when a text-input overlay is active — the
+			// Refresh the colorscheme FIRST — it's the most visible change, so on a
+			// manual `R` (or a light↔dark switch) the theme should flip immediately
+			// rather than waiting on the slower gh-backed data fetch below. Detect +
+			// apply it, then load everything else.
+			// Skip the OSC 11 query when a text-input overlay is active — the
 			// terminal's response would otherwise leak into the user's
 			// commit/PR/context message via Ink's stdin handler.
 			const overlay = stateRef.current.overlay;
@@ -568,17 +606,17 @@ export default function Dashboard() {
 				(overlay === "triage-ask" && stateRef.current.triageAskPhase === "input") ||
 				(overlay === "pr-create" && stateRef.current.prCreatePhase === "review") ||
 				(overlay === "commit" && stateRef.current.commitPhase === "awaiting-message");
-			const themeP = inTextInput ? Promise.resolve<null>(null) : detectTerminalTheme();
-			const [data, reviewData, themeMode] = await Promise.all([
+			const themeMode = inTextInput ? null : await detectTerminalTheme();
+			if (themeMode !== null) setTheme(getThemeForMode(themeMode));
+
+			const [data, reviewData] = await Promise.all([
 				loadDashboardData(repoRoot),
 				loadReviewsData(repoRoot),
-				themeP,
 			]);
-			if (themeMode !== null) setTheme(getThemeForMode(themeMode));
 			// Workspace file presence — only meaningful when the editor consumes
 			// `.code-workspace` files. Cheap directory read; recomputed each cycle
 			// in case the user adds/removes one.
-			const editor = (process.env.SANTREE_EDITOR ?? "code").toLowerCase();
+			const editor = (getConfiguredEditor() ?? "code").toLowerCase();
 			const editorAcceptsWorkspace = editor === "code" || editor === "cursor";
 			let hasWs = false;
 			if (editorAcceptsWorkspace) {
@@ -752,6 +790,28 @@ export default function Dashboard() {
 			}
 
 			if (!isPress) return;
+
+			// Tab strip click (row 2) — switch tabs by clicking, like the 1–N keys.
+			// Ignored while any overlay is up or data isn't ready.
+			{
+				const s = stateRef.current;
+				if (row === 2 && s.overlay === null && !s.loading && !s.error) {
+					const order: DashboardTab[] = supportsTriageRef.current
+						? ["triage", "issues", "trees", "reviews"]
+						: ["issues", "trees", "reviews"];
+					const counts: Record<DashboardTab, number> = {
+						triage: s.flatTriage.length,
+						issues: s.flatIssues.length,
+						trees: s.flatTrees.length,
+						reviews: s.flatReviews.length,
+					};
+					const hit = computeTabHitboxes(order, counts).find((b) => col >= b.start && col <= b.end);
+					if (hit) {
+						if (hit.tab !== s.activeTab) dispatch({ type: "SET_TAB", tab: hit.tab });
+						return;
+					}
+				}
+			}
 
 			// Diff overlay click: drag divider, or select file row in left pane
 			{
@@ -1268,6 +1328,8 @@ export default function Dashboard() {
 					name: windowName,
 					cwd: worktreePath,
 					command: cmd,
+					group: di.issue.projectName ?? undefined,
+					tabName: "work",
 				});
 				if (created.ok) {
 					dispatch({
@@ -1295,6 +1357,7 @@ export default function Dashboard() {
 			worktreePath: string,
 			ticketId: string,
 			contextFile?: string,
+			group?: string,
 		) => {
 			const mux = getMultiplexer();
 			if (mux.isActive()) {
@@ -1308,6 +1371,8 @@ export default function Dashboard() {
 					name: windowName,
 					cwd: worktreePath,
 					command: workCmd,
+					group,
+					tabName: "work",
 				});
 				if (created.ok) {
 					dispatch({
@@ -1449,7 +1514,13 @@ export default function Dashboard() {
 
 			// 4. Done — launch work
 			dispatch({ type: "CREATION_DONE" });
-			launchAfterCreation(mode, result.path, ticketId, contextFile);
+			launchAfterCreation(
+				mode,
+				result.path,
+				ticketId,
+				contextFile,
+				di.issue.projectName ?? undefined,
+			);
 		},
 		[launchAfterCreation],
 	);
@@ -1634,7 +1705,7 @@ export default function Dashboard() {
 			if (!user) {
 				dispatch({
 					type: "TRACKER_SELECT_MESSAGE",
-					message: "GitHub CLI not authenticated. Run: santree github auth",
+					message: "GitHub CLI not authenticated. Run: gh auth login",
 				});
 				return;
 			}
@@ -1805,7 +1876,9 @@ export default function Dashboard() {
 
 			dispatch({ type: "COMMIT_PHASE", phase: "committing" });
 			try {
-				await execAsync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, {
+				// Array args (no shell) — the message is user-typed and may contain
+				// backticks, `$(…)`, quotes, or backslashes.
+				await execFileAsync("git", ["commit", "-m", msg], {
 					cwd: s.commitWorktreePath,
 				});
 			} catch (e: any) {
@@ -1818,7 +1891,9 @@ export default function Dashboard() {
 
 			dispatch({ type: "COMMIT_PHASE", phase: "pushing" });
 			try {
-				await execAsync(`git push -u origin "${s.commitBranch}"`, { cwd: s.commitWorktreePath });
+				await execFileAsync("git", ["push", "-u", "origin", s.commitBranch], {
+					cwd: s.commitWorktreePath,
+				});
 			} catch (e: any) {
 				dispatch({ type: "COMMIT_ERROR", error: e?.stderr?.trim() || e?.message || "Push failed" });
 				return;
@@ -1836,7 +1911,7 @@ export default function Dashboard() {
 	// ── Editor actions ───────────────────────────────────────────────
 
 	const openInEditor = useCallback((wtPath: string) => {
-		const editor = process.env.SANTREE_EDITOR || "code";
+		const editor = getConfiguredEditor() || "code";
 		spawn(editor, [wtPath], { detached: true, stdio: "ignore" }).unref();
 		dispatch({
 			type: "SET_ACTION_MESSAGE",
@@ -1847,7 +1922,7 @@ export default function Dashboard() {
 	const openWorkspace = useCallback(() => {
 		const repoRoot = repoRootRef.current;
 		if (!repoRoot) return;
-		const editor = process.env.SANTREE_EDITOR || "code";
+		const editor = getConfiguredEditor() || "code";
 		try {
 			const entries = fs.readdirSync(repoRoot);
 			const wsFile = entries.find((f) => f.endsWith(".code-workspace"));
@@ -2765,7 +2840,9 @@ export default function Dashboard() {
 					(async () => {
 						try {
 							dispatch({ type: "CREATION_LOG", logs: `Fetching ${ri.branch}...\n` });
-							await execAsync(`git fetch origin ${ri.branch}`, { cwd: repoRoot });
+							// Array args (no shell) — foreign PR branch names are not
+							// locally slugified and could otherwise inject.
+							await execFileAsync("git", ["fetch", "origin", ri.branch!], { cwd: repoRoot });
 
 							dispatch({ type: "CREATION_LOG", logs: `Creating worktree...\n` });
 							const result = await createWorktree(
@@ -2822,7 +2899,7 @@ export default function Dashboard() {
 							dispatch({ type: "CREATION_DONE" });
 							dispatch({ type: "SET_ACTION_MESSAGE", message: `Worktree created for ${ticketId}` });
 							// Open in editor automatically
-							const editor = process.env.SANTREE_EDITOR || "code";
+							const editor = getConfiguredEditor() || "code";
 							spawn(editor, [result.path], { detached: true, stdio: "ignore" }).unref();
 							refresh();
 						} catch (e: any) {
@@ -2838,7 +2915,7 @@ export default function Dashboard() {
 						dispatch({ type: "SET_ACTION_MESSAGE", message: "No worktree (press w to checkout)" });
 						return;
 					}
-					const editor = process.env.SANTREE_EDITOR || "code";
+					const editor = getConfiguredEditor() || "code";
 					spawn(editor, [ri.worktree.path], { detached: true, stdio: "ignore" }).unref();
 					dispatch({ type: "SET_ACTION_MESSAGE", message: `Opened in ${editor}` });
 					return;
@@ -2855,18 +2932,22 @@ export default function Dashboard() {
 					}
 					const mux = getMultiplexer();
 					if (mux.isActive()) {
-						const windowName = `review-${extractTicketId(ri.branch ?? "") ?? ri.pr.number}`;
+						const ticketId = extractTicketId(ri.branch ?? "") ?? `pr-${ri.pr.number}`;
 						const cwd = ri.worktree.path;
 						void (async () => {
-							const created = await mux.createWindow({
-								name: windowName,
+							// Open review as a `review` tab inside the ticket's workspace
+							// when one exists; addTab falls back to a new window otherwise.
+							const created = await mux.addTab({
+								windowName: ticketId,
+								tabName: "review",
 								cwd,
 								command: "santree pr review",
+								group: ri.ticket?.projectName ?? undefined,
 							});
 							dispatch({
 								type: "SET_ACTION_MESSAGE",
 								message: created.ok
-									? "Launched AI review in new window"
+									? "Launched AI review in review tab"
 									: `Failed to launch review${created.message ? `: ${created.message}` : ""}`,
 							});
 						})();
@@ -2944,7 +3025,7 @@ export default function Dashboard() {
 					if (di.worktree?.sessionId) {
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
-							message: "Session active — switch to the Trees tab to resume.",
+							message: "A Claude session exists — switch to the Trees tab to resume.",
 						});
 						return;
 					}
@@ -2988,7 +3069,12 @@ export default function Dashboard() {
 					const command = buildInvestigateCommand(resolveClaudeBinary() ?? "claude", prompt);
 					const windowName = `investigate-${di.issue.identifier}`;
 					void (async () => {
-						const created = await mux.createWindow({ name: windowName, cwd: root, command });
+						const created = await mux.createWindow({
+							name: windowName,
+							cwd: root,
+							command,
+							group: di.issue.projectName ?? undefined,
+						});
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
 							message: created.ok
@@ -3056,7 +3142,7 @@ export default function Dashboard() {
 					if (di.worktree?.sessionId) {
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
-							message: "Session active — switch to the Trees tab to resume.",
+							message: "A Claude session exists — switch to the Trees tab to resume.",
 						});
 						return;
 					}
@@ -3124,7 +3210,7 @@ export default function Dashboard() {
 				if (di.worktree?.sessionId) {
 					dispatch({
 						type: "SET_ACTION_MESSAGE",
-						message: "Session active. Press Enter to resume.",
+						message: "A Claude session exists. Press Enter to resume.",
 					});
 					return;
 				}
@@ -3157,6 +3243,8 @@ export default function Dashboard() {
 							name: windowName,
 							cwd: worktreePath,
 							command: cmd,
+							group: di.issue.projectName ?? undefined,
+							tabName: "work",
 						});
 						if (!created.ok) {
 							dispatch({
@@ -3224,18 +3312,21 @@ export default function Dashboard() {
 				}
 				const mux = getMultiplexer();
 				if (mux.isActive()) {
-					const windowName = `review-${di.issue.identifier}`;
 					const cwd = di.worktree.path;
 					void (async () => {
-						const created = await mux.createWindow({
-							name: windowName,
+						// Open review as a `review` tab inside the ticket's workspace
+						// (next to `work`), not as a separate window.
+						const created = await mux.addTab({
+							windowName: di.issue.identifier,
+							tabName: "review",
 							cwd,
 							command: "santree pr review",
+							group: di.issue.projectName ?? undefined,
 						});
 						dispatch({
 							type: "SET_ACTION_MESSAGE",
 							message: created.ok
-								? "Launched review in new window"
+								? "Launched review in review tab"
 								: `Failed to launch review${created.message ? `: ${created.message}` : ""}`,
 						});
 					})();
@@ -3287,34 +3378,49 @@ export default function Dashboard() {
 				return;
 			}
 
-			// Fix PR
+			// Fix PR — launch a self-driving fix loop (re-checks CI + conflicts every 5 min)
 			if (input === "f") {
 				if (!di.pr || !di.worktree) {
 					dispatch({ type: "SET_ACTION_MESSAGE", message: "No PR to fix" });
 					return;
 				}
 				const mux = getMultiplexer();
-				if (mux.isActive()) {
-					const windowName = `fix-${di.issue.identifier}`;
-					const cwd = di.worktree.path;
-					void (async () => {
-						const created = await mux.createWindow({
-							name: windowName,
-							cwd,
-							command: "santree pr fix",
-						});
-						dispatch({
-							type: "SET_ACTION_MESSAGE",
-							message: created.ok
-								? "Launched PR fix in new window"
-								: `Failed to launch PR fix${created.message ? `: ${created.message}` : ""}`,
-						});
-					})();
-				} else {
-					leaveAltScreen();
-					printCdHint({ path: di.worktree.path });
-					exit();
+				if (!mux.isActive()) {
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: "Fix loop needs tmux or cmux — run `santree pr fix --loop` in the worktree",
+					});
+					return;
 				}
+				const ticketId = di.issue.identifier;
+				const cwd = di.worktree.path;
+				// Absolute santree invocation: the new window's shell may not have
+				// `santree` on PATH (cmux workspaces start a fresh login shell).
+				const self = santreeSelfArgv(["pr", "fix", "--loop"]);
+				const command = [self.cmd, ...self.args].join(" ");
+				// Seed the marker + optimistic badge so the loop shows immediately,
+				// before the launched process writes its own marker.
+				const root = repoRootRef.current ?? findMainRepoRoot();
+				if (root) startFixLoop(root, ticketId, 5);
+				dispatch({ type: "FIXLOOP_START", ticketId });
+				void (async () => {
+					// Add the loop as a `fix-loop` tab inside the ticket's workspace
+					// (next to its `work` tab). On tmux this falls back to a separate
+					// `fix-loop-<ticket>` window.
+					const created = await mux.addTab({
+						windowName: ticketId,
+						tabName: "fix-loop",
+						cwd,
+						command,
+						group: di.issue.projectName ?? undefined,
+					});
+					dispatch({
+						type: "SET_ACTION_MESSAGE",
+						message: created.ok
+							? "Started fix loop (re-checks every 5 min) in fix-loop tab"
+							: `Failed to start fix loop${created.message ? `: ${created.message}` : ""}`,
+					});
+				})();
 				return;
 			}
 
@@ -3397,6 +3503,11 @@ export default function Dashboard() {
 				: state.flatIssues[state.selectedIndex]) ?? null;
 	const selectedReview = state.flatReviews[state.reviewSelectedIndex] ?? null;
 	const activeTracker = getIssueTracker(repoRootRef.current);
+	// The tracker actually in use right now — null until the repo is configured,
+	// so the `t` overlay doesn't mark a tracker the user never picked.
+	const configuredTrackerKind = isRepoTrackerConfigured(repoRootRef.current)
+		? activeTracker.kind
+		: null;
 	// Comments for the selected triage issue (lazily loaded; undefined = still
 	// fetching, which the detail panel renders as "loading…").
 	const triageComments =
@@ -3530,17 +3641,23 @@ export default function Dashboard() {
 									<Text bold>Select an issue tracker for this repo:</Text>
 									<Text> </Text>
 									{[
-										{ label: "Local", hint: "built-in, file-based — no account needed" },
-										{ label: "Linear", hint: "OAuth workspace" },
-										{ label: "GitHub", hint: "GitHub Issues via gh CLI" },
+										{
+											kind: "local",
+											label: "Local",
+											hint: "built-in, file-based — no account needed",
+										},
+										{ kind: "linear", label: "Linear", hint: "OAuth workspace" },
+										{ kind: "github", label: "GitHub", hint: "GitHub Issues via gh CLI" },
 									].map((t, i) => {
 										const sel = i === state.trackerSelectIndex;
+										const active = t.kind === configuredTrackerKind;
 										return (
 											<Text key={t.label}>
 												<Text color={sel ? "cyan" : undefined} bold={sel}>
 													{sel ? "> " : "  "}
 													{t.label}
 												</Text>
+												{active ? <Text color="green"> ● in use</Text> : null}
 												<Text dimColor> — {t.hint}</Text>
 											</Text>
 										);
@@ -3987,6 +4104,7 @@ export default function Dashboard() {
 									width={leftWidth}
 									selectionBg={theme.selectionBg}
 									deletingIds={state.activeTab === "trees" ? deletingIds : undefined}
+									fixLoops={state.activeTab === "trees" ? state.fixLoopTickets : undefined}
 									variant={state.activeTab === "issues" ? "issues" : "default"}
 								/>
 							)}
@@ -4077,6 +4195,9 @@ export default function Dashboard() {
 									creationLogs={state.creationLogs}
 									deleteStatus={selectedDeleteStatus}
 									prSyncing={!!selectedIssue && !!state.pendingPrs[selectedIssue.issue.identifier]}
+									fixLoop={
+										selectedIssue ? state.fixLoopTickets[selectedIssue.issue.identifier] : undefined
+									}
 									triage={state.activeTab === "triage"}
 									comments={triageComments}
 									onCall={onCall}

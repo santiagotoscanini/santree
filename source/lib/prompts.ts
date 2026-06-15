@@ -6,6 +6,7 @@ import type {
 	PRCheck,
 	PRReview,
 	PRReviewComment,
+	PRReviewThread,
 	FailedCheckDetail,
 	PRConversationComment,
 } from "./github.js";
@@ -87,4 +88,43 @@ export interface PRData {
  */
 export function renderPR(data: PRData): string {
 	return promptsEnv.render("pr.njk", data);
+}
+
+/** A failed check annotated with whether the fix loop should attempt it. */
+export interface FixContextCheck extends FailedCheckDetail {
+	fixable: boolean;
+}
+
+export interface FixContextData {
+	pr_number: string;
+	pr_url: string;
+	branch: string;
+	base_branch: string;
+	conflicts: boolean;
+	mergeable: string;
+	merge_state: string;
+	failed_checks: FixContextCheck[];
+	fixable_count: number;
+	manual_count: number;
+	pending_count: number;
+	reviews: PRReview[] | null;
+	/** Unresolved review threads the viewer has 👍-approved for auto-apply. */
+	approved_comments: PRReviewThread[];
+	/**
+	 * The single recommended action for this iteration, computed from state so
+	 * the loop doesn't have to: `merge` (conflicts) | `work` (fixable CI and/or
+	 * approved comments) | `wait` (nothing to do, CI still running) |
+	 * `stop-stuck` (only manual failures left) | `stop-clean` (all done).
+	 */
+	directive: "merge" | "work" | "wait" | "stop-stuck" | "stop-clean";
+	/** Absolute santree invocation, for the `--signal` / resolve commands. */
+	santree_cmd: string;
+}
+
+/**
+ * Render the compact per-iteration brief the auto-fix loop consumes: conflict
+ * status, failing checks tagged fixable/manual, and open review asks.
+ */
+export function renderFixContext(data: FixContextData): string {
+	return promptsEnv.render("fix-context.njk", data);
 }

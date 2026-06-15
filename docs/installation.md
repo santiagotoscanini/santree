@@ -22,27 +22,26 @@ That installs the `santree` binary. There's nothing to add to your shell config 
 ## Guided setup (recommended)
 
 ```bash
-santree setup
+santree config
 ```
 
-`santree setup` is the fastest way to get from a fresh install to a working santree. Where `santree doctor` **reports** what's missing, `santree setup` **fixes it** — it detects the gaps, shows only the steps that still need doing as a checklist, and applies the ones you pick:
+`santree config` is the fastest way to get from a fresh install to a working santree. It's a live settings panel organized into three sections, and each change applies immediately:
 
-- **Diff tool** — detects an installed diff pager, or offers to `brew install git-delta` (macOS), then sets `SANTREE_DIFF_TOOL`.
-- **Editor** — detects installed editors (`code`/`cursor`/`zed`/`vim`/…), lets you pick, and sets `SANTREE_EDITOR`.
-- **Claude Code** — statusline, session-state signal hooks, remote control, and the CLI itself.
-- **GitHub CLI** — install + `gh auth login`.
-- **This repo** — scaffolds `.santree/`, adds the right `.gitignore` (or `.git/info/exclude`) entries, and picks/authenticates an issue tracker.
+- **System** — tool versions and status (Node, Git, GitHub CLI, Claude Code, the active multiplexer, "update available"). These are read-only diagnostic rows.
+- **Global** — your **Default editor**, the **Diff tool** (with an offer to `brew install git-delta` on macOS), and Claude Code integration (statusline, remote control). Editor and diff-tool picks are stored in santree's config; the `SANTREE_EDITOR` / `SANTREE_DIFF_TOOL` env vars still work as one-off overrides.
+- **This repo** — scaffolds `.santree/`, adds the right `.gitignore` (or `.git/info/exclude`) entries, and picks/authenticates an issue tracker via the **Issue tracker** row.
 
-Use the arrow keys to move, **Space** to toggle a step, **Enter** to apply, **Esc** to cancel.
+Navigate with the arrow keys: **↑/↓** move between rows, **Space** toggles a setting on or off, **Enter** or **→** changes a setting or drills into a sub-menu (e.g. the **Issue tracker** row opens Local / Linear / GitHub), and **←** or **Esc** backs out of a sub-menu or quits. Read-only diagnostic rows (tool versions, active multiplexer, workspace editor) are shown but skipped over.
 
-<!-- TODO screenshot: `santree setup` checklist mid-flow — a few steps checked (e.g. Diff tool, Editor, Statusline), the cursor on one, the [x]/[ ] toggles visible. Shows the wizard is interactive, not a wall of prompts. -->
+<!-- TODO screenshot: `santree config` panel mid-flow — the System / Global / This repo sections with a mix of toggles and diagnostic rows, the cursor on one. Shows the panel is interactive, not a wall of prompts. -->
 
 | Flag | Effect |
 |---|---|
+| `--check` | Print the flat read-only status report and exit (non-zero if a required tool is missing). |
 | `--dry-run` | Show what would change without writing anything. |
-| `--yes` | Apply all recommended steps non-interactively. |
+| `--yes` | Apply all recommended changes non-interactively. |
 
-Everything `setup` does is also doable by hand (see [Configuration](configuration.html) for the env vars and [Integrations](integrations.html) for the Claude Code hooks) — but the wizard is the quickest path.
+Everything `santree config` does is also doable by hand (see [Configuration](configuration.html) for the env vars and [Integrations](integrations.html) for the Claude Code statusline and remote control) — but the panel is the quickest path.
 
 ## Entering worktrees
 
@@ -58,17 +57,17 @@ Copy-paste it (or wrap it in your own alias). If you run inside **tmux or cmux**
 ## Verify your setup
 
 ```bash
-santree doctor
+santree config --check
 ```
 
 This walks every required and optional integration and prints a row per check:
 
-<!-- TODO screenshot: `santree doctor` output — the full check list with a mix of green ✓ and a yellow ○ or two (e.g. remote control not enabled), so readers see the at-a-glance health view. -->
+<!-- TODO screenshot: `santree config --check` output — the full check list with a mix of green ✓ and a yellow ○ or two (e.g. remote control not enabled), so readers see the at-a-glance health view. -->
 
 - Required: Node ≥ 20, Git, GitHub CLI, Claude Code CLI
-- Optional: tmux/cmux, `git-delta` (or any unified-diff pager), an editor, the active issue tracker's auth status, Claude Code statusline + remote control + session-signal hooks
+- Optional: tmux/cmux, `git-delta` (or any unified-diff pager), an editor, the active issue tracker's auth status, Claude Code statusline + remote control
 
-If any required check fails, the row tells you what's missing and how to fix it. To apply those fixes automatically, run [`santree setup`](#guided-setup-recommended).
+`--check` exits non-zero if a required tool is missing, so it's handy in scripts and CI. If any required check fails, the row tells you what's missing and how to fix it. To apply those fixes interactively, run [`santree config`](#guided-setup-recommended).
 
 ## Requirements
 
@@ -83,9 +82,9 @@ Optional, picked up if available:
 
 | Tool | Purpose |
 |---|---|
-| **tmux** or **cmux** | New-window flows from the dashboard. tmux is recommended (cross-platform). cmux is macOS-only and limited by [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472). |
-| **delta** (or any unified-diff pager) | Syntax-highlighted diffs in `worktree diff` and the dashboard `[v]` overlay. Activated by `SANTREE_DIFF_TOOL`. |
-| **VSCode / Cursor / Zed / nvim / JetBrains** | Editor for the `[e]` action. Configurable via `SANTREE_EDITOR`. |
+| **cmux** or **tmux** | New-window flows from the dashboard. cmux is suggested — deepest Claude Code integration (macOS only, needs cmux.app). tmux is fully supported and cross-platform. See [Integrations → Multiplexers](integrations.html#multiplexers). |
+| **delta** (or any unified-diff pager) | Syntax-highlighted diffs in `worktree diff` and the dashboard `[v]` overlay. Set it in `santree config` (Global → Diff tool); `SANTREE_DIFF_TOOL` overrides per-invocation. |
+| **VSCode / Cursor / Zed / nvim / JetBrains** | Editor for the `[e]` action. Set it in `santree config` (Global → Default editor); `SANTREE_EDITOR` overrides per-invocation. |
 
 ## Updating
 
@@ -93,4 +92,4 @@ Optional, picked up if available:
 npm update -g santree
 ```
 
-`santree doctor` warns when a newer version is on npm, so you'll know when to run that.
+`santree config --check` warns when a newer version is on npm, so you'll know when to run that.

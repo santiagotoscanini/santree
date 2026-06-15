@@ -1,8 +1,8 @@
 import { spawnSync } from "child_process";
 
 /**
- * TTY hand-off for setup steps that run an interactive subprocess (brew install,
- * gh auth login, `santree issue setup`). Mirrors lib/dashboard/external-editor.ts:
+ * TTY hand-off for config steps that run an interactive subprocess (brew install,
+ * gh auth login, Claude install). Mirrors lib/dashboard/external-editor.ts:
  * drop raw mode so the child owns the terminal, run it synchronously (Ink can't
  * repaint while the event loop is blocked), then restore raw mode.
  *

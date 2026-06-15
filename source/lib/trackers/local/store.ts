@@ -6,7 +6,7 @@ import { parseFrontmatter, serializeFrontmatter, type FrontmatterValue } from ".
 
 // On-disk layout: one Markdown file per issue under `.santree/issues/`,
 // named `<ID>.md` (e.g. `LOCAL-1.md`). `.santree/issues/` is NOT in
-// .gitignore (which only excludes worktrees/metadata.json/session-states),
+// .gitignore (which only excludes worktrees/metadata.json/fix-loops),
 // so issue files are version-controlled by default — the whole point of the
 // built-in tracker.
 //

@@ -3,7 +3,14 @@ import { existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir, tmpdir } from "os";
 import { getCurrentBranch, findRepoRoot, findMainRepoRoot, getBaseBranch } from "./git.js";
-import { renderPrompt, renderTicket, renderDiff, renderPR } from "./prompts.js";
+import {
+	renderPrompt,
+	renderTicket,
+	renderDiff,
+	renderPR,
+	renderFixContext,
+	type FixContextData,
+} from "./prompts.js";
 import { getIssueTracker } from "./trackers/index.js";
 import type { Issue } from "./trackers/types.js";
 import {
@@ -11,8 +18,13 @@ import {
 	getPRChecksAsync,
 	getPRReviewsAsync,
 	getPRReviewCommentsAsync,
+	getPRReviewThreadsAsync,
+	getApprovedReviewThreads,
+	getViewerLoginAsync,
 	getPRConversationCommentsAsync,
 	getFailedCheckDetailsAsync,
+	getPRMergeStateAsync,
+	classifyCheck,
 } from "./github.js";
 import { runAsync } from "./exec.js";
 
@@ -138,6 +150,84 @@ export async function fetchAndRenderPR(branch: string): Promise<string | null> {
 		reviews,
 		review_comments: reviewComments,
 		conversation_comments: conversationComments,
+	});
+}
+
+/**
+ * Fetch and render the self-contained per-iteration brief the auto-fix loop
+ * consumes — state AND the exact actions to take this iteration. It covers
+ * conflict status vs. the base branch, failing checks tagged fixable/manual
+ * (logs only for the fixable ones, to keep it tight), the 👍-approved review
+ * threads, and a single computed `directive` telling the loop what to do (merge
+ * / work / wait / stop). The loop just runs this and obeys. `santreeCmd` is the
+ * absolute santree invocation embedded in the `--signal` / resolve commands.
+ * Returns null when no PR exists for the branch.
+ */
+export async function fetchAndRenderFixContext(
+	branch: string,
+	santreeCmd: string,
+): Promise<string | null> {
+	const prInfo = await getPRInfoAsync(branch);
+	if (!prInfo) return null;
+
+	const baseBranch = getBaseBranch(branch);
+	const [checks, reviews, threads, mergeState, viewer] = await Promise.all([
+		getPRChecksAsync(prInfo.number),
+		getPRReviewsAsync(prInfo.number),
+		getPRReviewThreadsAsync(prInfo.number),
+		getPRMergeStateAsync(branch),
+		getViewerLoginAsync(),
+	]);
+
+	const failing = (checks ?? []).filter((c) => c.bucket === "fail");
+	const failedDetails = await Promise.all(failing.map((c) => getFailedCheckDetailsAsync(c)));
+	const failed_checks = failedDetails.map((d) => ({
+		...d,
+		fixable: classifyCheck(d) === "fixable",
+	}));
+	const fixable_count = failed_checks.filter((c) => c.fixable).length;
+	const manual_count = failed_checks.filter((c) => !c.fixable).length;
+	// Only genuinely-queued/running checks count as pending — `skipping`/`cancel`
+	// won't run under the current conditions, so the loop must not wait on them.
+	const pending_count = (checks ?? []).filter((c) => c.bucket === "pending").length;
+
+	// Only surface review comments the viewer has 👍-approved on an unresolved
+	// thread — resolved threads are skipped, and unapproved ones wait for approval.
+	const approved_comments = viewer && threads ? getApprovedReviewThreads(threads, viewer) : [];
+
+	const conflicts = mergeState?.hasConflicts ?? false;
+	const mergeable = mergeState?.mergeable ?? "UNKNOWN";
+
+	// The single recommended action, in priority order. Conflicts block CI, so
+	// resolve them first; otherwise do any fixable work; otherwise wait for CI (or
+	// for GitHub to finish computing mergeability) rather than declaring done;
+	// otherwise stop — stuck if only manual failures remain, else clean.
+	const directive: FixContextData["directive"] = conflicts
+		? "merge"
+		: fixable_count > 0 || approved_comments.length > 0
+			? "work"
+			: pending_count > 0 || mergeable === "UNKNOWN"
+				? "wait"
+				: manual_count > 0
+					? "stop-stuck"
+					: "stop-clean";
+
+	return renderFixContext({
+		pr_number: prInfo.number,
+		pr_url: prInfo.url ?? "",
+		branch,
+		base_branch: baseBranch,
+		conflicts,
+		mergeable,
+		merge_state: mergeState?.mergeStateStatus ?? "UNKNOWN",
+		failed_checks,
+		fixable_count,
+		manual_count,
+		pending_count,
+		reviews,
+		approved_comments,
+		directive,
+		santree_cmd: santreeCmd,
 	});
 }
 

@@ -17,9 +17,9 @@ How to point santree at your tools, workflows, and conventions.
 
 | Variable | Effect |
 |---|---|
-| `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear` or `github`. Takes precedence over the per-repo `_tracker.kind`. If unset, falls back to repo config → legacy `_linear.org` → auto-detect. |
-| `SANTREE_EDITOR` | Editor used by `[e]` (open in editor) actions in the dashboard, and by `Ctrl+O` in the multi-line context input. Defaults to `code`. Examples: `cursor`, `zed`, `code`, `nvim`. GUI editors get `--wait` automatically. |
-| `SANTREE_DIFF_TOOL` | Pager used by `worktree diff` (CLI) and the dashboard `[v]` overlay. Passed to git as `-c core.pager=<tool>` for the CLI, and used to pipe content for the overlay. Examples: `delta`, `diff-so-fancy`. Must accept a unified diff on stdin. Names are restricted to `[A-Za-z0-9_\-/.+]`. |
+| `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear`, `github`, or `local`. Takes precedence over the per-repo `_tracker.kind`. If unset, falls back to repo config → legacy `_linear.org` → auto-detect. |
+| `SANTREE_EDITOR` | One-off override for your editor (used by `[e]` open-in-editor actions in the dashboard, and by `Ctrl+O` in the multi-line context input), winning over the value stored in `santree config` (Global section → **Default editor**). Examples: `cursor`, `zed`, `code`, `nvim`. GUI editors get `--wait` automatically. Set it in `santree config` for a persistent default; use the env var for a single invocation or CI. |
+| `SANTREE_DIFF_TOOL` | One-off override for the diff tool used by `worktree diff` (CLI) and the dashboard `[v]` overlay, winning over the value stored in `santree config` (Global section → **Diff tool**). Passed to git as `-c core.pager=<tool>` for the CLI, and used to pipe content for the overlay. Examples: `delta`, `diff-so-fancy`. Must accept a unified diff on stdin. Names are restricted to `[A-Za-z0-9_\-/.+]`. Set it in `santree config` for a persistent default; use the env var for a single invocation or CI. |
 | `SANTREE_THEME` | Dashboard color theme: `light`, `dark`, or `auto` (default). In `auto` mode, santree queries the terminal's background via OSC 11 and re-detects on each refresh cycle so theme switches propagate within ~5 minutes (or sooner on a manual `R`). Set explicitly when your terminal doesn't respond to OSC 11. |
 
 Santree always launches Claude with `--permission-mode auto` (Claude Code's auto mode), or `plan` when invoked in plan mode. Worktree-scoped automation is the default — there is no opt-in flag.
@@ -35,7 +35,7 @@ cp "$SANTREE_REPO_ROOT/.env" "$SANTREE_WORKTREE_PATH/.env"
 npm install
 ```
 
-The script gets `SANTREE_REPO_ROOT` and `SANTREE_WORKTREE_PATH` in its environment. `santree doctor` reports whether the script exists and is executable.
+The script gets `SANTREE_REPO_ROOT` and `SANTREE_WORKTREE_PATH` in its environment. `santree config --check` reports whether the script exists and is executable.
 
 ## Branch naming
 
@@ -68,11 +68,12 @@ The leading number form (`42-add-auth`) only matches at the start of the branch 
 
 Worktrees live at `.santree/worktrees/<TICKET-ID>/`. Per-worktree metadata (only when the base branch differs from the repo default) is stored in `.santree/metadata.json`, keyed by ticket ID. The auth file (`~/.config/santree/auth.json`) stores tracker tokens; gh's own token is owned by the `gh` CLI.
 
-Both directories are `.gitignore`-friendly:
+The machine-local paths are `.gitignore`-friendly:
 
 ```gitignore
 .santree/worktrees/
-.santree/session-states/
+.santree/metadata.json
+.santree/fix-loops/
 ```
 
 {: .important }
@@ -100,4 +101,4 @@ If both keys are set, `skill_name` wins. The investigation window opens in the m
 ## See also
 
 - [Trackers]({{ site.baseurl }}/trackers.html) — Linear / GitHub Issues setup
-- [Integrations]({{ site.baseurl }}/integrations.html) — Claude Code hooks, multiplexers, editors, diff tools
+- [Integrations]({{ site.baseurl }}/integrations.html) — Claude Code (statusline, remote control), multiplexers, editors, diff tools

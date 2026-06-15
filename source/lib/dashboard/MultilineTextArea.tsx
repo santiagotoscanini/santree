@@ -199,7 +199,7 @@ export function MultilineTextArea({
 				return;
 			}
 
-			// Ctrl+O: escalate to $SANTREE_EDITOR / $VISUAL / $EDITOR. On save+close
+			// Ctrl+O: escalate to the configured editor / $VISUAL / $EDITOR. On save+close
 			// the buffer is replaced and control returns to the textbox so the
 			// user can keep editing or submit with Ctrl+D.
 			if (key.ctrl && input === "o") {

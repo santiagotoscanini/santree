@@ -23,7 +23,7 @@ The worktree commands (`create`, `switch`, `list`, `remove`, `clean`, `sync`) op
 
 ## Issue trackers as a pluggable layer
 
-Santree treats Linear and GitHub Issues as interchangeable backends behind a single `IssueTracker` interface. Each repo picks one. Resolution order:
+Santree treats Linear, GitHub Issues, and a built-in Local (file-based) tracker as interchangeable backends behind a single `IssueTracker` interface. Each repo picks one. Resolution order:
 
 1. `SANTREE_TRACKER` env var (one-off override)
 2. Per-repo `_tracker.kind` (in `.santree/metadata.json`)
@@ -47,7 +47,7 @@ The Claude CLI is the AI layer today. Three commands wrap it:
 | Command | Prompt template | Used for |
 |---|---|---|
 | `santree worktree work` | `prompts/work.njk` | Implement (or `--plan` to plan) |
-| `santree pr fix` | `prompts/fix-pr.njk` | Apply PR review comments + CI failures |
+| `santree pr fix` | `prompts/fix-loop.njk` (per-iteration brief: `prompts/fix-context.njk`) | Self-driving loop: fix CI failures + apply 👍-approved review comments |
 | `santree pr review` | `prompts/review.njk` | Self-review the branch against the ticket |
 
 Plus `pr create --fill` runs `prompts/fill-pr.njk` non-interactively to draft a PR body from the diff + commits + ticket.

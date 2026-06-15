@@ -2,6 +2,7 @@ import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { getConfiguredEditor } from "../config-store.js";
 
 // GUI editors that detach by default and need a `--wait` flag to make spawnSync
 // block until the file is closed. Terminal editors (vim, nvim, nano, emacs -nw)
@@ -25,11 +26,11 @@ export interface EditExternallyResult {
  * Open the user's editor on a temp file seeded with `initial`, then return the
  * saved content. Empty buffer is treated as cancel (matches `git commit`).
  *
- * Editor resolution: SANTREE_EDITOR > VISUAL > EDITOR > "vim".
+ * Editor resolution: santree config editor (or SANTREE_EDITOR) > VISUAL > EDITOR > "vim".
  */
 export function editExternally(initial: string, ext = "md"): EditExternallyResult {
 	const editorRaw =
-		process.env["SANTREE_EDITOR"] || process.env["VISUAL"] || process.env["EDITOR"] || "vim";
+		getConfiguredEditor() || process.env["VISUAL"] || process.env["EDITOR"] || "vim";
 	const filePath = path.join(os.tmpdir(), `santree-edit-${Date.now()}.${ext.replace(/^\./, "")}`);
 
 	try {

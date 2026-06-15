@@ -1,5 +1,11 @@
 import { Box, Text } from "ink";
-import type { Comment, DashboardIssue, DashboardTab, DeleteStatus } from "./types.js";
+import type {
+	Comment,
+	DashboardIssue,
+	DashboardTab,
+	DeleteStatus,
+	FixLoopRuntime,
+} from "./types.js";
 import { formatSla, isSnoozed } from "./sla.js";
 import { issueReadiness } from "../trackers/types.js";
 
@@ -15,6 +21,8 @@ interface Props {
 	/** True while a just-created PR is shown optimistically, before a refresh
 	 * confirms it (renders a "syncing…" hint next to the PR). */
 	prSyncing?: boolean;
+	/** Active/recent auto-fix loop for the selected ticket, shown as a ⟳ line. */
+	fixLoop?: FixLoopRuntime;
 	/** Triage mode: hide worktree/PR/checks sections (they never apply to an
 	 * inbox issue) and show the discussion instead. */
 	triage?: boolean;
@@ -186,7 +194,7 @@ export function buildIssueActions(
 		items.push({ key: "c", label: "Create PR", color: "cyan" });
 	}
 	if (pr) {
-		items.push({ key: "f", label: "Fix PR", color: "cyan" });
+		items.push({ key: "f", label: "Fix loop", color: "cyan" });
 		items.push({ key: "r", label: "Review", color: "cyan" });
 	}
 
@@ -223,6 +231,7 @@ export default function DetailPanel({
 	creationLogs,
 	deleteStatus,
 	prSyncing = false,
+	fixLoop,
 	triage = false,
 	comments,
 	onCall,
@@ -525,36 +534,8 @@ export default function DetailPanel({
 			}
 		}
 
-		// Session state — single line, color reflects state.
-		if (worktree.sessionState === "waiting") {
-			const msg = worktree.sessionMessage
-				? `NEEDS INPUT: ${worktree.sessionMessage}`
-				: "NEEDS INPUT";
-			lines.push({
-				text: "",
-				segments: [
-					{ text: "  ◆ ", color: "red" },
-					{ text: msg, color: "red", bold: true },
-				],
-			});
-		} else if (worktree.sessionState === "active") {
-			lines.push({
-				text: "",
-				segments: [
-					{ text: "  ◆ ", color: "green" },
-					{ text: "session active", color: "green" },
-				],
-			});
-		} else if (worktree.sessionState === "idle") {
-			lines.push({
-				text: "",
-				segments: [
-					{ text: "  ◆ ", color: "yellow" },
-					{ text: "session idle", color: "yellow" },
-					{ text: "  (waiting for prompt)", dim: true },
-				],
-			});
-		} else if (worktree.sessionId) {
+		// Resumable Claude session (the stored session id), or none.
+		if (worktree.sessionId) {
 			lines.push({
 				text: "",
 				segments: [
@@ -681,11 +662,47 @@ export default function DetailPanel({
 		lines.push({ text: "  no PR yet", dim: true });
 	}
 
+	// ── Fix loop ──────────────────────────────────────────────────────
+	if (!isMain && fixLoop) {
+		const { phase } = fixLoop;
+		const color =
+			phase === "running"
+				? "cyan"
+				: phase === "stalled"
+					? "yellow"
+					: phase === "stopped-clean"
+						? "green"
+						: "red";
+		const label =
+			phase === "running"
+				? `fix loop · ${fixLoop.status}`
+				: phase === "stalled"
+					? "fix loop · stalled (no recent activity)"
+					: phase === "stopped-clean"
+						? "fix loop · stopped — all clear"
+						: "fix loop · stopped — needs a human";
+		const ageMin = Math.max(0, Math.round(fixLoop.ageMs / 60000));
+		lines.push(ruleLine);
+		lines.push({
+			text: "",
+			segments: [
+				{ text: "⟳ ", color, bold: true },
+				{ text: label, color },
+				{ text: `   updated ${ageMin}m ago`, dim: true },
+			],
+		});
+	}
+
 	// ── Checks ────────────────────────────────────────────────────────
 	if (!isMain && checks && checks.length > 0) {
+		// `gh` buckets: pass | fail | pending | skipping | cancel. Skipped/cancelled
+		// checks don't run under the current conditions and don't block the PR —
+		// GitHub counts them as "skipped" while still reporting "all checks passed".
+		// Treat them as a non-blocking aside, never as pending.
 		const passing = checks.filter((c) => c.bucket === "pass");
 		const failing = checks.filter((c) => c.bucket === "fail");
-		const pending = checks.filter((c) => c.bucket !== "pass" && c.bucket !== "fail");
+		const pending = checks.filter((c) => c.bucket === "pending");
+		const skipped = checks.filter((c) => c.bucket === "skipping" || c.bucket === "cancel");
 		const headerColor = failing.length > 0 ? "red" : pending.length > 0 ? "yellow" : "green";
 
 		lines.push(ruleLine);
@@ -693,7 +710,7 @@ export default function DetailPanel({
 			{ text: "✓ ", color: "cyan", bold: true },
 			{ text: "Checks", bold: true },
 			{ text: "   " },
-			{ text: `${passing.length}/${checks.length} passing`, color: headerColor },
+			{ text: `${passing.length} passed`, color: headerColor },
 		];
 		if (failing.length > 0) {
 			headerSegs.push({ text: "  ·  ", dim: true });
@@ -703,9 +720,14 @@ export default function DetailPanel({
 			headerSegs.push({ text: "  ·  ", dim: true });
 			headerSegs.push({ text: `${pending.length} pending`, color: "yellow" });
 		}
+		if (skipped.length > 0) {
+			headerSegs.push({ text: "  ·  ", dim: true });
+			headerSegs.push({ text: `${skipped.length} skipped`, dim: true });
+		}
 		lines.push({ text: "", segments: headerSegs });
 
 		// Order: failing first (most important), then pending, then passing.
+		// Skipped checks aren't listed individually — just summarized above.
 		for (const check of failing) {
 			const desc = check.description ? ` — ${check.description}` : "";
 			lines.push({ text: `  ✗ ${check.name}${desc}`, color: "red" });

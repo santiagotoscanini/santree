@@ -1,1 +1,1 @@
-export const description = "Issue tracker commands (Linear / GitHub)";
+export const description = "Issue actions (open the current branch's issue)";

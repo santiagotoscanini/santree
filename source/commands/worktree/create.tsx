@@ -87,7 +87,12 @@ export default function Create({ options, args }: Props) {
 				runCommand = options.plan ? "santree worktree work --plan" : "santree worktree work";
 			}
 
-			const result = await mux.createWindow({ name: windowName, cwd: path, command: runCommand });
+			const result = await mux.createWindow({
+				name: windowName,
+				cwd: path,
+				command: runCommand,
+				tabName: runCommand ? "work" : undefined,
+			});
 			if (!result.ok) {
 				setMessage(
 					`Worktree created, but failed to create window${result.message ? `: ${result.message}` : ""}`,

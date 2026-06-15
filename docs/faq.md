@@ -34,8 +34,8 @@ If you run inside **tmux or cmux**, the [dashboard](dashboard.html) avoids the c
 
 Some possibilities:
 
-- **No tracker authed**: run `santree linear auth` or `santree github auth`. The dashboard speaks to whichever tracker is active for the repo.
-- **Tracker mismatch**: maybe the repo's `_tracker.kind` is set to one backend but you're authed for the other. Check with `santree doctor`, or set explicitly with `santree issue switch <linear|github>`.
+- **No tracker configured**: run `santree config` and pick one from the **Issue tracker** row (Linear authenticates inline; GitHub uses `gh auth login`). The dashboard speaks to whichever tracker is active for the repo.
+- **Tracker mismatch**: maybe the repo's `_tracker.kind` is set to one backend but you're authed for the other. Check with `santree config --check`, or fix it from the **Issue tracker** row in `santree config`.
 - **GitHub Issues — no assignees**: `gh search issues --assignee=@me` returns nothing if your team uses Projects without assignees. Self-assign the issues you're working on.
 - **Cross-repo issues**: only current-repo issues are surfaced today.
 
@@ -45,13 +45,9 @@ You probably have both a globally-installed santree and an `npm link`ed dev copy
 
 ## Diff overlay shows no syntax highlighting
 
-You haven't set `SANTREE_DIFF_TOOL`. Install `delta` (`brew install git-delta` on macOS) and:
+You haven't set a diff tool. Install `delta` (`brew install git-delta` on macOS), then set it in `santree config` under **Global → Diff tool** (the row also offers the `brew install` on macOS). It takes effect on santree's next run.
 
-```bash
-export SANTREE_DIFF_TOOL=delta
-```
-
-Both the worktree diff (`[v]` on a worktree row) and the Reviews-tab diff (`[v]` on a PR with no local worktree) honor this.
+Both the worktree diff (`[v]` on a worktree row) and the Reviews-tab diff (`[v]` on a PR with no local worktree) honor your configured diff tool. For a one-off you can prefix the command with `SANTREE_DIFF_TOOL=delta`, which overrides the stored value.
 
 ## Diff overlay text is wrapping weirdly / cut in half
 
@@ -63,7 +59,7 @@ This was a known bug fixed by passing `--allowedTools Read` to the Claude CLI wh
 
 ## cmux's `sendCommand` doesn't work
 
-That's [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472) — programmatically created cmux workspaces have dead PTYs. tmux is the recommended backend until that's fixed. `santree doctor` flags this when cmux is active.
+That's [manaflow-ai/cmux#1472](https://github.com/manaflow-ai/cmux/issues/1472) — programmatically created cmux workspaces have dead PTYs, so `sendCommand` returns `unsupported`. It only bites when santree re-sends a command into an **already-open** window (the resume / re-launch path), where it falls back to focusing the window and printing the command. New-window flows work normally, so cmux is still the suggested multiplexer; switch to tmux if this edge case matters to you.
 
 ## My terminal theme switched but the dashboard didn't follow
 

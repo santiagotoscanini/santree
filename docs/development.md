@@ -86,22 +86,23 @@ source/
 │   │   ├── linear/      # OAuth PKCE + GraphQL + image rewriter
 │   │   └── github/      # `gh` CLI wrappers; priority derived from labels
 │   ├── multiplexer/     # tmux/cmux/none abstraction (windows/sessions)
+│   ├── config/          # diagnostics + inline TrackerPicker for `santree config`
+│   ├── setup/           # SetupStep catalog + apply engine (used by `santree config`)
 │   └── dashboard/       # Dashboard UI components
 │       ├── types.ts     # State types, action types, phase enums
 │       ├── IssueList.tsx
 │       ├── DetailPanel.tsx
 │       └── DiffOverlay.tsx
 └── commands/            # One React (Ink) component per CLI command
-    ├── doctor.tsx
+    ├── config.tsx       # System / Global / This-repo settings panel (--check, --yes, --dry-run)
     ├── dashboard.tsx
-    ├── setup.tsx        # guided setup wizard
     ├── worktree/        # create, list, switch, remove, clean, sync, work, open, setup, commit, diff
-    ├── pr/              # create, open, fix, review
-    ├── linear/          # auth, switch
-    ├── github/          # auth
-    ├── issue/           # switch, open
-    └── helpers/         # statusline, session-signal, english-tutor, squirrel
-prompts/                 # Nunjucks templates: work, review, fix-pr, fill-pr, ticket
+    ├── pr/              # create, open, fix, context, review
+    ├── linear/          # auth
+    ├── issue/           # open
+    ├── helpers/         # statusline, squirrel, template, text-editor
+    └── update.tsx       # self-update + version check
+prompts/                 # Nunjucks templates: work, review, fix-loop, fix-context, fill-pr, fill-commit, pr, diff, ticket, ask
 ```
 
 ## Adding a provider
@@ -119,7 +120,7 @@ That's it. The dashboard, prompt rendering, and AI flows speak generic terms (`i
 **To add a multiplexer** (e.g. zellij):
 
 1. Create `source/lib/multiplexer/zellij.ts`.
-2. Implement the `Multiplexer` interface — `isActive()`, `createWindow()`, `selectWindow()`, `sendCommand()`, `isSessionAlive()`.
+2. Implement the `Multiplexer` interface — `isActive()`, `createWindow()`, `addTab()`, `selectWindow()`, `sendCommand()`.
 3. Register the adapter in `lib/multiplexer/index.ts`. Detection is auto — `getMultiplexer()` iterates the adapter list and picks the first whose `isActive()` returns true.
 
 ## Patterns to know
@@ -127,7 +128,7 @@ That's it. The dashboard, prompt rendering, and AI flows speak generic terms (`i
 - **Ink + state machine** — every command exports a `Status` union driving the UI. Spinner during async work, success / error text after.
 - **Sync git via `run()`, async via `execAsync` / `spawnAsync`** — `lib/exec.ts` wraps both. Yield with `await new Promise(r => setTimeout(r, 10))` between batches of sync calls so the spinner animates.
 - **Prompt-driven AI** — Nunjucks templates in `prompts/` render the context that goes to Claude. Prompts are tracker-agnostic (no Linear/GitHub vendor names in templates).
-- **No tracker conditionals outside `getIssueTracker()`** — vendor names appear in user-facing strings only via `tracker.displayName`, in the named commands (`santree linear auth` etc.), or in `doctor.tsx` reporting the active backend. Everywhere else speaks generically.
+- **No tracker conditionals outside `getIssueTracker()`** — vendor names appear in user-facing strings only via `tracker.displayName`, in the named commands (`santree linear auth` etc.), or in `config.tsx` reporting the active backend. Everywhere else speaks generically.
 
 ## Contributing
 

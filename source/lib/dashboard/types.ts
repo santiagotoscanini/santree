@@ -1,6 +1,9 @@
 import type { PRInfo, PRCheck, PRReview, PRConversationComment, SearchPR } from "../github.js";
 import type { ClaudeTodo } from "../claude-todos.js";
+import type { FixLoopRuntime } from "../fix-loop.js";
 import type { AssignedIssue, Comment, Issue, TriageSchedule } from "../trackers/types.js";
+
+export type { FixLoopRuntime } from "../fix-loop.js";
 
 export type { AssignedIssue, Comment, Issue, TriageSchedule } from "../trackers/types.js";
 
@@ -24,8 +27,6 @@ export interface WorktreeInfo {
 	 * sessionId is null or the underlying file can't be located. */
 	sessionCwd: string | null;
 	gitStatus: string;
-	sessionState: "waiting" | "idle" | "active" | null;
-	sessionMessage: string | null;
 	diffStats: { filesChanged: number; insertions: number; deletions: number } | null;
 	claudeTodos: ClaudeTodo[] | null;
 }
@@ -36,6 +37,8 @@ export interface DashboardIssue {
 	pr: PRInfo | null;
 	checks: PRCheck[] | null;
 	reviews: PRReview[] | null;
+	/** Active/recent auto-fix loop for this ticket (from .santree/fix-loops/). */
+	fixLoop?: FixLoopRuntime | null;
 	parentTicketId?: string;
 	children?: DashboardIssue[];
 }
@@ -230,6 +233,12 @@ export interface DashboardState {
 	 * surfaces the real PR), and are reconciled away by SET_DATA.
 	 */
 	pendingPrs: Record<string, PRInfo>;
+	/**
+	 * Active/recent auto-fix loops keyed by ticket id, used to render the per-row
+	 * ⟳ badge + detail line. Seeded optimistically by FIXLOOP_START and rebuilt
+	 * from the `.santree/fix-loops/` markers on every SET_DATA.
+	 */
+	fixLoopTickets: Record<string, FixLoopRuntime>;
 	commitPhase: CommitPhase;
 	commitMessage: string;
 	commitError: string | null;
@@ -342,6 +351,7 @@ export type DashboardAction =
 	| { type: "DELETE_LOG"; ticketId: string; logs: string }
 	| { type: "DELETE_DONE"; ticketId: string }
 	| { type: "DELETE_ERROR"; ticketId: string; error: string }
+	| { type: "FIXLOOP_START"; ticketId: string }
 	| {
 			type: "COMMIT_START";
 			/** Null when committing on a non-ticket branch (e.g. the main
@@ -465,6 +475,7 @@ export const initialState: DashboardState = {
 	creationError: null,
 	deletingTickets: {},
 	pendingPrs: {},
+	fixLoopTickets: {},
 	commitPhase: "idle",
 	commitMessage: "",
 	commitError: null,
@@ -546,6 +557,13 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				reconciledTrees = reconciledTrees.map((d, i) => (i === idx ? { ...d, pr: optimistic } : d));
 				pendingPrs[id] = optimistic; // still pending → keep showing it
 			}
+			// Rebuild the fix-loop badge map authoritatively from the freshly-read
+			// markers (drops loops whose marker was cleared); optimistic FIXLOOP_START
+			// entries are superseded here once the marker file is picked up.
+			const fixLoopTickets: Record<string, FixLoopRuntime> = {};
+			for (const d of reconciledTrees) {
+				if (d.fixLoop) fixLoopTickets[d.issue.identifier] = d.fixLoop;
+			}
 			return {
 				...state,
 				groups: action.groups,
@@ -553,6 +571,7 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				treeGroups: action.treeGroups,
 				flatTrees: reconciledTrees,
 				pendingPrs,
+				fixLoopTickets,
 				triageGroups: action.triageGroups,
 				flatTriage: action.flatTriage,
 				deletingTickets,
@@ -772,6 +791,23 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 				},
 			};
 		}
+		case "FIXLOOP_START": {
+			// Optimistic running badge until SET_DATA reads the marker the launcher wrote.
+			const now = new Date().toISOString();
+			return {
+				...state,
+				fixLoopTickets: {
+					...state.fixLoopTickets,
+					[action.ticketId]: {
+						phase: "running",
+						status: "running",
+						startedAt: now,
+						at: now,
+						ageMs: 0,
+					},
+				},
+			};
+		}
 		case "COMMIT_START":
 			return {
 				...state,
@@ -843,9 +879,13 @@ export function reducer(state: DashboardState, action: DashboardAction): Dashboa
 			const ticketId = state.prCreateTicketId;
 			let flatTrees = state.flatTrees;
 			let pendingPrs = state.pendingPrs;
-			if (ticketId) {
+			// Only attach the optimistic PR if we can parse a real number from the
+			// returned URL — a `"?"` placeholder would break later `gh pr view <n>`
+			// calls. If it doesn't match, the next refresh surfaces the real PR.
+			const prNumber = action.url.match(/\/pull\/(\d+)/)?.[1];
+			if (ticketId && prNumber) {
 				const optimistic: PRInfo = {
-					number: action.url.match(/\/pull\/(\d+)/)?.[1] ?? "?",
+					number: prNumber,
 					state: "OPEN",
 					isDraft: state.prCreateDraft,
 					url: action.url,

@@ -14,7 +14,7 @@ import { run } from "../exec.js";
 export const SANTREE_IGNORE_ENTRIES = [
 	".santree/worktrees/",
 	".santree/metadata.json",
-	".santree/session-states/",
+	".santree/fix-loops/",
 ];
 
 export type IgnoreTarget = "gitignore" | "exclude";
@@ -64,4 +64,41 @@ export function addIgnoreEntries(repoRoot: string, target: IgnoreTarget): string
 	const header = existing.includes("# santree") ? "" : "\n# santree\n";
 	fs.appendFileSync(filePath, prefix + header + toAdd.join("\n") + "\n");
 	return toAdd;
+}
+
+/**
+ * Remove santree's ignore entries (and an orphaned `# santree` header) from both
+ * candidate files. Returns the entries actually removed. Leaves every other line
+ * — including user-authored ignores — untouched, and collapses the blank lines
+ * left behind so the file doesn't accumulate gaps across enable/disable cycles.
+ */
+export function removeIgnoreEntries(repoRoot: string): string[] {
+	const removed: string[] = [];
+	for (const target of ["gitignore", "exclude"] as IgnoreTarget[]) {
+		const filePath = ignoreTargetPath(repoRoot, target);
+		if (!fs.existsSync(filePath)) continue;
+		const original = fs.readFileSync(filePath, "utf-8");
+		let changed = false;
+		const kept = original.split("\n").filter((line) => {
+			const t = line.trim();
+			if (SANTREE_IGNORE_ENTRIES.includes(t)) {
+				removed.push(t);
+				changed = true;
+				return false;
+			}
+			if (t === "# santree") {
+				// santree's header only ever sits above its own (now-removed) entries.
+				changed = true;
+				return false;
+			}
+			return true;
+		});
+		if (!changed) continue;
+		const cleaned = kept
+			.join("\n")
+			.replace(/\n{3,}/g, "\n\n")
+			.replace(/^\n+/, "");
+		fs.writeFileSync(filePath, cleaned.length === 0 ? "" : cleaned.replace(/\n*$/, "\n"));
+	}
+	return removed;
 }

@@ -30,7 +30,7 @@ When the Triage tab is present it leads, so the number keys are `1` Triage, `2` 
 
 - `· diff` — files changed / additions / deletions / commits ahead of base
 - `· pr` — number, state, CI summary, review count
-- `· session` — Claude session state (`active` / `waiting` / `idle` / `exited`) + session ID
+- `· session` — the resumable Claude session ID (`Enter` resumes it)
 
 The far-right `WT CI` columns give an at-a-glance worktree-exists / checks-pass status without expanding rows. The right column changes per tab:
 
@@ -92,7 +92,7 @@ If both are present, `skill_name` wins. The window opens in the main repo root, 
 | Key | Action |
 |---|---|
 | `w` | Create worktree & start working — opens mode-select (plan / implement) → context input → launch |
-| `e` | Open the worktree in your editor (`SANTREE_EDITOR`, defaults to `code`) |
+| `e` | Open the worktree in your configured editor (`santree config` → Global → Default editor; `code` if unset, or override per-run with `SANTREE_EDITOR`) |
 | `d` | Remove the worktree and its branch — confirm, then it runs in the background (staged progress in the right pane when that row is selected). Fire several in a row without waiting; each in-progress row is marked `⌫` in the WT column. |
 | `o` | Open the issue in the active tracker (Linear / GitHub) |
 
@@ -105,8 +105,12 @@ If both are present, `skill_name` wins. The window opens in the main repo root, 
 | `C` | Inline commit & push — choose mode (manual message / `--fill` via Claude) |
 | `c` | Create the PR — fill the template via Claude (review/edit the body, toggle draft vs ready with `d`, then create), or open the new-PR page pre-filled in the browser |
 | `p` | Open the PR in the browser |
-| `f` | Apply PR review comments + CI failures with Claude (in tmux) |
-| `r` | Self-review the PR with Claude (in tmux) |
+| `f` | Start a **self-driving fix loop** — runs `santree pr fix` in a `fix-loop` tab inside the ticket's workspace (next to its `work` tab). Every 5 min it re-checks the PR, merges the base branch in if conflicted, fixes the *fixable* CI failures (tests, types, lint, format, coverage), applies your 👍-approved review comments, pushes, and stops when CI is green and nothing approved remains. The ticket shows a `⟳` badge (in the CI column) while it runs. |
+| `r` | Self-review the PR with Claude — opens as a `review` tab in the ticket's workspace (a separate window on tmux) |
+
+### Fix loop
+
+`[f]` runs a single loop that keeps a PR green for you — fixing CI **and** applying review comments in one flow, as a [Claude Code `/loop`](commands.html#pr-fix). On cmux it opens as a `fix-loop` tab in the ticket's own workspace, alongside the `work` tab — everything for one ticket stays in one workspace. (On tmux it opens a separate `fix-loop-<ticket>` window.) Review comments are gated on your approval: the loop only applies an **unresolved** inline thread once you've reacted **👍 to its last comment** (then it resolves the thread). While active, the ticket's CI column shows `⟳` — cyan while running, yellow if it stalls (no heartbeat for a while) — and the detail pane shows the current step and a "stopped — all clear" / "stopped — needs a human" outcome when it ends. It never touches checks classified as manual (deploys, releases, e2e, security). Needs an active multiplexer; with none, run `santree pr fix` in the worktree yourself.
 
 ### Diff overlay
 
@@ -122,9 +126,9 @@ If both are present, `skill_name` wins. The window opens in the main repo root, 
 | `q` / `Esc` | Close overlay |
 | Mouse | Click a file to select; scroll wheel scrolls; drag the divider to resize |
 
-If `SANTREE_DIFF_TOOL` is set, the diff is piped through that tool (e.g. `delta`) and rendered with ANSI passthrough for syntax highlighting. The dashboard owns scrolling — the pager is used purely for rendering.
+If you've configured a diff tool (`santree config` → Global → Diff tool, or a one-off `SANTREE_DIFF_TOOL` override), the diff is piped through it (e.g. `delta`) and rendered with ANSI passthrough for syntax highlighting; otherwise santree colorizes the diff itself. The dashboard owns scrolling — the pager is used purely for rendering.
 
-The Reviews-tab diff path uses `gh pr diff` for branches that don't exist locally; the worktree path uses `git diff` against `merge-base`. Both honor `SANTREE_DIFF_TOOL`.
+The Reviews-tab diff path uses `gh pr diff` for branches that don't exist locally; the worktree path uses `git diff` against `merge-base`. Both use your configured diff tool.
 
 ## Theme
 
@@ -137,7 +141,7 @@ Only the selection background is theme-sensitive; foreground colors are terminal
 | Inline (right-pane / full-area overlay) | New tmux/cmux window |
 |---|---|
 | `[C]` commit + push | `[w]` work (plan / implement) |
-| `[c]` PR create | `[f]` fix PR |
+| `[c]` PR create | `[f]` fix loop |
 | `[v]` diff overlay | `[r]` self-review PR |
 | `[a]` ask Claude (Triage) | `[i]` investigate ticket (Triage) |
 | `[?]` help | |

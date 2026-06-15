@@ -258,9 +258,13 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 
 	// ── Checks ────────────────────────────────────────────────────────
 	if (checks && checks.length > 0) {
+		// `skipping`/`cancel` checks don't run under the current conditions and
+		// don't block — GitHub counts them as "skipped" while still reporting all
+		// checks passed. Treat them as a non-blocking aside, never as pending.
 		const passing = checks.filter((c) => c.bucket === "pass");
 		const failing = checks.filter((c) => c.bucket === "fail");
-		const pending = checks.filter((c) => c.bucket !== "pass" && c.bucket !== "fail");
+		const pending = checks.filter((c) => c.bucket === "pending");
+		const skipped = checks.filter((c) => c.bucket === "skipping" || c.bucket === "cancel");
 		const headerColor = failing.length > 0 ? "red" : pending.length > 0 ? "yellow" : "green";
 
 		lines.push(ruleLine);
@@ -268,7 +272,7 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 			{ text: "✓ ", color: "cyan", bold: true },
 			{ text: "Checks", bold: true },
 			{ text: "   " },
-			{ text: `${passing.length}/${checks.length} passing`, color: headerColor },
+			{ text: `${passing.length} passed`, color: headerColor },
 		];
 		if (failing.length > 0) {
 			headerSegs.push({ text: "  ·  ", dim: true });
@@ -278,9 +282,14 @@ export default function ReviewDetailPanel({ item, scrollOffset, height, width }:
 			headerSegs.push({ text: "  ·  ", dim: true });
 			headerSegs.push({ text: `${pending.length} pending`, color: "yellow" });
 		}
+		if (skipped.length > 0) {
+			headerSegs.push({ text: "  ·  ", dim: true });
+			headerSegs.push({ text: `${skipped.length} skipped`, dim: true });
+		}
 		lines.push({ text: "", segments: headerSegs });
 
 		// Order: failing first (most important), then pending, then passing.
+		// Skipped checks aren't listed individually — just summarized above.
 		for (const check of failing) {
 			const desc = check.description ? ` — ${check.description}` : "";
 			lines.push({ text: `  ✗ ${check.name}${desc}`, color: "red" });

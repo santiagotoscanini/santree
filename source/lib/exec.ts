@@ -1,7 +1,22 @@
-import { execSync, exec, spawn } from "child_process";
+import { execSync, exec, execFile, spawn } from "child_process";
 import { promisify } from "util";
 
 const execPromise = promisify(exec);
+const execFilePromise = promisify(execFile);
+
+/**
+ * Run a command with array args (NO shell) and return `{ stdout, stderr }`.
+ * Rejects on non-zero exit with an error carrying `.stdout`/`.stderr`/`.message`,
+ * matching promisified `exec` semantics. Use this — not a `exec(\`… ${x}\`)`
+ * template — whenever any argument is user-supplied, to avoid shell injection.
+ */
+export async function execFileAsync(
+	file: string,
+	args: string[],
+	options?: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<{ stdout: string; stderr: string }> {
+	return execFilePromise(file, args, { encoding: "utf-8", ...options });
+}
 
 /**
  * Run a shell command and return trimmed stdout, or null on failure.

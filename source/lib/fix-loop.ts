@@ -3,7 +3,7 @@ import * as path from "path";
 import { getSantreeDir } from "./metadata.js";
 
 /**
- * Marker store for the auto-fix `/loop` (see `santree pr fix --loop`).
+ * Marker store for the auto-fix `/loop` (see `santree pr fix`).
  *
  * Each running loop writes `.santree/fix-loops/<ticketId>.json` and heartbeats it
  * every iteration. The dashboard reads these markers to render a per-ticket fix-loop

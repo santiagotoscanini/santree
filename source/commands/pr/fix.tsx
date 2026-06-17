@@ -12,9 +12,6 @@ export const description =
 	"Run the self-driving fix loop: merge conflicts, fixable CI, and 👍-approved review comments";
 
 export const options = z.object({
-	// Accepted for backward compatibility (the dashboard passes it). The fix loop
-	// is now the only flow, so this is always on.
-	loop: z.boolean().default(true).describe("Deprecated: the fix loop is always on"),
 	signal: z
 		.string()
 		.optional()

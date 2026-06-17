@@ -3388,7 +3388,7 @@ export default function Dashboard() {
 				if (!mux.isActive()) {
 					dispatch({
 						type: "SET_ACTION_MESSAGE",
-						message: "Fix loop needs tmux or cmux — run `santree pr fix --loop` in the worktree",
+						message: "Fix loop needs tmux or cmux — run `santree pr fix` in the worktree",
 					});
 					return;
 				}
@@ -3396,7 +3396,7 @@ export default function Dashboard() {
 				const cwd = di.worktree.path;
 				// Absolute santree invocation: the new window's shell may not have
 				// `santree` on PATH (cmux workspaces start a fresh login shell).
-				const self = santreeSelfArgv(["pr", "fix", "--loop"]);
+				const self = santreeSelfArgv(["pr", "fix"]);
 				const command = [self.cmd, ...self.args].join(" ");
 				// Seed the marker + optimistic badge so the loop shows immediately,
 				// before the launched process writes its own marker.

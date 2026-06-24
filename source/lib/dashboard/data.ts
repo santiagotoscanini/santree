@@ -12,7 +12,7 @@ import {
 } from "../git.js";
 import { runAsync } from "../exec.js";
 import { readFixLoopRuntime } from "../fix-loop.js";
-import { readMainAgentTodos, findClaudeSessionCwd } from "../claude-todos.js";
+import { getAiAgent } from "../agents/index.js";
 import {
 	getPRInfoAsync,
 	getPRChecksAsync,
@@ -95,13 +95,18 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 				// (direnv, shell init) sometimes cd into a subdir before Claude
 				// was launched, so resume must run from there. On a miss we drop
 				// the stored ID from metadata so the next refresh skips this work.
-				const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
+				// Session resume + todos are optional agent capabilities: Claude
+				// exposes them, Codex doesn't (so sessionCwd stays null → no resume,
+				// and the Tasks section is hidden).
+				const sessionCwd = storedId
+					? (getAiAgent().findSessionCwd?.(wt.path, storedId) ?? null)
+					: null;
 				let sessionId: string | null = storedId;
 				if (storedId && !sessionCwd) {
 					clearSessionId(repoRoot, issue.identifier);
 					sessionId = null;
 				}
-				const claudeTodos = sessionId ? readMainAgentTodos(sessionId) : null;
+				const claudeTodos = sessionId ? (getAiAgent().readTodos?.(sessionId) ?? null) : null;
 				worktreeInfo = {
 					path: wt.path,
 					branch: wt.branch,
@@ -171,13 +176,18 @@ export async function loadDashboardData(repoRoot: string): Promise<{
 						.trim() || tid;
 
 				const storedId = metadata[tid]?.session_id ?? null;
-				const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
+				// Session resume + todos are optional agent capabilities: Claude
+				// exposes them, Codex doesn't (so sessionCwd stays null → no resume,
+				// and the Tasks section is hidden).
+				const sessionCwd = storedId
+					? (getAiAgent().findSessionCwd?.(wt.path, storedId) ?? null)
+					: null;
 				let sessionId: string | null = storedId;
 				if (storedId && !sessionCwd) {
 					clearSessionId(repoRoot, tid);
 					sessionId = null;
 				}
-				const claudeTodos = sessionId ? readMainAgentTodos(sessionId) : null;
+				const claudeTodos = sessionId ? (getAiAgent().readTodos?.(sessionId) ?? null) : null;
 				return {
 					issue: {
 						identifier: tid,
@@ -473,13 +483,18 @@ export async function loadReviewsData(repoRoot: string): Promise<{
 						getDiffShortstatAsync(wt.path, base),
 					]);
 					const storedId = ticketId ? (metadata[ticketId]?.session_id ?? null) : null;
-					const sessionCwd = storedId ? findClaudeSessionCwd(wt.path, storedId) : null;
+					// Session resume + todos are optional agent capabilities: Claude
+					// exposes them, Codex doesn't (so sessionCwd stays null → no resume,
+					// and the Tasks section is hidden).
+					const sessionCwd = storedId
+						? (getAiAgent().findSessionCwd?.(wt.path, storedId) ?? null)
+						: null;
 					let sessionId: string | null = storedId;
 					if (storedId && ticketId && !sessionCwd) {
 						clearSessionId(repoRoot, ticketId);
 						sessionId = null;
 					}
-					const claudeTodos = sessionId ? readMainAgentTodos(sessionId) : null;
+					const claudeTodos = sessionId ? (getAiAgent().readTodos?.(sessionId) ?? null) : null;
 					worktreeInfo = {
 						path: wt.path,
 						branch: wt.branch,

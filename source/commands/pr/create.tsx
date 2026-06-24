@@ -137,7 +137,7 @@ export default function PR({ options }: Props) {
 
 			if (!result.success) {
 				setStatus("error");
-				setMessage("Failed to generate PR body with Claude");
+				setMessage("Failed to generate PR body with the AI agent");
 				setTimeout(() => exit(), 100);
 				return;
 			}

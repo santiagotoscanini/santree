@@ -1,12 +1,11 @@
 import { run } from "../exec.js";
 import { which } from "../setup/tools.js";
 import { getMultiplexer } from "../multiplexer/index.js";
-import { resolveClaudeBinary } from "../ai.js";
+import { getAiAgent } from "../agents/index.js";
 import { findMainRepoRoot } from "../git.js";
 import { getIssueTracker } from "../trackers/index.js";
 import {
 	CURRENT_VERSION,
-	CLAUDE_CODE_PACKAGE,
 	SANTREE_PACKAGE,
 	getLatestVersionFor,
 	isUpdateAvailable,
@@ -173,27 +172,28 @@ function checkWorkspaceEditor(): InfoRow {
 	};
 }
 
-/** Version + auth detail for the gh and claude step rows. */
+/** Version + auth detail for the agent CLI and gh step rows. */
 async function loadStepDetail(): Promise<Map<string, StepDetail>> {
 	const detail = new Map<string, StepDetail>();
 	const pm = detectPackageManager();
 
-	// claude — version + latest + cmux-aware update hint
-	const resolved = resolveClaudeBinary();
+	// active agent CLI — version + latest + (Claude) cmux-aware update hint
+	const agent = getAiAgent();
+	const resolved = agent.resolveBinary();
 	if (resolved) {
 		const version = tryRun(`"${resolved}" --version | head -1`);
-		const latest = await getLatestVersionFor(CLAUDE_CODE_PACKAGE);
+		const latest = await getLatestVersionFor(agent.installPackage);
 		const lines = [`Version: ${version || "unknown"}`, `Path: ${resolved}`];
 		let hint: string | undefined;
 		if (latest && version && isUpdateAvailable(version, latest)) {
 			lines.push(`Latest: ${latest} ⬆ update available`);
-			if (resolved.includes("/cmux.app/")) {
+			if (agent.kind === "claude" && resolved.includes("/cmux.app/")) {
 				hint = "Bundled with cmux — update cmux.app to get the latest Claude.";
 			} else {
-				hint = `Run: ${getInstallCommandFor(pm, `${CLAUDE_CODE_PACKAGE}@latest`).display}`;
+				hint = `Run: ${getInstallCommandFor(pm, `${agent.installPackage}@latest`).display}`;
 			}
 		}
-		detail.set("claude", { lines, hint });
+		detail.set("agent-cli", { lines, hint });
 	}
 
 	// gh — version + authenticated login

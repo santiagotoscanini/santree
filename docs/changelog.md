@@ -1,6 +1,6 @@
 ---
 title: Changelog
-nav_order: 14
+nav_order: 15
 description: Release history. Detailed notes live on the GitHub Releases page.
 ---
 
@@ -17,6 +17,10 @@ This page is a curated highlight reel.
 ---
 
 ## Recent highlights
+
+### 0.8.0 (June 2026)
+
+- Pluggable AI agent backend — santree now drives **Claude Code** (default) or **OpenAI Codex**. Pick one in `santree config` (System → **AI agent**), or override per-invocation with `SANTREE_AGENT=codex`. The options adapt to the agent: features Codex doesn't have (scriptable statusline, file-based remote control, an external todos file) disappear from the config panel and dashboard, and `pr fix` runs as a santree-driven loop instead of Claude's self-paced `/loop`. Everything else — `worktree work`, `pr review`, commit/PR drafting, triage Q&A — works on either. See [AI agents](agents.html).
 
 ### 0.7.x (May–June 2026)
 

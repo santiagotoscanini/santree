@@ -24,27 +24,19 @@ export function isTriageInvestigateConfigured(cfg: TriageInvestigateConfig): boo
 	return cfg.skillName !== null || cfg.prompt !== null;
 }
 
-/** Builds the prompt handed to Claude for investigating a ticket. Skill name
- * wins when both are set: `/<skill> <ticketId>`. Otherwise the free-form
- * template with every `{ticket_id}` replaced. Returns null when unconfigured. */
+/** Builds the prompt handed to the agent for investigating a ticket. Skill name
+ * wins when both are set: `/<skill> <ticketId>` — but only for agents that
+ * support slash-command skills (Claude). When `slashSkills` is false (Codex),
+ * the `skillName` form is skipped and only a free-form `prompt` template is
+ * used (with every `{ticket_id}` replaced). Returns null when nothing usable is
+ * configured for the active agent. */
 export function buildInvestigatePrompt(
 	cfg: TriageInvestigateConfig,
 	ticketId: string,
+	opts?: { slashSkills?: boolean },
 ): string | null {
-	if (cfg.skillName) return `/${cfg.skillName} ${ticketId}`;
+	const slashSkills = opts?.slashSkills ?? true;
+	if (cfg.skillName && slashSkills) return `/${cfg.skillName} ${ticketId}`;
 	if (cfg.prompt) return cfg.prompt.replace(/\{ticket_id\}/g, ticketId);
 	return null;
-}
-
-/** POSIX single-quote a shell argument. */
-function shellSingleQuote(s: string): string {
-	return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-/** Builds the shell command line launched in the new multiplexer window:
- * `<claudeBin> '<prompt>'`. The multiplexer escapes the whole line again for
- * its send-keys step; this layer just needs the prompt to survive as a single
- * argv entry so a slash command (`/skill TEAM-1`) reaches Claude intact. */
-export function buildInvestigateCommand(claudeBin: string, prompt: string): string {
-	return `${claudeBin} ${shellSingleQuote(prompt)}`;
 }

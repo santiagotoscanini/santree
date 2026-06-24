@@ -1,6 +1,6 @@
 ---
 title: Integrations
-nav_order: 11
+nav_order: 12
 ---
 
 # Integrations
@@ -15,7 +15,7 @@ Optional integrations that make santree fit your existing setup.
 
 ## Claude Code
 
-Santree lives next to Claude Code — it launches `claude`, wires up a statusline, and resumes its sessions.
+Santree lives next to Claude Code — it launches `claude`, wires up a statusline, and resumes its sessions. Claude Code is the default [AI agent backend](agents.html); the statusline and remote control below are Claude features and only appear in `santree config` when Claude is the active agent. To run santree on **OpenAI Codex** instead, see [AI agents](agents.html).
 
 ### Statusline
 

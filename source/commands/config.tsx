@@ -11,6 +11,7 @@ import {
 } from "../lib/setup/steps.js";
 import { loadDiagnostics, type DiagnosticsData, type InfoRow } from "../lib/config/diagnostics.js";
 import { getConfiguredEditor, getConfiguredDiffTool } from "../lib/config-store.js";
+import { getAiAgent } from "../lib/agents/index.js";
 import { pruneSessionSignalHooks } from "../lib/claude-config.js";
 import TrackerPicker from "../lib/config/TrackerPicker.js";
 import { findMainRepoRoot } from "../lib/git.js";
@@ -59,7 +60,7 @@ interface Row {
 
 // Presentation scope — overrides the catalog's coarse global/repo so install
 // tools land under "System" next to the read-only version rows.
-const SYSTEM_STEP_IDS = new Set(["claude", "gh", "tmux"]);
+const SYSTEM_STEP_IDS = new Set(["agent", "agent-cli", "gh", "tmux"]);
 const REPO_STEP_IDS = new Set(["tracker", "gitignore", "scaffold"]);
 
 function presScope(id: string): Scope {
@@ -74,7 +75,8 @@ const ROW_ORDER = [
 	"node",
 	"git",
 	"multiplexer",
-	"claude",
+	"agent",
+	"agent-cli",
 	"gh",
 	"tmux",
 	"workspace-editor",
@@ -91,7 +93,7 @@ const ROW_ORDER = [
 
 const SCOPE_TITLES: Record<Scope, string> = {
 	system: "System",
-	global: "Global (editor & Claude Code)",
+	global: "Global",
 	repo: "This repo",
 };
 
@@ -99,6 +101,7 @@ const SCOPE_TITLES: Record<Scope, string> = {
 function currentConfigValue(id: string): string | undefined {
 	if (id === "editor") return getConfiguredEditor();
 	if (id === "diff-tool") return getConfiguredDiffTool();
+	if (id === "agent") return getAiAgent().displayName;
 	return undefined;
 }
 
@@ -133,7 +136,7 @@ function stepToRow(s: SetupStep, detail?: { lines: string[]; hint?: string }): R
 		detail: s.detail,
 		scope: presScope(s.id),
 		ok,
-		required: s.id === "gh" || s.id === "claude",
+		required: s.id === "gh" || s.id === "agent-cli",
 		recommended: s.recommended,
 		on: s.unapply ? ok : undefined,
 		lines: detail?.lines ?? [],

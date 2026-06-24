@@ -64,7 +64,7 @@ This walks every required and optional integration and prints a row per check:
 
 <!-- TODO screenshot: `santree config --check` output — the full check list with a mix of green ✓ and a yellow ○ or two (e.g. remote control not enabled), so readers see the at-a-glance health view. -->
 
-- Required: Node ≥ 20, Git, GitHub CLI, Claude Code CLI
+- Required: Node ≥ 20, Git, GitHub CLI, and an [AI agent CLI](agents.html) (Claude Code by default, or Codex)
 - Optional: tmux/cmux, `git-delta` (or any unified-diff pager), an editor, the active issue tracker's auth status, Claude Code statusline + remote control
 
 `--check` exits non-zero if a required tool is missing, so it's handy in scripts and CI. If any required check fails, the row tells you what's missing and how to fix it. To apply those fixes interactively, run [`santree config`](#guided-setup-recommended).
@@ -76,7 +76,7 @@ This walks every required and optional integration and prints a row per check:
 | **Node.js** | ≥ 20 | Runtime |
 | **Git** | any modern | Worktree operations |
 | **GitHub CLI** (`gh`) | any | PR integration |
-| **Claude Code** (`claude`) | any | AI agent for `work`, `fix`, `review`, PR-fill |
+| **AI agent CLI** | any | [Claude Code](agents.html) (`claude`, default) or [Codex](agents.html) (`codex`) — powers `work`, `fix`, `review`, PR-fill |
 
 Optional, picked up if available:
 

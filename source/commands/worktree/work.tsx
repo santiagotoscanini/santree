@@ -12,8 +12,9 @@ import {
 } from "../../lib/ai.js";
 import { randomUUID } from "crypto";
 import { getSessionId, setSessionId } from "../../lib/git.js";
+import { getAiAgent } from "../../lib/agents/index.js";
 
-export const description = "Launch Claude to work on current ticket";
+export const description = "Launch the AI agent to work on the current ticket";
 
 export const options = z.object({
 	plan: z.boolean().optional().describe("Only create implementation plan"),
@@ -92,10 +93,12 @@ export default function Work({ options }: Props) {
 
 		const prompt = renderAIPrompt("work", aiContext, { mode, custom_context: customContext });
 
-		// Get or create a session ID for this ticket
+		// Get or create a session ID for this ticket. Only agents that let us
+		// preset a session id (Claude `--session-id`) get the stored-UUID + resume
+		// flow; Codex generates its own ids, so it always launches fresh.
 		let sessionId: string | undefined;
 		let isResume = false;
-		if (aiContext.ticketId) {
+		if (getAiAgent().canPresetSessionId && aiContext.ticketId) {
 			const existing = getSessionId(aiContext.mainRoot, aiContext.ticketId);
 			if (existing) {
 				sessionId = existing;
@@ -185,13 +188,9 @@ export default function Work({ options }: Props) {
 				{status === "launching" && (
 					<Box flexDirection="column">
 						<Text color="green" bold>
-							✓ Launching Claude...
+							✓ Launching {getAiAgent().displayName}...
 						</Text>
-						<Text dimColor>
-							{" "}
-							claude --permission-mode {mode === "plan" ? "plan" : "auto"}{" "}
-							{`"<${getModeLabel(mode)} prompt for ${ticketId}>"`}
-						</Text>
+						<Text dimColor>{` <${getModeLabel(mode)} prompt for ${ticketId}>`}</Text>
 					</Box>
 				)}
 				{status === "error" && (

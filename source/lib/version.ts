@@ -2,9 +2,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import * as https from "https";
-import { execSync } from "child_process";
 import { createRequire } from "module";
-import { resolveClaudeBinary } from "./ai.js";
+import { getAiAgent } from "./agents/index.js";
+import { claudeAgent } from "./agents/claude/index.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json");
@@ -168,34 +168,17 @@ export function isUpdateAvailable(current: string, latest: string): boolean {
 }
 
 /**
- * Read the locally installed Claude Code CLI version. Probes the resolved
- * Claude binary first (which prefers cmux's bundled copy when running inside
- * cmux — see lib/ai.ts:resolveClaudeBinary), then falls back to `claude` on
- * PATH and the Anthropic installer location.
+ * Read the locally installed Claude Code CLI version (Claude-specific — probes
+ * the cmux-bundled / PATH / installer locations). Kept for the Claude-only
+ * surfaces; agent-aware callers should use {@link getInstalledAgentVersion}.
  */
 export function getInstalledClaudeVersion(): string | null {
-	const resolved = resolveClaudeBinary();
-	const candidates = [
-		resolved,
-		"claude",
-		path.join(os.homedir(), ".claude", "local", "claude"),
-	].filter((b): b is string => b !== null);
-	const seen = new Set<string>();
-	for (const bin of candidates) {
-		if (seen.has(bin)) continue;
-		seen.add(bin);
-		try {
-			const out = execSync(`${bin} --version`, {
-				encoding: "utf-8",
-				stdio: ["pipe", "pipe", "pipe"],
-			}).trim();
-			const v = out.split(/\s+/)[0];
-			if (v) return v;
-		} catch {
-			// try next
-		}
-	}
-	return null;
+	return claudeAgent.getInstalledVersion();
+}
+
+/** Installed version of the *active* agent (Claude or Codex). */
+export function getInstalledAgentVersion(): string | null {
+	return getAiAgent().getInstalledVersion();
 }
 
 /**

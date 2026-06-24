@@ -3,8 +3,8 @@ import { run } from "../exec.js";
 import { findMainRepoRoot, getSantreeDir, getInitScriptPath } from "../git.js";
 import { isRepoTrackerConfigured } from "../trackers/index.js";
 import { getMultiplexer } from "../multiplexer/index.js";
-import { resolveClaudeBinary } from "../ai.js";
-import { CLAUDE_CODE_PACKAGE, detectPackageManager, getInstallCommandFor } from "../version.js";
+import { getAiAgent, getAgent, AGENT_KINDS } from "../agents/index.js";
+import { detectPackageManager, getInstallCommandFor } from "../version.js";
 import {
 	isStatuslineConfigured,
 	configureStatusline,
@@ -17,7 +17,9 @@ import {
 	setConfigValue,
 	getConfiguredEditor,
 	getConfiguredDiffTool,
+	getConfiguredAgent,
 	configStorePath,
+	type AgentPref,
 } from "../config-store.js";
 import { detectDiffPagers, detectEditors, getInstaller, which } from "./tools.js";
 import {
@@ -165,50 +167,58 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 	}
 
 	// ── Statusline ──────────────────────────────────────────────────────────────
-	steps.push({
-		id: "statusline",
-		title: "Statusline",
-		detail: "Worktree-aware statusline (branch, git changes, context usage)",
-		scope: "global",
-		kind: "file",
-		recommended: true,
-		detect: isStatuslineConfigured() ? "ok" : "actionable",
-		apply: () => {
-			if (dryRun)
-				return { ok: true, message: "Would configure statusLine in ~/.claude/settings.json" };
-			const p = configureStatusline();
-			return { ok: true, message: `Configured statusline in ${p}` };
-		},
-		unapply: () => {
-			if (dryRun)
-				return { ok: true, message: "Would remove statusLine from ~/.claude/settings.json" };
-			const p = removeStatusline();
-			return { ok: true, message: `Removed statusline from ${p}` };
-		},
-	});
+	// Claude Code feature — only offered when the active agent has a scriptable
+	// statusline. Codex doesn't (openai/codex#17827), so the row disappears.
+	if (getAiAgent().supportsStatusline) {
+		steps.push({
+			id: "statusline",
+			title: "Statusline",
+			detail: "Worktree-aware statusline (branch, git changes, context usage)",
+			scope: "global",
+			kind: "file",
+			recommended: true,
+			detect: isStatuslineConfigured() ? "ok" : "actionable",
+			apply: () => {
+				if (dryRun)
+					return { ok: true, message: "Would configure statusLine in ~/.claude/settings.json" };
+				const p = configureStatusline();
+				return { ok: true, message: `Configured statusline in ${p}` };
+			},
+			unapply: () => {
+				if (dryRun)
+					return { ok: true, message: "Would remove statusLine from ~/.claude/settings.json" };
+				const p = removeStatusline();
+				return { ok: true, message: `Removed statusline from ${p}` };
+			},
+		});
+	}
 
 	// ── Remote control ──────────────────────────────────────────────────────────
-	steps.push({
-		id: "remote-control",
-		title: "Remote control",
-		detail: "Enable remote control at startup (drive sessions from the dashboard)",
-		scope: "global",
-		kind: "file",
-		recommended: false,
-		detect: isRemoteControlEnabled() ? "ok" : "actionable",
-		apply: () => {
-			if (dryRun)
-				return { ok: true, message: "Would set remoteControlAtStartup in ~/.claude.json" };
-			const p = enableRemoteControl();
-			return { ok: true, message: `Enabled remote control in ${p}` };
-		},
-		unapply: () => {
-			if (dryRun)
-				return { ok: true, message: "Would unset remoteControlAtStartup in ~/.claude.json" };
-			const p = disableRemoteControl();
-			return { ok: true, message: `Disabled remote control in ${p}` };
-		},
-	});
+	// Claude-only (file-based toggle). Codex's remote control is a different
+	// WebSocket app-server model santree doesn't manage, so the row disappears.
+	if (getAiAgent().supportsRemoteControl) {
+		steps.push({
+			id: "remote-control",
+			title: "Remote control",
+			detail: "Enable remote control at startup (drive sessions from the dashboard)",
+			scope: "global",
+			kind: "file",
+			recommended: false,
+			detect: isRemoteControlEnabled() ? "ok" : "actionable",
+			apply: () => {
+				if (dryRun)
+					return { ok: true, message: "Would set remoteControlAtStartup in ~/.claude.json" };
+				const p = enableRemoteControl();
+				return { ok: true, message: `Enabled remote control in ${p}` };
+			},
+			unapply: () => {
+				if (dryRun)
+					return { ok: true, message: "Would unset remoteControlAtStartup in ~/.claude.json" };
+				const p = disableRemoteControl();
+				return { ok: true, message: `Disabled remote control in ${p}` };
+			},
+		});
+	}
 
 	// ── GitHub CLI install + auth ───────────────────────────────────────────────
 	{
@@ -249,23 +259,46 @@ export function buildSteps(ctx: SetupContext): SetupStep[] {
 		});
 	}
 
-	// ── Claude Code CLI ─────────────────────────────────────────────────────────
+	// ── AI agent backend (select Claude / Codex) ────────────────────────────────
 	{
-		const installed = !!resolveClaudeBinary();
+		const active = getConfiguredAgent();
 		steps.push({
-			id: "claude",
-			title: "Claude Code",
+			id: "agent",
+			title: "AI agent",
+			detail: "Backend that powers `worktree work`, `pr fix`, `pr review`",
+			scope: "global",
+			kind: "file",
+			recommended: true,
+			detect: "ok",
+			options: AGENT_KINDS.map((k) => ({ value: k, label: getAgent(k).displayName })),
+			optionPrompt: "Pick your AI agent:",
+			apply: (choice) => {
+				const pick = (choice as AgentPref) || active;
+				if (dryRun) return { ok: true, message: `Would set agent=${pick}` };
+				setConfigValue("agent", pick);
+				return { ok: true, message: `Set AI agent to ${getAgent(pick).displayName}` };
+			},
+		});
+	}
+
+	// ── Active agent CLI (install) ──────────────────────────────────────────────
+	{
+		const agent = getAiAgent();
+		const installed = !!agent.resolveBinary();
+		steps.push({
+			id: "agent-cli",
+			title: `${agent.displayName} CLI`,
 			detail: "Powers `worktree work`, `pr fix`, `pr review`",
 			scope: "global",
 			kind: "spawn",
 			recommended: true,
 			detect: installed ? "ok" : "actionable",
 			apply: () => {
-				const cmd = getInstallCommandFor(detectPackageManager(), CLAUDE_CODE_PACKAGE);
+				const cmd = getInstallCommandFor(detectPackageManager(), agent.installPackage);
 				if (dryRun) return { ok: true, message: `Would run: ${cmd.display}` };
 				const code = spawnTTY(cmd.cmd, cmd.args);
 				return code === 0
-					? { ok: true, message: "Claude Code CLI installed" }
+					? { ok: true, message: `${agent.displayName} CLI installed` }
 					: { ok: false, message: `Install failed — run manually: ${cmd.display}` };
 			},
 		});

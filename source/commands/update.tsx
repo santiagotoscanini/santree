@@ -4,19 +4,19 @@ import Spinner from "ink-spinner";
 import { z } from "zod";
 import {
 	CURRENT_VERSION,
-	CLAUDE_CODE_PACKAGE,
 	getLatestVersion,
 	getLatestVersionFor,
-	getInstalledClaudeVersion,
+	getInstalledAgentVersion,
 	isUpdateAvailable,
 	detectPackageManager,
 	getInstallCommand,
 	getInstallCommandFor,
 	type PackageManager,
 } from "../lib/version.js";
+import { getAiAgent } from "../lib/agents/index.js";
 import { spawnAsync } from "../lib/exec.js";
 
-interface ClaudeStatus {
+interface AgentStatus {
 	installed: string | null;
 	latest: string | null;
 }
@@ -54,19 +54,20 @@ export default function Update({ options }: Props) {
 	const [installCmd, setInstallCmd] = useState<string>("");
 	const [output, setOutput] = useState<string>("");
 	const [error, setError] = useState<string | null>(null);
-	const [claude, setClaude] = useState<ClaudeStatus | null>(null);
+	const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+	const agent = getAiAgent();
 
 	useEffect(() => {
 		(async () => {
 			await new Promise((r) => setTimeout(r, 80));
 
-			// Check santree + claude versions in parallel.
-			const [latestVersion, latestClaude] = await Promise.all([
+			// Check santree + active-agent versions in parallel.
+			const [latestVersion, latestAgent] = await Promise.all([
 				getLatestVersion({ force: true }),
-				getLatestVersionFor(CLAUDE_CODE_PACKAGE, { force: true }),
+				getLatestVersionFor(agent.installPackage, { force: true }),
 			]);
 			setLatest(latestVersion);
-			setClaude({ installed: getInstalledClaudeVersion(), latest: latestClaude });
+			setAgentStatus({ installed: getInstalledAgentVersion(), latest: latestAgent });
 
 			const detectedPm = options.pm ?? detectPackageManager();
 			setPm(detectedPm);
@@ -182,19 +183,21 @@ export default function Update({ options }: Props) {
 				</Box>
 			)}
 
-			{claude && claude.installed && (
+			{agentStatus && agentStatus.installed && (
 				<Box marginTop={1} flexDirection="column">
-					{claude.latest && isUpdateAvailable(claude.installed, claude.latest) ? (
+					{agentStatus.latest && isUpdateAvailable(agentStatus.installed, agentStatus.latest) ? (
 						<>
 							<Text color="yellow">
-								⬆ Claude Code {claude.installed} → {claude.latest} available
+								⬆ {agent.displayName} {agentStatus.installed} → {agentStatus.latest} available
 							</Text>
 							<Text dimColor>
-								Run: {getInstallCommandFor(pm, `${CLAUDE_CODE_PACKAGE}@latest`).display}
+								Run: {getInstallCommandFor(pm, `${agent.installPackage}@latest`).display}
 							</Text>
 						</>
-					) : claude.latest ? (
-						<Text dimColor>✓ Claude Code {claude.installed} is up to date</Text>
+					) : agentStatus.latest ? (
+						<Text dimColor>
+							✓ {agent.displayName} {agentStatus.installed} is up to date
+						</Text>
 					) : null}
 				</Box>
 			)}

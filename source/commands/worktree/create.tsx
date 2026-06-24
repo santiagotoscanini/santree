@@ -20,7 +20,7 @@ export const description = "Create a new worktree from a branch";
 
 export const options = z.object({
 	base: z.string().optional().describe("Base branch to create from"),
-	work: z.boolean().optional().describe("Launch Claude after creating"),
+	work: z.boolean().optional().describe("Launch the AI agent after creating"),
 	plan: z.boolean().optional().describe("With --work, only plan"),
 	"no-pull": z.boolean().optional().describe("Skip pulling latest changes"),
 	window: z.boolean().optional().describe("Create a new multiplexer window/workspace (tmux/cmux)"),

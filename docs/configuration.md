@@ -17,6 +17,7 @@ How to point santree at your tools, workflows, and conventions.
 
 | Variable | Effect |
 |---|---|
+| `SANTREE_AGENT` | Override the active [AI agent backend](agents.html) for a single invocation: `claude` or `codex`. Takes precedence over the value stored in `santree config` (System → **AI agent**). If unset, defaults to `claude`. |
 | `SANTREE_TRACKER` | Override the active issue tracker for a single invocation: `linear`, `github`, or `local`. Takes precedence over the per-repo `_tracker.kind`. If unset, falls back to repo config → legacy `_linear.org` → auto-detect. |
 | `SANTREE_EDITOR` | One-off override for your editor (used by `[e]` open-in-editor actions in the dashboard, and by `Ctrl+O` in the multi-line context input), winning over the value stored in `santree config` (Global section → **Default editor**). Examples: `cursor`, `zed`, `code`, `nvim`. GUI editors get `--wait` automatically. Set it in `santree config` for a persistent default; use the env var for a single invocation or CI. |
 | `SANTREE_DIFF_TOOL` | One-off override for the diff tool used by `worktree diff` (CLI) and the dashboard `[v]` overlay, winning over the value stored in `santree config` (Global section → **Diff tool**). Passed to git as `-c core.pager=<tool>` for the CLI, and used to pipe content for the overlay. Examples: `delta`, `diff-so-fancy`. Must accept a unified diff on stdin. Names are restricted to `[A-Za-z0-9_\-/.+]`. Set it in `santree config` for a persistent default; use the env var for a single invocation or CI. |

@@ -27,24 +27,18 @@ import {
 import { run, spawnAsync, execFileAsync } from "../lib/exec.js";
 import { getConfiguredEditor } from "../lib/config-store.js";
 import { printCdHint } from "../lib/cd-hint.js";
-import {
-	resolveAgentBinary,
-	resolveClaudeBinary,
-	fillCommitMessage,
-	askTicketQuestion,
-} from "../lib/ai.js";
+import { fillCommitMessage, askTicketQuestion } from "../lib/ai.js";
 import {
 	readTriageInvestigateConfig,
 	isTriageInvestigateConfigured,
 	buildInvestigatePrompt,
-	buildInvestigateCommand,
 } from "../lib/triage-config.js";
-import { getInstalledClaudeVersion } from "../lib/version.js";
+import { getInstalledAgentVersion } from "../lib/version.js";
+import { getAiAgent } from "../lib/agents/index.js";
 import { extractTicketId, getStagedDiffContent } from "../lib/git.js";
 import { santreeSelfArgv } from "../lib/setup/apply.js";
 import { startFixLoop } from "../lib/fix-loop.js";
 import { getMultiplexer } from "../lib/multiplexer/index.js";
-import { shellEscape } from "../lib/multiplexer/types.js";
 import Spinner from "ink-spinner";
 import SquirrelLoader from "../lib/squirrel-loader.js";
 import { getPRTemplate } from "../lib/github.js";
@@ -83,7 +77,6 @@ import DiffOverlay, {
 import type { DiffFile, DiffFileStatus } from "../lib/dashboard/types.js";
 import {
 	CURRENT_VERSION,
-	CLAUDE_CODE_PACKAGE,
 	getLatestVersion,
 	getCachedLatestVersion,
 	getLatestVersionFor,
@@ -95,9 +88,12 @@ export const description = "Interactive dashboard of your assigned issues";
 
 const execAsync = promisify(exec);
 
-// Resolved at module load — cheap. Honors cmux's bundled binary when running
-// inside cmux so the header reflects the binary santree will actually use.
-const CLAUDE_VERSION = getInstalledClaudeVersion() ?? "";
+// Resolved at module load — cheap. Reflects the active agent (Claude or Codex),
+// honoring cmux's bundled binary when running inside cmux.
+const ACTIVE_AGENT = getAiAgent();
+const AGENT_PKG = ACTIVE_AGENT.installPackage;
+const AGENT_LABEL = ACTIVE_AGENT.kind;
+const AGENT_VERSION = getInstalledAgentVersion() ?? "";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -517,8 +513,8 @@ export default function Dashboard() {
 	// Show cached values immediately so the banner appears on first paint when
 	// known-stale; refresh in the background without blocking dashboard load.
 	const [latestVersion, setLatestVersion] = useState<string | null>(getCachedLatestVersion);
-	const [latestClaudeVersion, setLatestClaudeVersion] = useState<string | null>(() =>
-		getCachedLatestVersionFor(CLAUDE_CODE_PACKAGE),
+	const [latestAgentVersion, setLatestAgentVersion] = useState<string | null>(() =>
+		getCachedLatestVersionFor(AGENT_PKG),
 	);
 
 	useEffect(() => {
@@ -526,8 +522,8 @@ export default function Dashboard() {
 		getLatestVersion().then((v) => {
 			if (!cancelled && v) setLatestVersion(v);
 		});
-		getLatestVersionFor(CLAUDE_CODE_PACKAGE).then((v) => {
-			if (!cancelled && v) setLatestClaudeVersion(v);
+		getLatestVersionFor(AGENT_PKG).then((v) => {
+			if (!cancelled && v) setLatestAgentVersion(v);
 		});
 		return () => {
 			cancelled = true;
@@ -535,10 +531,8 @@ export default function Dashboard() {
 	}, []);
 
 	const updateAvailable = latestVersion ? isUpdateAvailable(CURRENT_VERSION, latestVersion) : false;
-	const claudeUpdateAvailable =
-		!!CLAUDE_VERSION &&
-		!!latestClaudeVersion &&
-		isUpdateAvailable(CLAUDE_VERSION, latestClaudeVersion);
+	const agentUpdateAvailable =
+		!!AGENT_VERSION && !!latestAgentVersion && isUpdateAvailable(AGENT_VERSION, latestAgentVersion);
 
 	useEffect(() => {
 		const onResize = () => {
@@ -1288,17 +1282,13 @@ export default function Dashboard() {
 		) => {
 			const windowName = di.issue.identifier;
 			const sessionId = di.worktree?.sessionId;
-			const bin = resolveAgentBinary();
-			// `claude --resume` is cwd-scoped — it only finds the session under
-			// the encoded path of the current cwd. Project conventions (direnv,
-			// shell init) sometimes leave the tmux window in a subdir, so we
-			// prepend `cd <sessionCwd>` (resolved by `findClaudeSessionCwd`)
-			// to guarantee the resume runs from where the session was created.
+			// Session resume is cwd-scoped — the agent builds `cd <cwd> && …`
+			// anchored at where the session was created (sessionCwd, resolved by
+			// the agent's findSessionCwd). Only agents that track session ids
+			// (Claude) populate sessionId, so Codex falls through to a fresh launch.
 			const sessionCwd = di.worktree?.sessionCwd ?? di.worktree?.path;
 			const resumeCmd =
-				sessionId && bin && sessionCwd
-					? `cd ${shellEscape(sessionCwd)} && ${bin} --resume ${sessionId}`
-					: null;
+				sessionId && sessionCwd ? getAiAgent().buildResumeCommand(sessionId, sessionCwd) : null;
 			const contextArg = contextFile ? ` --context-file "${contextFile}"` : "";
 			const workCmd =
 				mode === "plan"
@@ -2011,11 +2001,11 @@ export default function Dashboard() {
 					return;
 				}
 
-				const bin = resolveAgentBinary();
-				if (!bin) {
+				const agent = getAiAgent();
+				if (!agent.resolveBinary()) {
 					dispatch({
 						type: "PR_CREATE_ERROR",
-						error: "Claude CLI not found (npm i -g @anthropic-ai/claude-code)",
+						error: `${agent.displayName} CLI not found (${agent.installHint})`,
 					});
 					return;
 				}
@@ -2055,18 +2045,13 @@ export default function Dashboard() {
 					branch_name: s.prCreateBranch,
 				});
 
-				// Pass prompt via stdin instead of temp file
-				const agentResult = await spawnAsync(
-					bin,
-					["-p", "--output-format", "text", "--allowedTools", "Read"],
-					{
-						stdin: prompt,
-					},
-				);
+				// Generate the PR body with the active agent. `Read` is allowed so
+				// it can open any ticket images downloaded into the prompt.
+				const agentResult = await agent.runHeadlessAsync(prompt, { allowedTools: ["Read"] });
 
 				const body = agentResult.output.trim();
 
-				if (agentResult.code !== 0 || !body || body.toLowerCase().startsWith("error")) {
+				if (!agentResult.success || !body || body.toLowerCase().startsWith("error")) {
 					dispatch({
 						type: "PR_CREATE_ERROR",
 						error: body || "Failed to generate PR body with AI",
@@ -3049,6 +3034,7 @@ export default function Dashboard() {
 					const prompt = buildInvestigatePrompt(
 						readTriageInvestigateConfig(root),
 						di.issue.identifier,
+						{ slashSkills: getAiAgent().supportsSlashSkills },
 					);
 					if (!prompt) {
 						dispatch({
@@ -3066,7 +3052,7 @@ export default function Dashboard() {
 						});
 						return;
 					}
-					const command = buildInvestigateCommand(resolveClaudeBinary() ?? "claude", prompt);
+					const command = getAiAgent().buildLaunchLine(prompt);
 					const windowName = `investigate-${di.issue.identifier}`;
 					void (async () => {
 						const created = await mux.createWindow({
@@ -3228,12 +3214,10 @@ export default function Dashboard() {
 				if (mux.isActive()) {
 					const windowName = di.issue.identifier;
 					const sessionId = di.worktree.sessionId;
-					const bin = resolveAgentBinary();
 					const sessionCwd = di.worktree.sessionCwd ?? di.worktree.path;
-					const resumeCmd =
-						sessionId && bin
-							? `cd ${shellEscape(sessionCwd)} && ${bin} --resume ${sessionId}`
-							: null;
+					const resumeCmd = sessionId
+						? getAiAgent().buildResumeCommand(sessionId, sessionCwd)
+						: null;
 					const worktreePath = di.worktree.path;
 					void (async () => {
 						const selected = await mux.selectWindow(windowName);
@@ -3556,16 +3540,16 @@ export default function Dashboard() {
 						{" available — `santree update`"}
 					</Text>
 				) : null}
-				{CLAUDE_VERSION ? (
+				{AGENT_VERSION ? (
 					<Text dimColor>
-						{"  ·  claude "}
-						{CLAUDE_VERSION}
+						{`  ·  ${AGENT_LABEL} `}
+						{AGENT_VERSION}
 					</Text>
 				) : null}
-				{claudeUpdateAvailable && latestClaudeVersion ? (
+				{agentUpdateAvailable && latestAgentVersion ? (
 					<Text color="yellow">
 						{"  ⬆ "}
-						{latestClaudeVersion}
+						{latestAgentVersion}
 					</Text>
 				) : null}
 				{state.refreshing ? (

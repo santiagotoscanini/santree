@@ -1,7 +1,6 @@
-import { execSync, spawn, spawnSync, type ChildProcess } from "child_process";
-import { existsSync, writeFileSync } from "fs";
-import { join } from "path";
-import { homedir, tmpdir } from "os";
+import { type ChildProcess } from "child_process";
+import { getAiAgent } from "./agents/index.js";
+import type { RunResult, LaunchOpts, HeadlessOpts } from "./agents/types.js";
 import { getCurrentBranch, findRepoRoot, findMainRepoRoot, getBaseBranch } from "./git.js";
 import {
 	renderPrompt,
@@ -163,10 +162,34 @@ export async function fetchAndRenderPR(branch: string): Promise<string | null> {
  * absolute santree invocation embedded in the `--signal` / resolve commands.
  * Returns null when no PR exists for the branch.
  */
+/** Structured fix-context: the rendered brief plus the machine-usable directive
+ * and a state `signature` (used by the santree-driven Codex loop to detect a
+ * fix that isn't making progress). */
+export interface FixContextResult {
+	brief: string;
+	directive: FixContextData["directive"];
+	/** Stable fingerprint of the actionable state — same value twice = no progress. */
+	signature: string;
+}
+
 export async function fetchAndRenderFixContext(
 	branch: string,
 	santreeCmd: string,
 ): Promise<string | null> {
+	const result = await computeFixContext(branch, santreeCmd);
+	return result ? result.brief : null;
+}
+
+/**
+ * Like {@link fetchAndRenderFixContext} but returns the brief *and* the computed
+ * directive + state signature. The self-paced Claude `/loop` only needs the
+ * brief; the santree-driven Codex loop also needs the directive to decide
+ * continue/wait/stop and the signature to detect being stuck.
+ */
+export async function computeFixContext(
+	branch: string,
+	santreeCmd: string,
+): Promise<FixContextResult | null> {
 	const prInfo = await getPRInfoAsync(branch);
 	if (!prInfo) return null;
 
@@ -212,7 +235,7 @@ export async function fetchAndRenderFixContext(
 					? "stop-stuck"
 					: "stop-clean";
 
-	return renderFixContext({
+	const brief = renderFixContext({
 		pr_number: prInfo.number,
 		pr_url: prInfo.url ?? "",
 		branch,
@@ -229,6 +252,15 @@ export async function fetchAndRenderFixContext(
 		directive,
 		santree_cmd: santreeCmd,
 	});
+
+	const signature = JSON.stringify({
+		directive,
+		conflicts,
+		checks: failed_checks.map((c) => c.name).sort(),
+		comments: approved_comments.map((c) => c.id).sort(),
+	});
+
+	return { brief, directive, signature };
 }
 
 /**
@@ -252,185 +284,43 @@ export async function fetchAndRenderDiff(branch: string): Promise<string> {
 	});
 }
 
-/**
- * cmux ships its own Claude CLI shim wired to the active cmux workspace. When
- * we run inside cmux, the system `claude` (if any) talks to a different
- * session — confusing for the user. See manaflow-ai/cmux#2048.
- */
-const CMUX_CLAUDE_PATH = "/Applications/cmux.app/Contents/Resources/bin/claude";
+// Binary resolution + launch/run live in the pluggable agent layer
+// (`lib/agents/`). `resolveClaudeBinary` is re-exported for the few call sites
+// that specifically need Claude (cmux-bundled path, the Claude version row);
+// everything else goes through the active agent.
+export { resolveClaudeBinary } from "./agents/claude/index.js";
 
-/**
- * Resolve the path to the Claude CLI binary, preferring cmux's bundled copy
- * when running inside cmux. Falls back to PATH lookup, then to Anthropic's
- * standard installer location (`~/.claude/local/claude`). Returns null if
- * none of those resolve.
- *
- * Used by every santree code path that needs to invoke or report the Claude
- * binary — version display, doctor checks, and interactive launches.
- */
-export function resolveClaudeBinary(): string | null {
-	// Inside cmux, the bundled binary is the only one wired to the active
-	// workspace. Gate on `CMUX_SURFACE_ID` (real cmux runtime) — outside a live
-	// workspace the bundled binary has no auth context and exits with
-	// "Invalid API key".
-	if (process.env["CMUX_SURFACE_ID"] && existsSync(CMUX_CLAUDE_PATH)) {
-		return CMUX_CLAUDE_PATH;
-	}
-
-	// PATH lookup
-	try {
-		execSync("which claude", { stdio: "ignore" });
-		return "claude";
-	} catch {
-		// fall through
-	}
-
-	// Anthropic installer location — Ink renders may not inherit the user's
-	// shell PATH, so check this explicitly.
-	const localClaude = join(homedir(), ".claude", "local", "claude");
-	if (existsSync(localClaude)) return localClaude;
-
-	return null;
-}
-
-/**
- * @deprecated Use `resolveClaudeBinary()` directly. Kept as an alias because
- * existing call sites pass the return value straight to spawn args.
- */
+/** Binary of the *active* agent (Claude or Codex). */
 export function resolveAgentBinary(): string | null {
-	return resolveClaudeBinary();
+	return getAiAgent().resolveBinary();
 }
 
-// Conservative limit: 200KB leaves room for env vars within macOS 256KB ARG_MAX
-const ARG_MAX_SAFE = 200 * 1024;
+export type RunAgentResult = RunResult;
 
 /**
- * Build the prompt argument for the agent.
- * If the prompt fits in ARG_MAX, returns it directly.
- * Otherwise, writes to a temp file and returns a short instruction to read it.
+ * Launch an interactive session with the active agent. Plan mode, session id,
+ * and resume are mapped per-agent (Claude uses `--permission-mode`/`--session-id`;
+ * Codex uses `--sandbox`/`resume`). Throws if the agent binary is not found.
  */
-function promptArg(prompt: string): string {
-	if (Buffer.byteLength(prompt) <= ARG_MAX_SAFE) {
-		return prompt;
-	}
-	const filePath = join(tmpdir(), `santree-prompt-${Date.now()}.md`);
-	writeFileSync(filePath, prompt);
-	return `Read ${filePath} and follow the instructions inside.`;
+export function launchAgent(prompt: string, opts?: LaunchOpts): ChildProcess {
+	return getAiAgent().launchInteractive(prompt, opts);
 }
 
 /**
- * Launch an interactive agent session with a prompt.
- * Passes prompt directly or via temp file if too large for OS arg limit.
- * Throws if claude CLI is not found.
+ * Run the active agent headless and capture output. `allowedTools` is honoured
+ * by agents that support a per-tool allowlist (Claude); others map it to a
+ * read-only sandbox. Throws if the agent binary is not found.
  */
-export function launchAgent(
-	prompt: string,
-	opts?: { planMode?: boolean; sessionId?: string; resume?: boolean },
-): ChildProcess {
-	const bin = resolveAgentBinary();
-	if (!bin) {
-		throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
-	}
-
-	const args: string[] = [];
-
-	// Plan mode uses Claude Code's `--permission-mode plan` (read-only,
-	// restrictive); implement runs use `auto`. Auto-acceptance of non-mutating
-	// tools while planning is governed by the user's `useAutoModeDuringPlan`
-	// setting in ~/.claude/settings.json, not by santree.
-	args.push("--permission-mode", opts?.planMode ? "plan" : "auto");
-
-	if (opts?.sessionId) {
-		if (opts.resume) {
-			args.push("--resume", opts.sessionId);
-		} else {
-			args.push("--session-id", opts.sessionId);
-		}
-	}
-
-	args.push("--", promptArg(prompt));
-
-	return spawn(bin, args, { stdio: "inherit" });
-}
-
-export interface RunAgentResult {
-	success: boolean;
-	output: string;
+export function runAgent(prompt: string, opts?: HeadlessOpts): RunAgentResult {
+	return getAiAgent().runHeadless(prompt, opts);
 }
 
 /**
- * Run an agent in non-interactive print mode and capture output.
- * Passes prompt directly or via temp file if too large for OS arg limit.
- * Throws if claude CLI is not found.
+ * Async headless run — use from Ink renderers so the event loop keeps turning
+ * during the agent's generation (a blocking call freezes the spinner/keypresses).
  */
-export function runAgent(prompt: string, opts?: { allowedTools?: string[] }): RunAgentResult {
-	const bin = resolveAgentBinary();
-	if (!bin) {
-		throw new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code");
-	}
-
-	const toolArgs = opts?.allowedTools?.length ? ["--allowedTools", ...opts.allowedTools] : [];
-
-	const result = spawnSync(
-		bin,
-		[
-			"--permission-mode",
-			"auto",
-			...toolArgs,
-			"-p",
-			"--output-format",
-			"text",
-			"--",
-			promptArg(prompt),
-		],
-		{
-			encoding: "utf-8",
-			maxBuffer: 10 * 1024 * 1024,
-		},
-	);
-
-	return {
-		success: result.status === 0,
-		output: result.stdout?.trim() ?? "",
-	};
-}
-
-/**
- * Async version of runAgent. Use this from Ink renderers — spawnSync
- * blocks Node's event loop, freezing the UI (no spinner animation, no
- * keystroke processing) for the entire duration of Claude's generation.
- * spawn() lets the loop run during the call.
- */
-export function runAgentAsync(
-	prompt: string,
-	opts?: { allowedTools?: string[] },
-): Promise<RunAgentResult> {
-	const bin = resolveAgentBinary();
-	if (!bin) {
-		return Promise.reject(
-			new Error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"),
-		);
-	}
-
-	const toolArgs = opts?.allowedTools?.length ? ["--allowedTools", ...opts.allowedTools] : [];
-	const args = [
-		"--permission-mode",
-		"auto",
-		...toolArgs,
-		"-p",
-		"--output-format",
-		"text",
-		"--",
-		promptArg(prompt),
-	];
-
-	return new Promise<RunAgentResult>((resolve) => {
-		const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
-		let stdout = "";
-		child.stdout?.on("data", (chunk) => (stdout += chunk.toString("utf-8")));
-		child.on("error", () => resolve({ success: false, output: "" }));
-		child.on("close", (code) => resolve({ success: code === 0, output: stdout.trim() }));
-	});
+export function runAgentAsync(prompt: string, opts?: HeadlessOpts): Promise<RunAgentResult> {
+	return getAiAgent().runHeadlessAsync(prompt, opts);
 }
 
 /**

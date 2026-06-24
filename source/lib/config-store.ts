@@ -16,11 +16,16 @@ import * as path from "path";
 const CONFIG_DIR = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
 const CONFIG_PATH = path.join(CONFIG_DIR, "santree", "config.json");
 
+/** AI coding-agent backend santree drives. Kept in sync with `AiAgentKind`. */
+export type AgentPref = "claude" | "codex";
+
 export interface SantreeConfig {
 	/** Editor launched by the dashboard's [e] action and Ctrl+O in text areas. */
 	editor?: string;
 	/** Unified-diff pager for `worktree diff` and the dashboard [v] overlay. */
 	diffTool?: string;
+	/** AI agent backend (`claude` | `codex`). Defaults to claude when unset. */
+	agent?: AgentPref;
 }
 
 export function configStorePath(): string {
@@ -80,4 +85,13 @@ export function getConfiguredDiffTool(): string | undefined {
 	if (!raw || !raw.trim()) return undefined;
 	const tool = raw.trim();
 	return /^[a-zA-Z0-9_\-/.+]+$/.test(tool) ? tool : undefined;
+}
+
+/**
+ * Resolved AI agent backend: `SANTREE_AGENT` env override → config file →
+ * `"claude"`. Unknown values fall back to claude so a typo never wedges the CLI.
+ */
+export function getConfiguredAgent(): AgentPref {
+	const raw = (process.env.SANTREE_AGENT ?? readConfigStore().agent ?? "").trim().toLowerCase();
+	return raw === "codex" ? "codex" : "claude";
 }

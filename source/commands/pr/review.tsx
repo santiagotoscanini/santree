@@ -8,6 +8,7 @@ import {
 	cleanupImages,
 	fetchAndRenderDiff,
 } from "../../lib/ai.js";
+import { getAiAgent } from "../../lib/agents/index.js";
 
 export const description = "Review changes against ticket requirements";
 
@@ -122,9 +123,9 @@ export default function Review() {
 				{status === "launching" && (
 					<Box flexDirection="column">
 						<Text color="green" bold>
-							✓ Launching Claude...
+							✓ Launching {getAiAgent().displayName}...
 						</Text>
-						<Text dimColor> claude {`"<review prompt for ${ticketId}>"`}</Text>
+						<Text dimColor>{` <review prompt for ${ticketId}>`}</Text>
 					</Box>
 				)}
 				{status === "error" && (

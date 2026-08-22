@@ -64,7 +64,9 @@ export default function LinearAuth({ options }: Props) {
 			setStatus("authenticating");
 			startOAuthFlow().then((result) => {
 				if (!result) {
-					setError("Authentication failed or timed out. Please try again.");
+					setError(
+						"Linear authorization did not complete. The browser flow times out after 2 minutes.",
+					);
 					setStatus("error");
 					return;
 				}
@@ -186,7 +188,9 @@ export default function LinearAuth({ options }: Props) {
 				setStatus("authenticating");
 				const result = await startOAuthFlow();
 				if (!result) {
-					setError("Authentication failed or timed out. Please try again.");
+					setError(
+						"Linear authorization did not complete. The browser flow times out after 2 minutes.",
+					);
 					setStatus("error");
 					return;
 				}
@@ -209,7 +213,9 @@ export default function LinearAuth({ options }: Props) {
 				setStatus("authenticating");
 				const result = await startOAuthFlow();
 				if (!result) {
-					setError("Authentication failed or timed out. Please try again.");
+					setError(
+						"Linear authorization did not complete. The browser flow times out after 2 minutes.",
+					);
 					setStatus("error");
 					return;
 				}

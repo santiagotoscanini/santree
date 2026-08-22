@@ -59,7 +59,9 @@ export default function TrackerPicker({
 		setPhase("authenticating");
 		startOAuthFlow().then((result) => {
 			if (!result) {
-				setError("Authentication failed or timed out. Please try again.");
+				setError(
+					"Linear authorization did not complete. The browser flow times out after 2 minutes.",
+				);
 				setPhase("error");
 				return;
 			}

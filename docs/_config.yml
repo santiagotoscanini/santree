@@ -1,5 +1,5 @@
 title: Santree
-description: A beautiful CLI for managing Git worktrees, with integrated AI assistance — Linear / GitHub Issues, tmux / cmux, and Claude in the loop.
+description: Git worktree manager with integrated AI assistance. Linear / GitHub Issues, tmux / cmux, Claude in the loop.
 
 # Custom domain — docs live at the root, not under /santree.
 # CNAME file in docs/ binds the GitHub Pages deploy to this domain.
@@ -59,7 +59,7 @@ mermaid:
 
 # Anchor links + footer
 heading_anchors: true
-footer_content: 'Made with care · <a href="https://github.com/santiagotoscanini/santree">santree on GitHub</a> · MIT licensed'
+footer_content: '<a href="https://github.com/santiagotoscanini/santree">santree on GitHub</a> · MIT licensed'
 
 # Don't ship the index source — Jekyll generates the rendered HTML.
 exclude:

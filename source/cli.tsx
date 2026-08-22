@@ -9,7 +9,7 @@ const app = new Pastel({
 	importMeta: import.meta,
 	name: "santree",
 	version,
-	description: "Beautiful CLI for managing Git worktrees",
+	description: "Git worktree manager with issue tracking and Claude integration",
 });
 
 await app.run();

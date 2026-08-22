@@ -19,7 +19,7 @@ description: "Santree — a CLI for managing Git worktrees with integrated AI as
 </p>
 
 <p align="center" class="fs-5 fw-300">
-  Pick an issue, work on it with Claude in an isolated worktree, ship a PR — without leaving your terminal.
+  Pick an issue, work on it with Claude in an isolated worktree, ship a PR, without leaving your terminal.
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@ description: "Santree — a CLI for managing Git worktrees with integrated AI as
 
 - **Interactive dashboard** — every assigned issue in one TUI, with live worktree / PR / CI / review state and the running Claude session per branch.
 - **Pluggable issue trackers** — Linear (OAuth + GraphQL) and GitHub Issues (via `gh`) are first-class. Pick one per repo from the **Issue tracker** row in `santree config`.
-- **Pluggable terminal multiplexers** — auto-detects cmux (suggested) or tmux; falls back gracefully when neither is active.
+- **Pluggable terminal multiplexers** — auto-detects cmux (suggested) or tmux; falls back to same-window flows when neither is active.
 - **AI in the loop** — Claude is launched with the rendered ticket + your context. PR creation, review fix-up, and self-review all run the agent with the right inputs pre-staged.
 - **Inline diff overlay** — review your branch the way GitHub does (merge-base scoped) without leaving the dashboard. Pipe through `delta` for syntax highlighting.
 

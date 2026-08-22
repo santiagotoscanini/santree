@@ -5,7 +5,7 @@
 <h1 align="center">Santree</h1>
 
 <p align="center">
-  <strong>A beautiful CLI for managing Git worktrees</strong>
+  <strong>Git worktrees, issue trackers, and Claude in one terminal UI</strong>
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  Pick an issue, work on it with Claude in an isolated worktree, ship a PR — without leaving your terminal.<br/>
+  Pick an issue, work on it with Claude in an isolated worktree, ship a PR, without leaving your terminal.<br/>
   Pluggable issue trackers (Linear, GitHub Issues), pluggable multiplexers (cmux, tmux), and AI in the loop.
 </p>
 
@@ -47,7 +47,7 @@ Full setup: [Installation](https://santree.toscanini.me/installation.html).
 - **[Dashboard](https://santree.toscanini.me/dashboard.html)** — the TUI tour
 - **[Commands](https://santree.toscanini.me/commands.html)** — full CLI reference
 
-Everything else — configuration, integrations, contributing — is in the **[docs site](https://santree.toscanini.me/)**.
+Configuration, integrations, and contributing all live in the **[docs site](https://santree.toscanini.me/)**.
 
 ## License
 

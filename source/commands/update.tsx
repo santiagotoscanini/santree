@@ -75,7 +75,9 @@ export default function Update({ options }: Props) {
 
 			if (!latestVersion) {
 				setStatus("error");
-				setError("Could not reach the npm registry. Check your connection.");
+				setError(
+					"Could not read the latest version from registry.npmjs.org. Check your network, proxy, or npm registry access.",
+				);
 				setTimeout(() => exit(), 100);
 				return;
 			}

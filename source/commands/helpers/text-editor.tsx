@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 export const description =
-	"Open $EDITOR on a temp file, then print the path on stdout (compose with --context-file).";
+	"Open $EDITOR on a temp file, then print the path on stdout (compose with --context-file)";
 
 export const options = z.object({
 	initial: z

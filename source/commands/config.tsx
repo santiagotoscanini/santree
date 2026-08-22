@@ -19,7 +19,7 @@ import { getRepoLinearOrg } from "../lib/trackers/linear/index.js";
 import type { IssueTrackerKind } from "../lib/trackers/types.js";
 
 export const description =
-	"Inspect and configure santree — tools, Claude Code integration, and this repo";
+	"Inspect and configure santree: tools, Claude Code integration, and this repo";
 
 export const options = z.object({
 	check: z

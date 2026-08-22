@@ -154,7 +154,7 @@ function checkWorkspaceEditor(): InfoRow {
 		return {
 			id: "workspace-editor",
 			title: "Workspace editor",
-			description: "code/cursor — powers the dashboard's `E workspace` shortcut",
+			description: "code/cursor: enables the dashboard's `E workspace` shortcut",
 			scope: "system",
 			required: false,
 			ok: true,
@@ -164,12 +164,12 @@ function checkWorkspaceEditor(): InfoRow {
 	return {
 		id: "workspace-editor",
 		title: "Workspace editor",
-		description: "code/cursor — powers the dashboard's `E workspace` shortcut",
+		description: "code/cursor: enables the dashboard's `E workspace` shortcut",
 		scope: "system",
 		required: false,
 		ok: false,
 		lines: [],
-		hint: "Optional — only the `.code-workspace` shortcut needs code/cursor. Everything else uses your configured editor.",
+		hint: "Optional; only the `.code-workspace` shortcut needs code/cursor. Everything else uses your configured editor.",
 	};
 }
 

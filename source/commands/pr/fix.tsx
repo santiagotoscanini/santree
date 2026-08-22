@@ -9,7 +9,7 @@ import { santreeSelfArgv } from "../../lib/setup/apply.js";
 import { startFixLoop, signalFixLoop, type FixLoopStatus } from "../../lib/fix-loop.js";
 
 export const description =
-	"Run the self-driving fix loop: merge conflicts, fixable CI, and 👍-approved review comments";
+	"Fix the PR in a loop: merge conflicts, fixable CI failures, and review comments you reacted 👍 to";
 
 export const options = z.object({
 	signal: z
